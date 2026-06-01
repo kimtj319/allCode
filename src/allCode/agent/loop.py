@@ -184,6 +184,7 @@ class AgentLoop:
                 state=state,
                 messages=messages,
                 recovery=recovery,
+                routing=routing,
                 stream_text=stream_text,
             )
             if stream_timed_out and not events and recovery.can_retry_stream_timeout():
@@ -279,9 +280,10 @@ class AgentLoop:
         state: TurnState,
         messages: Sequence[Message],
         recovery: RecoveryTracker,
+        routing,
         stream_text: bool = True,
     ) -> tuple[list, bool]:
-        iterator = self._llm_client.stream(messages, self._tool_schemas(), self._settings).__aiter__()
+        iterator = self._llm_client.stream(messages, self._tool_schemas_for_routing(routing), self._settings).__aiter__()
         events = []
         heartbeat_count = 0
         started_at = asyncio.get_running_loop().time()
@@ -346,13 +348,20 @@ class AgentLoop:
         )
         for tool_call in tool_calls:
             state.tool_calls.append(tool_call)
-            await self._publish(
-                ToolCallRequested(
-                    turn_id=state.turn_id,
-                    message=f"Tool requested: {tool_call.name}",
-                    tool_call=tool_call,
-                )
+            tool = self._tools.get(tool_call.name)
+            policy_decision = self._tool_policy.check(
+                routing=routing,
+                tool_call=tool_call,
+                definition=tool.definition if tool is not None else None,
             )
+            if policy_decision.allowed:
+                await self._publish(
+                    ToolCallRequested(
+                        turn_id=state.turn_id,
+                        message=f"Tool requested: {tool_call.name}",
+                        tool_call=tool_call,
+                    )
+                )
             signature, loop_detected = loop_guard.record(tool_call)
             if loop_detected:
                 recovery.add_state("tool_loop", attempts=signature.count, blocked=True)
@@ -386,14 +395,17 @@ class AgentLoop:
             results.append(result)
         return results
 
-    def _tool_schemas(self) -> list[ToolSchema]:
+    def _tool_schemas_for_routing(self, routing) -> list[ToolSchema]:
+        definitions = self._tools.definitions()
+        allowed_names = self._tool_policy.allowed_registered_tool_names(routing, definitions)
         return [
             ToolSchema(
                 name=definition.name,
                 description=definition.description,
                 parameters=definition.parameters,
             )
-            for definition in self._tools.definitions()
+            for definition in definitions
+            if definition.name in allowed_names
         ]
 
     async def _publish(self, event) -> None:

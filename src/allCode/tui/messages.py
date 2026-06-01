@@ -1,7 +1,11 @@
 """User-facing TUI message catalog."""
 
 WORKING_STATUS = "작업 중"
-SLOW_STREAM_STATUS = "모델 응답을 기다리는 중"
+MODEL_REQUEST_STATUS = "모델 요청 전송 중"
+MODEL_WAITING_STATUS = "모델 응답 대기 중"
+ANSWERING_STATUS = "답변 작성 중"
+ORGANIZING_STATUS = "답변 정리 중"
+SLOW_STREAM_STATUS = "모델 응답 대기 중"
 RECOVERY_STATUS = "응답을 다시 요청 중"
 FINAL_GATE_STATUS = "검증 근거 부족으로 추가 확인 중"
 READY_STATUS = "입력 대기 중"

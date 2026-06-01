@@ -39,13 +39,13 @@ class OpenAICompatibleClient:
         settings: ModelSettings,
     ) -> AsyncIterator[ModelEvent]:
         async with self._client(settings) as client:
-            response = await self._post_with_retry(
+            lines = self._stream_lines_with_retry(
                 client,
                 json_payload=self._payload(messages, tools, settings, stream=True),
                 headers=self._headers(settings),
             )
             tool_call_ids_by_index: dict[int, str] = {}
-            async for line in response.aiter_lines():
+            async for line in lines:
                 for event in self._events_from_sse_line(line):
                     if event.kind == "response_failed":
                         yield event
@@ -131,40 +131,47 @@ class OpenAICompatibleClient:
         headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    async def _post_with_retry(
+    async def _stream_lines_with_retry(
         self,
         client: httpx.AsyncClient,
         *,
         json_payload: dict[str, Any],
         headers: dict[str, str],
-    ) -> httpx.Response:
+    ) -> AsyncIterator[str]:
         attempt = 0
         while True:
             try:
-                response = await client.post(
+                async with client.stream(
+                    "POST",
                     "/chat/completions",
                     json=json_payload,
                     headers=headers,
-                )
-                if response.status_code in {429, 500, 502, 503, 504} and attempt < self._max_retries:
-                    attempt += 1
-                    await asyncio.sleep(self._retry_sleep_seconds * attempt)
-                    continue
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    if response.status_code in {401, 403}:
-                        raise ModelAuthenticationError(
-                            "Model endpoint rejected the configured API key. "
-                            "Check the API token environment variable and base URL."
-                        ) from exc
-                    raise
-                return response
+                ) as response:
+                    if response.status_code in {429, 500, 502, 503, 504} and attempt < self._max_retries:
+                        attempt += 1
+                        await response.aread()
+                        await asyncio.sleep(self._retry_sleep_seconds * attempt)
+                        continue
+                    self._raise_for_status(response)
+                    async for line in response.aiter_lines():
+                        yield line
+                    return
             except httpx.TransportError:
                 if attempt >= self._max_retries:
                     raise
                 attempt += 1
                 await asyncio.sleep(self._retry_sleep_seconds * attempt)
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if response.status_code in {401, 403}:
+                raise ModelAuthenticationError(
+                    "Model endpoint rejected the configured API key. "
+                    "Check the API token environment variable and base URL."
+                ) from exc
+            raise
 
     def _events_from_sse_line(self, line: str) -> list[ModelEvent]:
         stripped = line.strip()

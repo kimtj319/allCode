@@ -20,7 +20,7 @@ dev = [
 ]
 
 [project.scripts]
-ac = "allCode.main:main"
+allcode = "allCode.main:main"
 
 [build-system]
 requires = ["hatchling"]

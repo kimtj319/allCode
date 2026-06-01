@@ -4,12 +4,13 @@ from __future__ import annotations
 
 
 class MarkdownStreamBuffer:
-    """Streams normal text while buffering Markdown tables until they are complete."""
+    """Buffer model deltas into readable text units and complete Markdown tables."""
 
     def __init__(self) -> None:
         self.mode = "normal"
         self.line_start = True
         self.prefix = ""
+        self.text_buffer = ""
         self.current_line = ""
         self.header_line = ""
         self.table_lines: list[str] = []
@@ -20,6 +21,13 @@ class MarkdownStreamBuffer:
             if self.mode == "normal":
                 self._append_normal_char(char, output)
             else:
+                if self.mode == "table" and self._table_has_ended_before(char):
+                    output.append("".join(self.table_lines))
+                    self.table_lines = []
+                    self.mode = "normal"
+                    self.line_start = True
+                    self._append_normal_char(char, output)
+                    continue
                 self.current_line += char
                 if char == "\n":
                     self._finish_buffered_line(output)
@@ -28,6 +36,7 @@ class MarkdownStreamBuffer:
     def flush(self) -> str:
         output: list[str] = []
         if self.mode == "normal":
+            output.append(self.text_buffer)
             output.append(self.prefix)
         elif self.mode == "candidate_header":
             output.append(self.current_line)
@@ -43,6 +52,7 @@ class MarkdownStreamBuffer:
         self.mode = "normal"
         self.line_start = True
         self.prefix = ""
+        self.text_buffer = ""
         self.current_line = ""
         self.header_line = ""
         self.table_lines = []
@@ -53,18 +63,23 @@ class MarkdownStreamBuffer:
                 self.prefix += char
                 return
             if char == "|":
+                self._flush_text(output)
                 self.current_line = self.prefix + char
                 self.prefix = ""
                 self.mode = "candidate_header"
                 self.line_start = False
                 return
-            output.append(self.prefix + char)
+            self.text_buffer += self.prefix + char
             self.prefix = ""
             self.line_start = char == "\n"
+            if _is_flush_boundary(char):
+                self._flush_text(output)
             return
-        output.append(char)
+        self.text_buffer += char
         if char == "\n":
             self.line_start = True
+        if _is_flush_boundary(char):
+            self._flush_text(output)
 
     def _finish_buffered_line(self, output: list[str]) -> None:
         line = self.current_line
@@ -99,6 +114,16 @@ class MarkdownStreamBuffer:
             self.line_start = True
             output.append(line)
 
+    def _flush_text(self, output: list[str]) -> None:
+        if self.text_buffer:
+            output.append(self.text_buffer)
+            self.text_buffer = ""
+
+    def _table_has_ended_before(self, char: str) -> bool:
+        candidate = self.current_line + char
+        stripped = candidate.lstrip()
+        return bool(stripped) and not stripped.startswith("|")
+
 
 def _starts_table_line(line: str) -> bool:
     return line.lstrip().startswith("|")
@@ -115,3 +140,7 @@ def _is_table_separator(line: str) -> bool:
         return False
     cells = [cell.strip() for cell in stripped.strip("|").split("|")]
     return bool(cells) and all(cell and set(cell) <= {"-", ":", " "} and "-" in cell for cell in cells)
+
+
+def _is_flush_boundary(char: str) -> bool:
+    return char in {"\n", ".", "?", "!", "。", "？", "！", "…"}

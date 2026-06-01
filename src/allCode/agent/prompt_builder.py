@@ -92,6 +92,13 @@ class PromptBuilder:
         ]
         if routing.read_only_requested:
             lines.append("Read-only constraint: do not call mutation or shell tools.")
+        if routing.kind == "answer" and not routing.requires_external_knowledge:
+            lines.extend(
+                [
+                    "This route is direct-answer only.",
+                    "Do not call tools for this turn; answer from the prompt and supplied context.",
+                ]
+            )
         if routing.requires_mutation:
             lines.extend(
                 [
@@ -108,6 +115,7 @@ class PromptBuilder:
         if routing.requires_external_knowledge:
             lines.extend(
                 [
+                    "Only use web_search or web_fetch for external evidence; do not call file, shell, mutation, or validation tools.",
                     "Use the registered native web_search or web_fetch tool only to collect external evidence.",
                     "Never print tool-call plans, action JSON, or raw search results as the final answer.",
                     "After web evidence is observed, write a natural-language answer grounded in that evidence.",

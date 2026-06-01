@@ -38,24 +38,26 @@ class EventRenderer:
         return RenderedEvent(
             transcript=event.message,
             transcript_role="user",
-            status=messages.WORKING_STATUS,
+            status=messages.MODEL_REQUEST_STATUS,
             spinner=True,
             severity=event.severity,
         )
 
     def _render_turn_started(self, event: AgentEvent) -> RenderedEvent:
-        return RenderedEvent(status=messages.WORKING_STATUS, spinner=True, severity=event.severity)
+        return RenderedEvent(status=messages.MODEL_REQUEST_STATUS, spinner=True, severity=event.severity)
 
     def _render_model_stream_started(self, event: AgentEvent) -> RenderedEvent:
         retry = event.data.get("retry")
         if retry is None:
             message = event.message.lower()
             retry = "round" in message and "round 1" not in message
-        status = messages.RECOVERY_STATUS if retry else messages.WORKING_STATUS
+        status = messages.RECOVERY_STATUS if retry else messages.MODEL_WAITING_STATUS
         return RenderedEvent(status=status, spinner=True, severity=event.severity)
 
     def _render_model_stream_heartbeat(self, event: AgentEvent) -> RenderedEvent:
-        return RenderedEvent(status=messages.SLOW_STREAM_STATUS, spinner=True, severity=event.severity)
+        count = event.data.get("heartbeat_count")
+        suffix = f"... {count}" if count else ""
+        return RenderedEvent(status=f"{messages.SLOW_STREAM_STATUS}{suffix}", spinner=True, severity=event.severity)
 
     def _render_model_stream_timed_out(self, event: AgentEvent) -> RenderedEvent:
         return RenderedEvent(transcript=messages.RECOVERY_STATUS, status=messages.RECOVERY_STATUS, spinner=True, severity=event.severity)
@@ -65,7 +67,7 @@ class EventRenderer:
         return RenderedEvent(
             transcript=delta,
             transcript_role="allCode_stream",
-            status=messages.WORKING_STATUS,
+            status=messages.ANSWERING_STATUS,
             spinner=True,
             severity=event.severity,
         )

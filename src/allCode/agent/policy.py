@@ -83,6 +83,24 @@ class ToolPolicy:
                 names.add(tool_name)
         return names
 
+    def allowed_registered_tool_names(
+        self,
+        routing: RoutingDecision,
+        definitions: list[ToolDefinition],
+    ) -> set[str]:
+        """Return route-allowed names from the concrete registered tool definitions."""
+
+        names = set()
+        for definition in definitions:
+            decision = self.check(
+                routing=routing,
+                tool_call=ToolCall(id="policy", name=definition.name, arguments={}),
+                definition=definition,
+            )
+            if decision.allowed:
+                names.add(definition.name)
+        return names
+
     def category_for_tool(self, tool_name: str) -> ToolCategory:
         name = tool_name.strip().lower().replace("-", "_")
         if name in self.READ_TOOLS:

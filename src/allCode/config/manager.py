@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ from allCode.config.defaults import (
     ENV_WORKSPACE,
     PROJECT_CONFIG_RELATIVE_PATH,
 )
+from allCode.config.env_file import load_project_env
 from allCode.config.schema import AppConfig
 
 
@@ -82,6 +84,7 @@ class ConfigManager:
         project_root = self._project_root_for_config(merged, cli)
         project_config_path = project_root / PROJECT_CONFIG_RELATIVE_PATH
         self._deep_merge(merged, self._load_yaml_if_present(project_config_path))
+        self._load_project_env(project_root)
 
         self._deep_merge(merged, self._env_overrides())
         self._deep_merge(merged, cli.to_nested_dict())
@@ -126,6 +129,16 @@ class ConfigManager:
         if not isinstance(loaded, dict):
             raise ConfigError(f"Config file {path} must contain a mapping")
         return loaded
+
+    def _load_project_env(self, project_root: Path) -> None:
+        load_project_env(project_root / ".env", self._mutable_environ(), override=False)
+
+    def _mutable_environ(self) -> MutableMapping[str, str]:
+        if self._environ is not None:
+            return self._environ
+        import os
+
+        return os.environ
 
     def _env_overrides(self) -> dict[str, Any]:
         env = self.environ

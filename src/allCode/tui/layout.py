@@ -40,7 +40,7 @@ class TUIStateController:
         if self.state.input_enabled:
             self.state.input_enabled = False
             self.state.spinner_active = True
-            self.state.status = messages.WORKING_STATUS
+            self.state.status = messages.MODEL_REQUEST_STATUS
             self.state.streaming_answer_index = None
             self.stream_buffer.reset()
             self.state.transcript.append(format_transcript_block("user", prompt))

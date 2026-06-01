@@ -1,4 +1,4 @@
-# ac
+# allcode
 
 allCode는 가벼운 all-rounder CLI coding agent입니다. 에이전트형 코딩
 도우미의 핵심 구조는 유지하되, 거대한 단일 파일 구조를 피하기 위해
@@ -17,7 +17,7 @@ unit/integration test는 명시적으로 주입한 fake LLM 또는 mock transpor
   all-rounder agent loop.
 - provider-neutral LLM protocol과 OpenAI-compatible chat completions adapter.
 - 단일 `ConfigManager` 진입점을 통한 config/env 기반 설정.
-- `ac --headless` 기반 headless 실행.
+- `allcode --headless` 기반 headless 실행.
 - Codex-style transcript, Markdown answer rendering, status, input recovery,
   slash command palette, approval panel primitive, folded tool output renderer를
   포함한 Textual 기반 TUI shell.
@@ -79,6 +79,8 @@ python -m pip install -r requirements.txt
 
 config 파일에는 API key 값을 저장하지 않고, API key가 들어 있는 환경 변수명만
 저장합니다.
+프로젝트 루트의 `.env` 파일도 자동으로 읽습니다. 이때 `ALLCODE_`로 시작하는
+변수만 반영하며, 이미 셸에 설정된 환경 변수는 `.env` 값으로 덮어쓰지 않습니다.
 
 ```yaml
 model:
@@ -100,21 +102,21 @@ OpenAI-compatible endpoint 예시:
 
 ```bash
 export ALLCODE_API_KEY="sk-..."
-ac --model gpt-4o-mini --base-url https://api.openai.com/v1 --headless "Explain this repo"
+allcode --model gpt-4o-mini --base-url https://api.openai.com/v1 --headless "Explain this repo"
 ```
 
 로컬 OpenAI-compatible endpoint 예시:
 
 ```bash
 export ALLCODE_API_KEY="local-token"
-ac --model local-model --base-url http://127.0.0.1:8000/v1 --headless "Summarize src/allCode"
+allcode --model local-model --base-url http://127.0.0.1:8000/v1 --headless "Summarize src/allCode"
 ```
 
 Wisenut Wise LLOA endpoint 예시:
 
 ```bash
 export ALLCODE_API_KEY="<API token>"
-ac --model wisenut/wise-lloa-max-v1.2.1 --base-url http://210.180.82.135:9023/v1 --headless "간단히 자기소개해줘."
+allcode --model wisenut/wise-lloa-max-v1.2.1 --base-url http://210.180.82.135:9023/v1 --headless "간단히 자기소개해줘."
 ```
 
 주의: API token은 README나 config 파일에 저장하지 마세요. `ALLCODE_BASE_URL`
@@ -127,12 +129,12 @@ OpenAI 기본 API root인 `https://api.openai.com/v1`을 사용합니다.
 `pip install -e .` 이후 console script를 사용할 수 있습니다.
 
 ```bash
-ac --help
-ac --headless "Hello from allCode"
-echo "Explain the current workspace" | ac --headless
-ac --workspace /path/to/project --headless "Inspect src"
-ac --config /path/to/config.yaml --headless "Use this config"
-ac --approval auto --headless "Create a small Python project named demo_app with tests"
+allcode --help
+allcode --headless "Hello from allCode"
+echo "Explain the current workspace" | allcode --headless
+allcode --workspace /path/to/project --headless "Inspect src"
+allcode --config /path/to/config.yaml --headless "Use this config"
+allcode --approval auto --headless "Create a small Python project named demo_app with tests"
 ```
 
 설치하지 않고 repository root에서 실행할 수도 있습니다.
@@ -145,12 +147,12 @@ PYTHONPATH=src python -m allCode --headless "Hello"
 TUI shell:
 
 ```bash
-ac
+allcode
 ```
 
 TUI는 Textual이 필요합니다. 현재 TUI는 Codex-style dark transcript,
 Markdown answer rendering, status handling, input recovery, command palette,
-event renderer를 제공하며, 기본 `ac` 실행 경로는 설정된 모델을 호출하는
+event renderer를 제공하며, 기본 `allcode` 실행 경로는 설정된 모델을 호출하는
 turn runner에 연결되어 있습니다. transcript는 `USER`, `ALLCODE`, `TOOL`,
 `STATUS` 블록으로 분리해 표시합니다.
 
@@ -275,7 +277,7 @@ TUI가 시작되지 않는 경우:
 
 - `python -m pip install -e .` 또는
   `python -m pip install -r requirements.txt`로 dependency를 설치하세요.
-- non-interactive 환경에서는 `ac --headless "prompt"`를 사용하세요.
+- non-interactive 환경에서는 `allcode --headless "prompt"`를 사용하세요.
 
 테스트 실패:
 

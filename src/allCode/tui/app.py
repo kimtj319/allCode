@@ -12,10 +12,11 @@ from allCode.tui.command_palette import CommandPalette, CommandPaletteState
 from allCode.tui.layout import TUIStateController
 from allCode.tui.markdown import logo_text, transcript_to_markdown
 from allCode.tui.slash_commands import SlashCommandHandler
+from allCode.tui.styles import APP_CSS
 
 try:
     from textual.app import App, ComposeResult
-    from textual.containers import Vertical, VerticalScroll
+    from textual.containers import Vertical
     from textual.widgets import Input, Markdown, Static
 
     TEXTUAL_AVAILABLE = True
@@ -23,7 +24,6 @@ except ModuleNotFoundError:
     App = object
     ComposeResult = Any
     Vertical = None
-    VerticalScroll = None
     Input = None
     Markdown = None
     Static = None
@@ -45,58 +45,7 @@ async def noop_turn_runner(prompt: str, event_handler: Callable[[AgentEvent], Aw
 if TEXTUAL_AVAILABLE:
 
     class AllCodeApp(App):
-        CSS = """
-        Screen {
-            background: #0b0b0b;
-            color: #e7e7e7;
-        }
-        #hero {
-            height: 6;
-            padding: 0 0 0 0;
-            background: #0b0b0b;
-            color: #e7e7e7;
-        }
-        #transcript_container {
-            height: 1fr;
-            background: #0b0b0b;
-            scrollbar-background: #0b0b0b;
-            scrollbar-background-hover: #0b0b0b;
-            scrollbar-background-active: #0b0b0b;
-            scrollbar-color: #4a4a4a;
-            scrollbar-color-hover: #6a6a6a;
-            scrollbar-color-active: #8a8a8a;
-        }
-        #transcript {
-            padding: 1 2 0 2;
-            background: #0b0b0b;
-            color: #e7e7e7;
-        }
-        #status {
-            height: 1;
-            padding: 0 2;
-            background: #0b0b0b;
-            color: #8a8a8a;
-        }
-        #command_palette {
-            height: 0;
-            min-height: 0;
-            max-height: 4;
-            padding: 0 2;
-            background: #0b0b0b;
-            color: #9a9a9a;
-        }
-        #input {
-            height: 1;
-            margin: 0 2 1 2;
-            padding: 0;
-            border: none;
-            background: #121212;
-            color: #f2f2f2;
-        }
-        #input:focus {
-            border: none;
-        }
-        """
+        CSS = APP_CSS
         BINDINGS = [("escape", "cancel_active", "Cancel"), ("ctrl+c", "cancel_active", "Cancel")]
 
         def __init__(
@@ -117,9 +66,9 @@ if TEXTUAL_AVAILABLE:
             self.exit_requested = False
 
         def compose(self) -> ComposeResult:
-            with Vertical():
+            with Vertical(id="app_frame"):
                 yield Static(logo_text(self.app_info), id="hero")
-                with VerticalScroll(id="transcript_container"):
+                with Vertical(id="transcript_container"):
                     yield Markdown("", id="transcript")
                 yield Static(self.controller.state.status, id="status")
                 yield Static("", id="command_palette")
@@ -215,13 +164,11 @@ if TEXTUAL_AVAILABLE:
         def _refresh_widgets(self) -> bool:
             try:
                 transcript = self.query_one("#transcript", Markdown)
-                transcript_container = self.query_one("#transcript_container", VerticalScroll)
                 status = self.query_one("#status", Static)
                 input_box = self.query_one("#input", Input)
             except Exception:
                 return False
             transcript.update(transcript_to_markdown(self.controller.state.transcript))
-            transcript_container.scroll_end(animate=False, immediate=True)
             spinner = "⠋ " if self.controller.state.spinner_active else ""
             status.update(spinner + self.controller.state.status)
             input_box.disabled = not self.controller.state.input_enabled

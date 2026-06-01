@@ -1,4 +1,4 @@
-# Agent Instructions for ac
+# Agent Instructions for allcode
 
 This repository is a lightweight enterprise CLI coding agent. Work in this repo
 must preserve the MVP architecture and the implementation contracts in `plan/`.
@@ -128,7 +128,7 @@ python -m pytest
 ```
 
 For README or AGENTS changes, verify that documented commands still match
-`ac --help`, `pyproject.toml`, and the actual test layout.
+`allcode --help`, `pyproject.toml`, and the actual test layout.
 
 ## Documentation Rules
 
