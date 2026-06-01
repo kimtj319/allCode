@@ -1,0 +1,12 @@
+"""User-facing TUI message catalog."""
+
+WORKING_STATUS = "작업 중"
+SLOW_STREAM_STATUS = "모델 응답을 기다리는 중"
+RECOVERY_STATUS = "응답을 다시 요청 중"
+FINAL_GATE_STATUS = "검증 근거 부족으로 추가 확인 중"
+READY_STATUS = "입력 대기 중"
+VALIDATION_STATUS = "검증 실행 중"
+REPAIR_STATUS = "실패 원인을 확인하고 수정 중"
+FINAL_REPORT_STATUS = "완료 요약 작성 중"
+APPROVAL_STATUS = "승인 대기 중"
+CANCELLED_STATUS = "작업이 취소됨"

@@ -1,0 +1,31 @@
+[project]
+name = "allCode"
+version = "0.1.0"
+description = "A lightweight all-rounder coding agent with a dedicated TUI."
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.5.0,<3.0.0",
+  "textual>=0.50.0",
+  "rich>=13.7.0",
+  "openai>=1.10.0",
+  "httpx>=0.26.0",
+  "pyyaml>=6.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-mock>=3.12.0",
+]
+
+[project.scripts]
+ac = "allCode.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

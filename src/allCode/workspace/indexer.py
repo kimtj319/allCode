@@ -1,0 +1,130 @@
+"""Lightweight workspace file indexer."""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+from pydantic import Field
+
+from allCode.core.models import CoreModel
+from allCode.workspace.roots import WorkspaceRoots
+
+DEFAULT_IGNORE_DIRS = {".git", ".venv", "node_modules", "dist", "build", "target", "__pycache__"}
+SOURCE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".java", ".go", ".rs", ".md", ".toml", ".yaml", ".yml", ".json"}
+
+
+class FileRecord(CoreModel):
+    path: str
+    root: str
+    relative_path: str
+    size: int
+    mtime: float
+    content_hash: str
+    binary: bool = False
+    language: str | None = None
+
+
+class WorkspaceIndex(CoreModel):
+    files: list[FileRecord] = Field(default_factory=list)
+    skipped: int = 0
+    truncated: bool = False
+
+    def source_files(self) -> list[FileRecord]:
+        return [record for record in self.files if not record.binary and Path(record.path).suffix in SOURCE_EXTENSIONS]
+
+    def paths(self) -> list[str]:
+        return [record.relative_path for record in self.files]
+
+
+class WorkspaceIndexer:
+    def __init__(
+        self,
+        *,
+        ignore_dirs: set[str] | None = None,
+        max_files: int = 20_000,
+        max_read_size: int = 256 * 1024,
+    ) -> None:
+        self.ignore_dirs = ignore_dirs or DEFAULT_IGNORE_DIRS
+        self.max_files = max_files
+        self.max_read_size = max_read_size
+        self._cache: dict[str, FileRecord] = {}
+
+    def build(self, roots: WorkspaceRoots) -> WorkspaceIndex:
+        records: list[FileRecord] = []
+        skipped = 0
+        for root in roots.roots:
+            root_path = root.resolved
+            if not root_path.exists():
+                skipped += 1
+                continue
+            iterator = [root_path] if root_path.is_file() else root_path.rglob("*")
+            for path in iterator:
+                if len(records) >= self.max_files:
+                    return WorkspaceIndex(files=records, skipped=skipped, truncated=True)
+                if self._ignored(path):
+                    continue
+                if not path.is_file():
+                    continue
+                record = self._record(path, root_path)
+                records.append(record)
+        return WorkspaceIndex(files=records, skipped=skipped, truncated=False)
+
+    def update_file(self, index: WorkspaceIndex, path: Path, root: Path) -> WorkspaceIndex:
+        resolved = path.expanduser().resolve()
+        records = [record for record in index.files if Path(record.path) != resolved]
+        if resolved.exists() and resolved.is_file() and not self._ignored(resolved):
+            records.append(self._record(resolved, root.expanduser().resolve()))
+        return WorkspaceIndex(files=records, skipped=index.skipped, truncated=index.truncated)
+
+    def _record(self, path: Path, root: Path) -> FileRecord:
+        stat = path.stat()
+        cache_key = f"{path}:{stat.st_mtime}:{stat.st_size}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        binary = self._is_binary(path, stat.st_size)
+        content_hash = self._hash_metadata(path, stat.st_mtime, stat.st_size)
+        if not binary and stat.st_size <= self.max_read_size:
+            content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        record = FileRecord(
+            path=str(path),
+            root=str(root),
+            relative_path=str(path.relative_to(root)),
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            content_hash=content_hash,
+            binary=binary,
+            language=self._language(path),
+        )
+        self._cache[cache_key] = record
+        return record
+
+    def _ignored(self, path: Path) -> bool:
+        return any(part in self.ignore_dirs for part in path.parts)
+
+    def _is_binary(self, path: Path, size: int) -> bool:
+        if size > self.max_read_size:
+            return False
+        try:
+            with path.open("rb") as handle:
+                chunk = handle.read(1024)
+        except OSError:
+            return True
+        return b"\0" in chunk
+
+    def _hash_metadata(self, path: Path, mtime: float, size: int) -> str:
+        return hashlib.sha256(f"{path}:{mtime}:{size}".encode("utf-8")).hexdigest()
+
+    def _language(self, path: Path) -> str | None:
+        suffix = path.suffix.lower()
+        return {
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".java": "java",
+            ".go": "go",
+            ".rs": "rust",
+            ".md": "markdown",
+        }.get(suffix)
