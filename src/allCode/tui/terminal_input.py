@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
@@ -246,7 +245,3 @@ class TerminalInputEditor:
         for index, candidate in enumerate(state.candidates[:5]):
             items.append(OverlayItem(label=candidate.label, description=candidate.description, selected=index == state.selected))
         return OverlayView(kind="completion", items=items)
-
-def is_real_stdio(stdin: TextIO = sys.stdin) -> bool:
-    isatty = getattr(stdin, "isatty", None)
-    return bool(isatty and isatty())

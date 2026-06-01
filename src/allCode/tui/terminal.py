@@ -189,13 +189,6 @@ class TerminalSession:
         self.console.print(f"[dim]· {status}[/]")
         self._last_status = status
 
-    def _start_stream(self) -> None:
-        if self._stream_started:
-            return
-        self._prepare_body_output()
-        self.console.print("[bold]allCode[/]")
-        self._stream_started = True
-
     def _clear_screen(self) -> None:
         self.screen.clear_all()
 

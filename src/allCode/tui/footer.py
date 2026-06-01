@@ -19,13 +19,3 @@ def compose_status_line(
     if queued_count:
         return f"{queued_count} queued · enter to run next"
     return status.strip()
-
-
-def compose_input_hint(*, turn_running: bool, queued_count: int) -> str:
-    if turn_running and queued_count:
-        return f"{queued_count} queued · esc interrupt · tab queue · enter steer"
-    if turn_running:
-        return "esc interrupt · tab queue · enter steer"
-    if queued_count:
-        return f"{queued_count} queued"
-    return ""

@@ -5,7 +5,7 @@
 - 모든 모듈은 실행 및 테스트 가능한 완전한 코드로 작성한다. 임의의 `pass`, `TODO`, `...`, `구현 예정` 문구로 핵심 구현을 생략하지 않는다.
 - 전체 구현은 `12_mvp_execution_plan.md`의 마일스톤 순서를 따른다. 한 번에 모든 코드를 생성하더라도 내부적으로는 Alignment -> Config -> Core -> Mock Loop -> Real LLM -> Tool/Workspace -> Memory -> TUI 순서로 체크포인트를 통과해야 한다.
 - 파일 분리는 줄 수만 기준으로 하지 않는다. 단일 책임, 높은 응집도, 단방향 의존성, 순환 import 방지를 함께 만족해야 한다.
-- `00`~`12`는 기본 구현 대상 문서이고, `15`는 Codex 수준 TUI 보강 구현 문서다. `13`~`14`는 검토 이력 부록이다. 구현 중 판단이 충돌하면 부록보다 `00`~`12`, `15`의 최신 계약을 우선한다.
+- `00`~`12`는 기본 구현 대상 문서이고, `15`는 Codex 수준 TUI 보강 구현 문서다. `16`은 실제 Codex 기본 실행 관찰을 반영한 terminal-native UI 정정 문서다. `13`~`14`는 검토 이력 부록이다. 구현 중 판단이 충돌하면 부록보다 `00`~`12`, `15`, `16`의 최신 계약을 우선한다.
 
 ## GPT-5.5 전달 순서
 
@@ -29,6 +29,7 @@ GPT-5.5에게 구현을 맡길 때는 아래 순서대로 문서를 전달한다
 | 13 | `13_agy_review_feedback.md` | 참고 부록: 1차 검토 이력 |
 | 14 | `14_agy_review_round2_feedback.md` | 참고 부록: 2차 검토 이력 |
 | 15 | `15_codex_tui_alignment_plan.md` | Codex 수준 persistent composer, cell transcript, streaming markdown 보강 |
+| 16 | `16_codex_default_terminal_ui_plan.md` | 실제 Codex 기본 실행에 맞춘 terminal-native scroll-region UI 정정 계획 |
 
 ## GPT-5.5 구현 요청 방식
 
@@ -38,7 +39,7 @@ GPT-5.5에게 구현을 맡길 때는 아래 순서대로 문서를 전달한다
 2. 요청 2: `05`, `06`을 기준으로 Routing, Policy, Tool System, Approval을 구현한다.
 3. 요청 3: `07`, `08`을 기준으로 Workspace Index, Repo Map, Context Memory를 구현한다.
 4. 요청 4: `09`를 기준으로 Project Generation Workflow와 validation/repair loop를 구현한다.
-5. 요청 5: `10`, `11`, `12`, `15`를 기준으로 TUI, quality test, Codex 수준 persistent composer, end-to-end 검증을 구현한다.
+5. 요청 5: `10`, `11`, `12`, `15`, `16`을 기준으로 TUI, quality test, Codex 수준 persistent composer, terminal-native 기본 UI, end-to-end 검증을 구현한다.
 
 각 요청의 완료 조건:
 

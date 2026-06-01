@@ -12,15 +12,6 @@ ROLE_TITLES = {
 
 KNOWN_ROLES = set(ROLE_TITLES) | {"USER"}
 
-
-def logo_markdown(info: str = "") -> str:
-    """Build the compact opening header shown at the top of the TUI."""
-
-    if info.strip():
-        return f"# allCode\n\n`{info.strip()}`"
-    return "# allCode"
-
-
 def logo_text(info: str = "") -> str:
     """Build a plain terminal header that reliably fits in a fixed TUI band."""
 
