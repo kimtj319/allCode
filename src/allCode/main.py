@@ -18,8 +18,8 @@ from allCode.memory.inbox import MemoryInbox
 from allCode.memory.session_store import SessionStore
 from allCode.memory.store import MemoryStore
 from allCode.runtime import make_tui_turn_runner
+from allCode.tui.runtime import run_interactive_session
 from allCode.tui.slash_commands import SlashCommandHandler
-from allCode.tui.terminal import run_terminal_session
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model")
     parser.add_argument("--base-url")
     parser.add_argument("--approval", choices=["ask", "auto", "rules"])
+    parser.add_argument("--plain-terminal", action="store_true", help="Use the raw terminal fallback instead of the Textual TUI.")
     return parser
 
 
@@ -59,7 +60,7 @@ def main(
             return run_headless_sync(prompt, config=config, out=stdout, err=stderr)
         if out is None and err is None:
             _validate_interactive_model_config(config)
-            return run_terminal_session(
+            return run_interactive_session(
                 turn_runner=make_tui_turn_runner(config=config),
                 app_info=_tui_app_info(config),
                 slash_handler=_slash_handler(config),
@@ -67,6 +68,7 @@ def main(
                 stdout=stdout,
                 stderr=stderr,
                 cwd=Path(config.workspace.root).expanduser().resolve(),
+                plain_terminal=args.plain_terminal,
             )
         stdout.write("allCode interactive UI requires a real TTY. Use allcode --headless for captured runs.\n")
         return 0

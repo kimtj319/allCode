@@ -7,8 +7,19 @@ from pydantic import Field
 from allCode.core.events import AgentEvent
 from allCode.core.models import CoreModel
 from allCode.tui import messages
+from allCode.tui.event_bridge import TUIEventBridge
+from allCode.tui.markdown_normalizer import normalize_agent_markdown
 from allCode.tui.renderers import EventRenderer, FoldedToolOutput
-from allCode.tui.streaming import MarkdownStreamBuffer
+from allCode.tui.state_reducer import TUIStateReducer
+from allCode.tui.transcript_cells import (
+    cell_to_legacy_block,
+    error_cell,
+    format_legacy_block,
+    status_cell,
+    tool_cell,
+    user_cell,
+)
+from allCode.tui.transcript_state import TranscriptState
 
 TRANSCRIPT_LABELS = {
     "user": "USER",
@@ -22,10 +33,13 @@ TRANSCRIPT_LABELS = {
 
 class TUILayoutState(CoreModel):
     transcript: list[str] = Field(default_factory=list)
+    transcript_cells: TranscriptState = Field(default_factory=TranscriptState)
     status: str = messages.READY_STATUS
     input_enabled: bool = True
     spinner_active: bool = False
+    turn_running: bool = False
     queued_inputs: list[str] = Field(default_factory=list)
+    steer_messages: list[str] = Field(default_factory=list)
     folds: list[FoldedToolOutput] = Field(default_factory=list)
     streaming_answer_index: int | None = None
 
@@ -33,35 +47,46 @@ class TUILayoutState(CoreModel):
 class TUIStateController:
     def __init__(self, renderer: EventRenderer | None = None) -> None:
         self.renderer = renderer or EventRenderer()
+        self.bridge = TUIEventBridge(self.renderer)
+        self.reducer = TUIStateReducer()
         self.state = TUILayoutState()
-        self.stream_buffer = MarkdownStreamBuffer()
 
     def submit_prompt(self, prompt: str) -> None:
-        if self.state.input_enabled:
-            self.state.input_enabled = False
-            self.state.spinner_active = True
-            self.state.status = messages.MODEL_REQUEST_STATUS
-            self.state.streaming_answer_index = None
-            self.stream_buffer.reset()
-            self.state.transcript.append(format_transcript_block("user", prompt))
+        if self.state.turn_running:
+            self.queue_prompt(prompt)
             return
-        self.state.queued_inputs.append(prompt)
+        self.state.input_enabled = True
+        self.state.turn_running = True
+        self.state.spinner_active = True
+        self.state.status = messages.MODEL_REQUEST_STATUS
+        self.state.streaming_answer_index = None
+        self.reducer.reset_stream()
+        self.state.transcript_cells.commit(user_cell(prompt))
+        self._sync_legacy_transcript()
 
     def queue_prompt(self, prompt: str) -> None:
         if prompt:
             self.state.queued_inputs.append(prompt)
+            self.state.status = f"{len(self.state.queued_inputs)} queued · Enter to steer · Tab to queue"
+
+    def steer_prompt(self, prompt: str) -> None:
+        if not prompt:
+            return
+        self.state.steer_messages.append(prompt)
+        # Until the runtime exposes a true mid-turn injection channel, preserve
+        # the user's intent by scheduling the steering text as the next turn.
+        self.state.queued_inputs.append(prompt)
+        self.state.status = "추가 지시를 기록했습니다 · 현재 turn 이후 이어서 처리합니다"
 
     def handle_event(self, event: AgentEvent) -> None:
+        ui_event = self.bridge.from_agent_event(event)
+        self._apply_ui_event(ui_event.kind, ui_event.content)
         rendered = self.renderer.render(event)
-        if rendered.transcript_role == "allCode_stream":
-            self._append_stream_delta(rendered.transcript)
-        elif event.event_type == "final_answer_ready":
-            self._finalize_answer(rendered.transcript)
-        elif rendered.transcript:
-            self.state.transcript.append(format_transcript_block(rendered.transcript_role, rendered.transcript))
-        if rendered.status:
+        if ui_event.status:
+            self.state.status = ui_event.status
+        elif rendered.status:
             self.state.status = rendered.status
-        self.state.spinner_active = rendered.spinner
+        self.state.spinner_active = ui_event.spinner
         if rendered.foldable:
             self.state.folds.append(
                 FoldedToolOutput(
@@ -75,12 +100,13 @@ class TUIStateController:
 
     def append_message(self, role: str, content: str) -> None:
         if content:
-            self.state.transcript.append(format_transcript_block(role, content))
+            self._append_legacy_and_cell(role, content)
 
     def clear_transcript(self) -> None:
         self.state.transcript.clear()
+        self.state.transcript_cells.clear()
         self.state.streaming_answer_index = None
-        self.stream_buffer.reset()
+        self.reducer.reset_stream()
         self.state.status = messages.READY_STATUS
         self.recover_input()
 
@@ -90,6 +116,7 @@ class TUIStateController:
 
     def recover_input(self) -> None:
         self.state.input_enabled = True
+        self.state.turn_running = False
         self.state.spinner_active = False
         if not self.state.status:
             self.state.status = messages.READY_STATUS
@@ -105,44 +132,65 @@ class TUIStateController:
     def _append_stream_delta(self, delta: str) -> None:
         if not delta:
             return
-        visible_delta = self.stream_buffer.append(delta)
-        if not visible_delta:
+        visible_content = self.reducer.stream_state.append(delta)
+        if not visible_content:
             return
-        self._append_visible_stream_delta(visible_delta)
+        self._replace_active_stream(visible_content)
 
     def _append_visible_stream_delta(self, delta: str) -> None:
-        if self.state.streaming_answer_index is None:
-            self.state.transcript.append(format_transcript_block("allCode", delta))
-            self.state.streaming_answer_index = len(self.state.transcript) - 1
-            return
-        index = self.state.streaming_answer_index
-        if index >= len(self.state.transcript):
-            self.state.transcript.append(format_transcript_block("allCode", delta))
-            self.state.streaming_answer_index = len(self.state.transcript) - 1
-            return
-        current = transcript_block_content(self.state.transcript[index])
-        self.state.transcript[index] = format_transcript_block("allCode", current + delta)
+        current = self.state.transcript_cells.ensure_active_assistant().content
+        self._replace_active_stream(current + delta)
+
+    def _replace_active_stream(self, content: str) -> None:
+        self.state.transcript_cells.active_cell = self.state.transcript_cells.ensure_active_assistant().with_content(content)
+        self._sync_legacy_transcript()
+        self.state.streaming_answer_index = len(self.state.transcript) - 1
 
     def _finalize_answer(self, answer: str) -> None:
-        flushed = self.stream_buffer.flush()
-        if flushed:
-            self._append_visible_stream_delta(flushed)
-        final_answer = answer.strip()
-        index = self.state.streaming_answer_index
-        if index is None or index >= len(self.state.transcript):
-            if final_answer:
-                self.state.transcript.append(format_transcript_block("allCode", final_answer))
-            self.state.streaming_answer_index = None
-            return
-        if final_answer:
-            self.state.transcript[index] = format_transcript_block("allCode", final_answer)
+        flushed = self.reducer.stream_state.flush()
+        final_answer = normalize_agent_markdown(answer.strip() or flushed.strip())
+        self.state.transcript_cells.finalize_active(final_answer or None)
+        self._sync_legacy_transcript()
         self.state.streaming_answer_index = None
+
+    def _append_legacy_and_cell(self, role: str, content: str) -> None:
+        if role == "user":
+            self.state.transcript_cells.commit(user_cell(content))
+        elif role == "allCode":
+            self.state.transcript_cells.finalize_active(content)
+        elif role == "tool":
+            self.state.transcript_cells.commit(tool_cell(content))
+        elif role == "error":
+            self.state.transcript_cells.commit(error_cell(content))
+        else:
+            self.state.transcript_cells.commit(status_cell(content))
+        self._sync_legacy_transcript()
+
+    def _sync_legacy_transcript(self) -> None:
+        self.state.transcript = [cell_to_legacy_block(cell) for cell in self.state.transcript_cells.visible_cells()]
+
+    def _apply_ui_event(self, kind: str, content: str) -> None:
+        if kind == "assistant_delta_received":
+            self._append_stream_delta(content)
+            return
+        if kind == "assistant_finalized":
+            self._finalize_answer(content)
+            return
+        if kind == "tool_result_committed":
+            self._append_legacy_and_cell("tool", content)
+            return
+        if kind == "turn_failed_visible":
+            self._append_legacy_and_cell("error", content)
+            return
+        if kind == "approval_opened":
+            self._append_legacy_and_cell("approval", content)
+            return
+        if kind == "footer_status_changed" and content:
+            self._append_legacy_and_cell("status", content)
 
 
 def format_transcript_block(role: str, content: str) -> str:
-    label = TRANSCRIPT_LABELS.get(role, role.strip().upper() or "STATUS")
-    body = "\n".join(f"  {line}" if line else "" for line in content.split("\n"))
-    return f"{label}\n{body}".rstrip("\n")
+    return format_legacy_block(role, content)
 
 
 def transcript_block_content(block: str) -> str:

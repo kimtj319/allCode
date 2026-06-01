@@ -3,14 +3,13 @@
 APP_CSS = """
 Screen {
     layout: vertical;
-    height: auto;
-    min-height: 1;
-    overflow-y: auto;
+    height: 100%;
+    overflow: hidden;
     background: #0b0b0b;
     color: #e7e7e7;
 }
 #app_frame {
-    height: auto;
+    height: 100%;
     background: #0b0b0b;
 }
 #hero {
@@ -20,7 +19,8 @@ Screen {
     color: #e7e7e7;
 }
 #transcript_container {
-    height: auto;
+    height: 1fr;
+    overflow-y: auto;
     background: #0b0b0b;
 }
 #transcript {
@@ -33,6 +33,13 @@ Screen {
     padding: 0 2;
     background: #0b0b0b;
     color: #8a8a8a;
+}
+#composer_panel {
+    dock: bottom;
+    height: auto;
+    min-height: 4;
+    background: #0b0b0b;
+    border-top: solid #343434;
 }
 #command_palette {
     height: 0;

@@ -9,6 +9,7 @@ from typing import Any
 
 from allCode.core.events import AgentEvent, TurnFailed
 from allCode.tui.command_palette import CommandPalette, CommandPaletteState
+from allCode.tui.footer import compose_status_line
 from allCode.tui.layout import TUIStateController
 from allCode.tui.markdown import logo_text, transcript_to_markdown
 from allCode.tui.slash_commands import SlashCommandHandler
@@ -46,7 +47,12 @@ if TEXTUAL_AVAILABLE:
 
     class AllCodeApp(App):
         CSS = APP_CSS
-        BINDINGS = [("escape", "cancel_active", "Cancel"), ("ctrl+c", "cancel_active", "Cancel")]
+        BINDINGS = [
+            ("escape", "cancel_active", "Cancel"),
+            ("ctrl+c", "cancel_active", "Cancel"),
+            ("tab", "queue_current_input", "Queue"),
+            ("ctrl+l", "clear_screen", "Clear"),
+        ]
 
         def __init__(
             self,
@@ -70,9 +76,10 @@ if TEXTUAL_AVAILABLE:
                 yield Static(logo_text(self.app_info), id="hero")
                 with Vertical(id="transcript_container"):
                     yield Markdown("", id="transcript")
-                yield Static(self.controller.state.status, id="status")
-                yield Static("", id="command_palette")
-                yield Input(placeholder="› Ask allCode", id="input")
+                with Vertical(id="composer_panel"):
+                    yield Static(self.controller.state.status, id="status")
+                    yield Static("", id="command_palette")
+                    yield Input(placeholder="› Ask allCode", id="input")
 
         def on_mount(self) -> None:
             self.query_one("#input", Input).focus()
@@ -95,7 +102,7 @@ if TEXTUAL_AVAILABLE:
 
         async def submit_prompt(self, prompt: str) -> None:
             if self._turn_running:
-                self.controller.queue_prompt(prompt)
+                self.controller.steer_prompt(prompt)
                 self._refresh_widgets()
                 return
             self.controller.submit_prompt(prompt)
@@ -161,6 +168,23 @@ if TEXTUAL_AVAILABLE:
             self.controller.recover_input()
             self._refresh_widgets()
 
+        def action_queue_current_input(self) -> None:
+            try:
+                input_box = self.query_one("#input", Input)
+            except Exception:
+                return
+            prompt = input_box.value.strip()
+            if not prompt or not self._turn_running:
+                return
+            input_box.value = ""
+            self.command_palette_state.update("", self.command_palette)
+            self.controller.queue_prompt(prompt)
+            self._refresh_widgets()
+
+        def action_clear_screen(self) -> None:
+            self.controller.clear_transcript()
+            self._refresh_widgets()
+
         def _refresh_widgets(self) -> bool:
             try:
                 transcript = self.query_one("#transcript", Markdown)
@@ -169,11 +193,16 @@ if TEXTUAL_AVAILABLE:
             except Exception:
                 return False
             transcript.update(transcript_to_markdown(self.controller.state.transcript))
-            spinner = "⠋ " if self.controller.state.spinner_active else ""
-            status.update(spinner + self.controller.state.status)
-            input_box.disabled = not self.controller.state.input_enabled
-            if self.controller.state.input_enabled:
-                input_box.focus()
+            status.update(
+                compose_status_line(
+                    status=self.controller.state.status,
+                    spinner_active=self.controller.state.spinner_active,
+                    turn_running=self.controller.state.turn_running,
+                    queued_count=len(self.controller.state.queued_inputs),
+                )
+            )
+            input_box.disabled = False
+            input_box.focus()
             self._refresh_command_palette()
             return True
 
