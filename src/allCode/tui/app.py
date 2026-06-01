@@ -11,14 +11,15 @@ from allCode.core.events import AgentEvent, TurnFailed
 from allCode.tui.command_palette import CommandPalette, CommandPaletteState
 from allCode.tui.footer import compose_status_line
 from allCode.tui.layout import TUIStateController
-from allCode.tui.markdown import logo_text, transcript_to_markdown
+from allCode.tui.markdown import logo_text
 from allCode.tui.slash_commands import SlashCommandHandler
 from allCode.tui.styles import APP_CSS
+from allCode.tui.transcript_view import TranscriptView
 
 try:
     from textual.app import App, ComposeResult
     from textual.containers import Vertical
-    from textual.widgets import Input, Markdown, Static
+    from textual.widgets import Input, Static
 
     TEXTUAL_AVAILABLE = True
 except ModuleNotFoundError:
@@ -75,7 +76,7 @@ if TEXTUAL_AVAILABLE:
             with Vertical(id="app_frame"):
                 yield Static(logo_text(self.app_info), id="hero")
                 with Vertical(id="transcript_container"):
-                    yield Markdown("", id="transcript")
+                    yield TranscriptView(id="transcript")
                 with Vertical(id="composer_panel"):
                     yield Static(self.controller.state.status, id="status")
                     yield Static("", id="command_palette")
@@ -187,12 +188,15 @@ if TEXTUAL_AVAILABLE:
 
         def _refresh_widgets(self) -> bool:
             try:
-                transcript = self.query_one("#transcript", Markdown)
+                transcript = self.query_one("#transcript", TranscriptView)
                 status = self.query_one("#status", Static)
                 input_box = self.query_one("#input", Input)
             except Exception:
                 return False
-            transcript.update(transcript_to_markdown(self.controller.state.transcript))
+            transcript.sync_cells(
+                self.controller.state.transcript_cells.visible_cells(),
+                force_follow=self.controller.state.turn_running,
+            )
             status.update(
                 compose_status_line(
                     status=self.controller.state.status,

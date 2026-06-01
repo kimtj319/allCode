@@ -30,7 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model")
     parser.add_argument("--base-url")
     parser.add_argument("--approval", choices=["ask", "auto", "rules"])
-    parser.add_argument("--plain-terminal", action="store_true", help="Use the raw terminal fallback instead of the Textual TUI.")
+    parser.add_argument("--textual", action="store_true", help="Use the optional Textual TUI instead of the Codex-like terminal UI.")
+    parser.add_argument("--plain-terminal", action="store_true", help="Compatibility alias for the default terminal-native UI.")
     return parser
 
 
@@ -69,6 +70,7 @@ def main(
                 stderr=stderr,
                 cwd=Path(config.workspace.root).expanduser().resolve(),
                 plain_terminal=args.plain_terminal,
+                textual=args.textual,
             )
         stdout.write("allCode interactive UI requires a real TTY. Use allcode --headless for captured runs.\n")
         return 0

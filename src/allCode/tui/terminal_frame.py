@@ -18,7 +18,10 @@ class TerminalFrame:
     cursor_col: int
     overlay_lines: list[StyledLine] = field(default_factory=list)
     footer_lines: list[StyledLine] = field(default_factory=list)
+    activity_lines: list[StyledLine] = field(default_factory=list)
+    spacer_after_activity: bool = False
 
     @property
     def line_count(self) -> int:
-        return len(self.input_lines) + len(self.overlay_lines) + len(self.footer_lines)
+        spacer = 1 if self.spacer_after_activity and self.activity_lines else 0
+        return len(self.activity_lines) + spacer + len(self.input_lines) + len(self.overlay_lines) + len(self.footer_lines)

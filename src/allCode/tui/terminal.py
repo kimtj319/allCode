@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -10,11 +11,13 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from allCode.core.events import AgentEvent
+from allCode.tui import messages
 from allCode.tui.markdown import logo_text
 from allCode.tui.renderers import EventRenderer
 from allCode.tui.slash_commands import SlashCommandHandler
+from allCode.tui.terminal_activity import ActivityProps
+from allCode.tui.terminal_answer_renderer import TerminalAnswerRenderer
 from allCode.tui.terminal_input import TerminalInputEditor
-from allCode.tui.terminal_markdown import MarkdownStreamPrinter
 from allCode.tui.terminal_screen import TerminalScreen, TerminalTheme
 
 TurnRunner = Any
@@ -65,7 +68,10 @@ class TerminalSession:
         self.renderer = EventRenderer()
         self._last_status = ""
         self._stream_started = False
-        self._stream_printer = MarkdownStreamPrinter(stdout, enabled=self.screen.interactive)
+        self._stream_buffer = ""
+        self._running_started_at: float | None = None
+        self._spinner_index = 0
+        self.answer_renderer = TerminalAnswerRenderer(self.console)
 
     def run(self) -> int:
         self.screen.enter()
@@ -97,15 +103,15 @@ class TerminalSession:
         if rendered.transcript_role == "allCode_stream":
             if rendered.status:
                 self._print_status(rendered.status)
-            self._start_stream()
-            self._stream_printer.write(rendered.transcript)
+            self._stream_started = True
+            self._stream_buffer += rendered.transcript
+            self._render_running_composer(rendered.status or messages.ANSWERING_STATUS)
             return
         if event.event_type == "final_answer_ready":
             final_answer = getattr(event, "final_answer", event.message)
-            if self._stream_started:
-                self._stream_printer.finish()
-            elif final_answer.strip():
-                self._print_assistant_block(final_answer)
+            answer = final_answer if final_answer.strip() else self._stream_buffer
+            if answer.strip():
+                self._print_assistant_block(answer)
             self._last_status = ""
             return
         if rendered.transcript and rendered.severity == "user_visible":
@@ -116,8 +122,10 @@ class TerminalSession:
     def _run_agent_prompt(self, prompt: str) -> None:
         self._print_user_prompt(prompt)
         self._stream_started = False
-        self._stream_printer.reset()
+        self._stream_buffer = ""
         self._last_status = ""
+        self._running_started_at = time.monotonic()
+        self._render_running_composer(messages.MODEL_REQUEST_STATUS)
         try:
             asyncio.run(self.turn_runner(prompt, self.handle_agent_event))
         except KeyboardInterrupt:
@@ -125,8 +133,7 @@ class TerminalSession:
         except Exception as exc:
             self.error_console.print(f"[bold red]오류:[/] {exc}")
         finally:
-            if self._stream_started:
-                self._stream_printer.finish()
+            self._running_started_at = None
             self.stdout.write("\n")
             self.stdout.flush()
 
@@ -153,8 +160,7 @@ class TerminalSession:
     def _print_assistant_block(self, text: str) -> None:
         self._prepare_body_output()
         self.console.print("[bold]allCode[/]")
-        if text.strip():
-            self.console.print(Markdown(text))
+        self.answer_renderer.render(text)
         self.console.print()
 
     def _print_rendered_block(self, role: str, text: str) -> None:
@@ -166,11 +172,18 @@ class TerminalSession:
             self._prepare_body_output()
             self.console.print("[dim]tool[/]")
             self.console.print(Markdown(f"```text\n{text}\n```"))
+            self._render_running_composer()
             return
         self._print_assistant_block(text)
 
     def _print_status(self, status: str) -> None:
-        if not status or status == self._last_status:
+        if not status:
+            return
+        if self._running_started_at is not None:
+            self._render_running_composer(status)
+            self._last_status = status
+            return
+        if status == self._last_status:
             return
         self._prepare_body_output()
         self.console.print(f"[dim]· {status}[/]")
@@ -188,6 +201,20 @@ class TerminalSession:
 
     def _prepare_body_output(self) -> None:
         self.screen.prepare_body_output()
+
+    def _render_running_composer(self, status: str | None = None) -> None:
+        if self._running_started_at is None:
+            return
+        self._spinner_index += 1
+        elapsed = max(0, int(time.monotonic() - self._running_started_at))
+        self.input_editor.render_runtime_frame(
+            activity=ActivityProps(
+                status=status or self._last_status or messages.WORKING_STATUS,
+                running=True,
+                elapsed_seconds=elapsed,
+                spinner_index=self._spinner_index,
+            )
+        )
 
     @staticmethod
     def _is_terminal(stream: TextIO) -> bool:

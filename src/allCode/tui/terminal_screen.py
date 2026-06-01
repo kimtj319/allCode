@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TextIO
 
 from allCode.tui.terminal_frame import StyledLine, TerminalFrame
+from allCode.tui.terminal_width import clip_display_width
 
 @dataclass(frozen=True)
 class TerminalTheme:
@@ -97,26 +98,37 @@ class TerminalScreen:
             return
         self.stdout.write("\x1b[?25l")
         try:
-            footer_rows = len(frame.footer_lines)
-            needed_rows = max(3, min(self.max_reserved_rows, frame.line_count + 2))
+            needed_rows = max(4, min(self.max_reserved_rows, frame.line_count + 2))
             self.set_reserved_rows(needed_rows)
             self._clear_prompt_area()
             start = self.height - self.reserved_rows + 1
-            input_start = start + 1
-            usable_rows = self.reserved_rows - 2 - footer_rows
+            self._write_line(start, self._separator(), style="dim")
+            row = start + 1
+
+            for line in frame.activity_lines:
+                if row >= self.height:
+                    break
+                self._write_line(row, line.text, style=line.style)
+                row += 1
+            if frame.spacer_after_activity and row < self.height:
+                self._write_line(row, "")
+                row += 1
+
+            input_start = row
+            footer_rows = len(frame.footer_lines)
+            usable_rows = max(1, self.height - input_start - footer_rows + 1)
             for index, line in enumerate(frame.input_lines[:usable_rows]):
                 prefix = "› " if index == 0 else "  "
-                row = input_start + index
-                self.stdout.write(f"\x1b[{row};1H")
-                self.stdout.write(f"{self._fg(self.theme.prompt_fg)}{prefix}\x1b[0m{line.text}")
+                current_row = input_start + index
+                self.stdout.write(f"\x1b[{current_row};1H")
+                self.stdout.write(f"{self._fg(self.theme.prompt_fg)}{prefix}\x1b[0m")
+                self.stdout.write(clip_display_width(line.text, max(0, self.width - 3)))
             completion_start = input_start + min(len(frame.input_lines), usable_rows)
             for offset, line in enumerate(frame.overlay_lines[: max(0, usable_rows - len(frame.input_lines))]):
-                self.stdout.write(f"\x1b[{completion_start + offset};1H")
-                self.stdout.write(f"{self._fg(self.theme.dim_fg)}  {line.text}\x1b[0m")
+                self._write_line(completion_start + offset, f"  {line.text}", style=line.style)
             for offset, line in enumerate(frame.footer_lines):
                 row = self.height - len(frame.footer_lines) + offset + 1
-                self.stdout.write(f"\x1b[{row};1H")
-                self.stdout.write(f"{self._fg(self.theme.dim_fg)}  {line.text[: max(0, self.width - 3)]}\x1b[0m")
+                self._write_line(row, f"  {line.text}", style=line.style)
             cursor_screen_row = min(input_start + frame.cursor_row, self.height)
             cursor_screen_col = max(1, min(self.width, 1 + frame.cursor_col))
             self.stdout.write(f"\x1b[{cursor_screen_row};{cursor_screen_col}H")
@@ -155,6 +167,17 @@ class TerminalScreen:
 
     def _apply_scroll_region(self) -> None:
         self.stdout.write(f"\x1b[1;{self.body_bottom}r")
+
+    def _separator(self) -> str:
+        return "─" * self.width
+
+    def _write_line(self, row: int, text: str, *, style: str = "normal") -> None:
+        if row > self.height:
+            return
+        self.stdout.write(f"\x1b[{row};1H\x1b[2K")
+        prefix = self._fg(self.theme.dim_fg) if style == "dim" else ""
+        suffix = "\x1b[0m" if prefix else ""
+        self.stdout.write(f"{prefix}{clip_display_width(text, self.width)}{suffix}")
 
     @staticmethod
     def _is_terminal(stream: TextIO) -> bool:

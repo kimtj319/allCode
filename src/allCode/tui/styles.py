@@ -20,13 +20,35 @@ Screen {
 }
 #transcript_container {
     height: 1fr;
-    overflow-y: auto;
+    overflow: hidden;
     background: #0b0b0b;
 }
 #transcript {
+    height: 1fr;
     padding: 1 2 0 2;
+    overflow-y: auto;
     background: #0b0b0b;
     color: #e7e7e7;
+}
+.transcript-cell {
+    margin: 0 0 1 0;
+    padding: 0;
+    background: #0b0b0b;
+}
+.user {
+    background: #141414;
+    color: #e7e7e7;
+    padding: 0 1;
+}
+.assistant, .assistant_stream {
+    background: #0b0b0b;
+    color: #e7e7e7;
+}
+.tool, .status, .validation {
+    color: #a0a0a0;
+}
+.error {
+    color: #ffb4b4;
 }
 #status {
     height: 1;
@@ -54,11 +76,11 @@ Screen {
     margin: 0 2 1 2;
     padding: 1 1;
     border: none;
-    background: #3c3c3c;
+    background: #222222;
     color: #f7f7f7;
 }
 #input:focus {
     border: none;
-    background: #343434;
+    background: #262626;
 }
 """

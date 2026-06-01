@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TextIO
 
 from allCode.tui.command_registry import CommandRegistry
+from allCode.tui.terminal_activity import ActivityProps
 from allCode.tui.terminal_bottom_pane import BottomPaneRenderInput, TerminalBottomPane
 from allCode.tui.terminal_completion import CompletionState, TerminalCompleter
 from allCode.tui.terminal_footer import FooterProps
@@ -77,6 +78,21 @@ class TerminalInputEditor:
         if line == "":
             raise EOFError
         return line.rstrip("\n")
+
+    def render_runtime_frame(self, *, activity: ActivityProps | None = None) -> None:
+        """Render an empty composer frame while an agent turn is running."""
+
+        frame = self.bottom_pane.frame(
+            BottomPaneRenderInput(
+                input_lines=[""],
+                cursor_row=0,
+                cursor_col=3,
+                footer=FooterProps(mode="task_running" if activity and activity.running else "composer_empty", status_line=self.footer),
+                activity=activity,
+            ),
+            width=self.screen.width,
+        )
+        self.screen.render_bottom_frame(frame)
 
     def _read_raw_prompt(self) -> str:
         area = TerminalTextArea()

@@ -22,26 +22,28 @@ def run_interactive_session(
     stderr: TextIO,
     cwd: Path,
     plain_terminal: bool = False,
+    textual: bool = False,
 ) -> int:
     """Run the best available interactive UI.
 
-    Textual is the normal non-headless UI. The plain terminal shell remains as a
-    fallback for minimal terminals and for explicit compatibility testing.
+    The default non-headless UI follows Codex's terminal-native scroll-region
+    model. Textual remains available as an explicit optional mode.
     """
 
-    if plain_terminal or not TEXTUAL_AVAILABLE:
-        if not plain_terminal:
-            stderr.write("Textual is not installed; falling back to the plain terminal UI.\n")
-        return run_terminal_session(
-            turn_runner=turn_runner,
-            app_info=app_info,
-            slash_handler=slash_handler,
-            stdin=stdin,
-            stdout=stdout,
-            stderr=stderr,
-            cwd=cwd,
-        )
+    if textual:
+        if not TEXTUAL_AVAILABLE:
+            stderr.write("Textual is not installed; falling back to the terminal-native UI.\n")
+        else:
+            app = create_app(turn_runner=turn_runner, app_info=app_info, slash_handler=slash_handler)
+            app.run()
+            return 0
 
-    app = create_app(turn_runner=turn_runner, app_info=app_info, slash_handler=slash_handler)
-    app.run()
-    return 0
+    return run_terminal_session(
+        turn_runner=turn_runner,
+        app_info=app_info,
+        slash_handler=slash_handler,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+        cwd=cwd,
+    )
