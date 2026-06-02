@@ -20,7 +20,7 @@ class ToolPolicyDecision(CoreModel):
 
 class ToolPolicy:
     READ_TOOLS = {"list_directory", "read_file", "search_files"}
-    MUTATION_TOOLS = {"write_file", "patch_file"}
+    MUTATION_TOOLS = {"write_file", "patch_file", "delete_path"}
     SHELL_TOOLS = {"run_command"}
     VALIDATION_TOOLS = {"run_tests"}
     WEB_TOOLS = {"web_search", "web_fetch"}
@@ -56,12 +56,7 @@ class ToolPolicy:
         if "no_external_network" in routing.flags and category == "web":
             return ToolPolicyDecision(allowed=False, reason="No-network request blocks web tools.", category=category)
 
-        allowed_by_route = {
-            "answer": category == "web" and routing.requires_external_knowledge,
-            "inspect": category in {"read", "web"} and (category != "web" or routing.requires_external_knowledge),
-            "modify": category in {"read", "mutation", "validation"},
-            "operate": category in {"read", "shell", "validation"},
-        }[routing.kind]
+        allowed_by_route = self._allowed_by_route_and_capability(routing, category, name)
         if not allowed_by_route:
             return ToolPolicyDecision(
                 allowed=False,
@@ -114,3 +109,33 @@ class ToolPolicy:
         if name in self.WEB_TOOLS:
             return "web"
         return "unknown"
+
+    def _allowed_by_route_and_capability(self, routing: RoutingDecision, category: ToolCategory, tool_name: str) -> bool:
+        capabilities = routing.tool_capabilities
+        if category == "read":
+            if routing.kind in {"inspect", "modify", "operate"}:
+                return True
+            if tool_name == "search_files" and "search_workspace" in capabilities:
+                return True
+            if tool_name in {"read_file", "list_directory"} and (
+                "read_file" in capabilities or "search_workspace" in capabilities
+            ):
+                return True
+            if tool_name not in self.READ_TOOLS and routing.kind in {"inspect", "modify", "operate"}:
+                return "read_file" in capabilities or "search_workspace" in capabilities
+        if category == "mutation":
+            if tool_name == "delete_path":
+                return "delete_file" in capabilities or "mutate_file" in capabilities
+            return "mutate_file" in capabilities
+        if category == "shell":
+            return "run_shell" in capabilities
+        if category == "validation":
+            return "run_validation" in capabilities or (routing.kind in {"modify", "operate"} and routing.requires_validation)
+        if category == "web":
+            return "web_search" in capabilities or routing.requires_external_knowledge
+        return {
+            "answer": category == "web" and routing.requires_external_knowledge,
+            "inspect": category in {"read", "web"} and (category != "web" or routing.requires_external_knowledge),
+            "modify": category in {"read", "mutation", "validation"},
+            "operate": category in {"read", "shell", "validation"},
+        }[routing.kind]

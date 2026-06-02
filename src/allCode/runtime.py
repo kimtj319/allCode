@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from allCode.agent.context import ContextBuilder
 from allCode.agent.context_factory import build_runtime_context_builder
 from allCode.agent.loop import AgentLoop
+from allCode.agent.model_router import ModelRouter
 from allCode.config.schema import AppConfig
 from allCode.core.event_bus import AsyncEventBus
 from allCode.core.events import AgentEvent
@@ -15,6 +17,8 @@ from allCode.core.result import TurnResult
 from allCode.llm.client import LLMClient
 from allCode.llm.factory import create_llm_client
 from allCode.llm.settings import ModelSettings
+from allCode.memory.session_summary import SessionSummary
+from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.approval import ApprovalManager
 from allCode.tools.registry import ToolRegistry
@@ -32,28 +36,65 @@ async def run_agent_turn(
     tools: ToolRegistry | None = None,
     context_builder: ContextBuilder | None = None,
     event_handler: EventHandler | None = None,
+    session_logger: AgentSessionLogger | None = None,
 ) -> TurnResult:
     """Run a single agent turn with optional event forwarding."""
 
     event_bus = AsyncEventBus()
+    logger = session_logger or AgentSessionLogger.create(config=config)
+    event_bus.subscribe(None, logger.handle_event)
     if event_handler is not None:
         event_bus.subscribe(None, event_handler)
+    use_model_router = llm_client is None
+    effective_llm = llm_client or create_llm_client(config)
+    settings = ModelSettings.from_config(config)
+    effective_context_builder = context_builder or build_runtime_context_builder(config)
     loop = AgentLoop(
-        llm_client=llm_client or create_llm_client(config),
-        settings=ModelSettings.from_config(config),
+        llm_client=effective_llm,
+        settings=settings,
         tools=tools or runtime_tool_registry(config),
         event_bus=event_bus,
         approval=ApprovalManager(mode=config.approval.mode, session_allow=config.approval.session_allow),
-        context_builder=context_builder or build_runtime_context_builder(config),
+        context_builder=effective_context_builder,
+        model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
     )
     turn_input = TurnInput(
         user_prompt=prompt,
         workspace=WorkspaceRef(root=config.workspace.root, writable=config.workspace.sandbox_enabled),
+        session_id=logger.session_id,
     )
+    event_bus_closed = False
     try:
-        return await loop.run_turn(turn_input)
-    finally:
+        await logger.log(
+            category="turn",
+            event_type="user_request_received",
+            message="User request received.",
+            payload={
+                "prompt": prompt,
+                "workspace": config.workspace.root,
+                "model": config.model.model_name,
+                "base_url": config.model.base_url,
+                "approval_mode": config.approval.mode,
+            },
+        )
+        result = await loop.run_turn(turn_input)
+        _remember_result_targets(effective_context_builder, result)
+        effective_context_builder.remember_user_note(turn_input.session_id, prompt)
+        effective_context_builder.remember_assistant_summary(turn_input.session_id, result.final_answer)
+        await _persist_user_note_summary(config, turn_input.session_id, effective_context_builder.extract_user_note(prompt))
         await event_bus.close()
+        event_bus_closed = True
+        await logger.log(
+            category="turn",
+            event_type="runtime_turn_result",
+            turn_id=result.turn_id,
+            message=f"Runtime turn result: {result.status}.",
+            payload=result.model_dump(mode="json"),
+        )
+        return result
+    finally:
+        if not event_bus_closed:
+            await event_bus.close()
 
 
 def make_tui_turn_runner(
@@ -61,10 +102,13 @@ def make_tui_turn_runner(
     config: AppConfig,
     llm_client: LLMClient | None = None,
     tools: ToolRegistry | None = None,
+    context_builder: ContextBuilder | None = None,
+    session_logger: AgentSessionLogger | None = None,
 ) -> TurnRunner:
     """Build a Textual-compatible turn runner without coupling TUI to agent internals."""
 
-    context_builder = build_runtime_context_builder(config)
+    context_builder = context_builder or build_runtime_context_builder(config)
+    session_logger = session_logger or AgentSessionLogger.create(config=config)
 
     async def run(prompt: str, event_handler: EventHandler) -> None:
         await run_agent_turn(
@@ -74,6 +118,7 @@ def make_tui_turn_runner(
             tools=tools,
             context_builder=context_builder,
             event_handler=event_handler,
+            session_logger=session_logger,
         )
 
     return run
@@ -85,3 +130,29 @@ def runtime_tool_registry(config: AppConfig) -> ToolRegistry:
             web_search_provider=provider_from_config(config.web),
         )
     )
+
+
+async def _persist_user_note_summary(config: AppConfig, session_id: str, note: str | None) -> None:
+    if note is None:
+        return
+    summary_store = SessionSummary(Path(config.workspace.root))
+    existing = await summary_store.load(session_id)
+    if note in existing:
+        return
+    updated = f"{existing.rstrip()}\n- {note}\n".lstrip()
+    await summary_store.save(session_id, updated)
+
+
+def _remember_result_targets(context_builder: ContextBuilder, result: TurnResult) -> None:
+    manifest = result.completion_evidence.project_manifest
+    if manifest is not None:
+        context_builder.remember_project_manifest(manifest, turn_id=result.turn_id)
+    document_manifest = result.completion_evidence.document_manifest
+    if document_manifest is not None:
+        context_builder.remember_document_manifest(document_manifest, turn_id=result.turn_id)
+    for path in result.created_files:
+        context_builder.remember_target(path, turn_id=result.turn_id, summary="created file")
+    for path in result.modified_files:
+        context_builder.remember_target(path, turn_id=result.turn_id, summary="modified file")
+    for path in result.deleted_files:
+        context_builder.remember_target(path, turn_id=result.turn_id, summary="deleted file")

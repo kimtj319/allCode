@@ -193,7 +193,7 @@ class OpenAICompatibleClient:
             delta = choice.get("delta") or {}
             text = delta.get("content")
             if text:
-                events.append(ModelEvent(kind="text_delta", text=text))
+                events.append(ModelEvent(kind="text_delta", text=text, metadata={"delta_chars": len(text)}))
             reasoning = (
                 delta.get("reasoning")
                 or delta.get("reasoning_delta")
@@ -204,7 +204,7 @@ class OpenAICompatibleClient:
                     ModelEvent(
                         kind="text_delta",
                         text="",
-                        metadata={"reasoning_delta": str(reasoning)},
+                        metadata={"reasoning_delta": str(reasoning), "delta_chars": len(str(reasoning))},
                     )
                 )
             for raw_tool_call in delta.get("tool_calls") or []:
@@ -220,6 +220,7 @@ class OpenAICompatibleClient:
                             name=function.get("name"),
                             arguments_delta=function.get("arguments") or "",
                         ),
+                        metadata={"argument_delta_chars": len(function.get("arguments") or "")},
                     )
                 )
             legacy_function_call = delta.get("function_call")
@@ -233,6 +234,7 @@ class OpenAICompatibleClient:
                             name=legacy_function_call.get("name"),
                             arguments_delta=legacy_function_call.get("arguments") or "",
                         ),
+                        metadata={"argument_delta_chars": len(legacy_function_call.get("arguments") or "")},
                     )
                 )
             finish_reason = choice.get("finish_reason")

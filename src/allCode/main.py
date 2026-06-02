@@ -13,13 +13,16 @@ from allCode.config.manager import ConfigError, ConfigManager, ConfigOverrides
 from allCode.config.defaults import DEFAULT_CONFIG_DIR
 from allCode.headless import run_headless_sync
 from allCode.llm.factory import uses_live_llm
+from allCode.agent.context_factory import build_runtime_context_builder
 from allCode.memory.commands import MemoryCommandService
 from allCode.memory.inbox import MemoryInbox
 from allCode.memory.session_store import SessionStore
 from allCode.memory.store import MemoryStore
-from allCode.runtime import make_tui_turn_runner
+from allCode.runtime import make_tui_turn_runner, runtime_tool_registry
+from allCode.telemetry import AgentSessionLogger
 from allCode.tui.runtime import run_interactive_session
 from allCode.tui.slash_commands import SlashCommandHandler
+from allCode.tui.status_commands import RuntimeStatusCommandService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,10 +64,16 @@ def main(
             return run_headless_sync(prompt, config=config, out=stdout, err=stderr)
         if out is None and err is None:
             _validate_interactive_model_config(config)
+            context_builder = build_runtime_context_builder(config)
+            session_logger = AgentSessionLogger.create(config=config)
             return run_interactive_session(
-                turn_runner=make_tui_turn_runner(config=config),
+                turn_runner=make_tui_turn_runner(
+                    config=config,
+                    context_builder=context_builder,
+                    session_logger=session_logger,
+                ),
                 app_info=_tui_app_info(config),
-                slash_handler=_slash_handler(config),
+                slash_handler=_slash_handler(config, session_log_path=session_logger.path),
                 stdin=sys.stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -95,14 +104,18 @@ def _validate_interactive_model_config(config) -> None:
         )
 
 
-def _slash_handler(config) -> SlashCommandHandler:
+def _slash_handler(config, *, session_log_path: Path | None = None) -> SlashCommandHandler:
     project_root = Path(config.workspace.root).expanduser().resolve()
     store = MemoryStore(project_root, DEFAULT_CONFIG_DIR)
     inbox = MemoryInbox(project_root / ".allCode" / "memory" / "inbox", store)
+    tools = runtime_tool_registry(config)
     service = MemoryCommandService(
         store=store,
         inbox=inbox,
         session_store=SessionStore(project_root),
         cwd=project_root,
     )
-    return SlashCommandHandler(memory_backend=service)
+    return SlashCommandHandler(
+        memory_backend=service,
+        status_backend=RuntimeStatusCommandService(config=config, tools=tools, session_log_path=session_log_path),
+    )

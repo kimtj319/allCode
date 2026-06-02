@@ -10,6 +10,25 @@ from allCode.agent.intent import IntentExtractor, IntentSignals
 from allCode.core.models import CoreModel
 
 RouteKind = Literal["answer", "inspect", "modify", "operate"]
+ToolCapability = Literal[
+    "read_file",
+    "search_workspace",
+    "mutate_file",
+    "delete_file",
+    "run_shell",
+    "run_validation",
+    "web_search",
+]
+WorkflowHint = Literal[
+    "none",
+    "direct_answer",
+    "direct_file_edit",
+    "single_file_create",
+    "multi_file_generation",
+    "validation_repair",
+    "external_research",
+]
+RouteSource = Literal["rule", "model", "fallback"]
 
 
 class RoutingDecision(CoreModel):
@@ -17,6 +36,9 @@ class RoutingDecision(CoreModel):
     confidence: float
     reason: str
     target_hint: str | None = None
+    tool_capabilities: set[ToolCapability] = Field(default_factory=set)
+    workflow_hint: WorkflowHint = "none"
+    route_source: RouteSource = "rule"
     flags: set[str] = Field(default_factory=set)
     read_only_requested: bool = False
     requires_tools: bool = False
@@ -39,6 +61,10 @@ class RoutingDecision(CoreModel):
     @property
     def needs_clarification(self) -> bool:
         return self.confidence < 0.45
+
+    @property
+    def allows_tool_use(self) -> bool:
+        return self.requires_tools or bool(self.tool_capabilities)
 
 
 class RuleBasedRouter:
@@ -67,7 +93,7 @@ class RuleBasedRouter:
                 signals,
                 flags,
             )
-        if signals.conceptual_question and not signals.explicit_change_request:
+        if signals.conceptual_question and not signals.explicit_change_request and not signals.operate_action:
             return self._decision(
                 "inspect" if signals.target_hint else "answer",
                 0.86,
@@ -98,11 +124,15 @@ class RuleBasedRouter:
         requires_mutation = kind == "modify" and not signals.read_only_requested
         requires_shell = kind == "operate" and not signals.no_shell_requested
         requires_validation = signals.validation_requested or (requires_mutation and "test" in flags)
+        capabilities = self._capabilities_for(kind, signals)
         return RoutingDecision(
             kind=kind,
             confidence=confidence,
             reason=reason,
             target_hint=signals.target_hint,
+            tool_capabilities=capabilities,
+            workflow_hint=self._workflow_hint(signals),
+            route_source="rule",
             flags=flags,
             read_only_requested=signals.read_only_requested,
             requires_tools=kind in {"inspect", "modify", "operate"} or signals.external_knowledge_requested,
@@ -111,6 +141,34 @@ class RuleBasedRouter:
             requires_validation=requires_validation,
             requires_external_knowledge=signals.external_knowledge_requested and not signals.no_external_network,
         )
+
+    def _capabilities_for(self, kind: RouteKind, signals: IntentSignals) -> set[ToolCapability]:
+        if kind == "answer":
+            return {"web_search"} if signals.external_knowledge_requested and not signals.no_external_network else set()
+        if kind == "inspect":
+            capabilities: set[ToolCapability] = {"read_file", "search_workspace"}
+            if signals.external_knowledge_requested and not signals.no_external_network:
+                capabilities.add("web_search")
+            return capabilities
+        if kind == "operate":
+            capabilities = {"read_file", "search_workspace", "run_validation"}
+            if not signals.no_shell_requested:
+                capabilities.add("run_shell")
+            return capabilities
+        capabilities = {"read_file", "search_workspace", "mutate_file"}
+        if "삭제" in signals.matched_terms or "delete" in signals.matched_terms:
+            capabilities.add("delete_file")
+        if signals.validation_requested:
+            capabilities.add("run_validation")
+        return capabilities
+
+    def _workflow_hint(self, signals: IntentSignals) -> WorkflowHint:
+        if not signals.explicit_change_request:
+            return "none"
+        matched = {term.lower() for term in signals.matched_terms}
+        if matched.intersection({"scaffold", "bootstrap", "new project", "새 프로젝트", "프로젝트 생성"}):
+            return "multi_file_generation"
+        return "none"
 
     @staticmethod
     def _flags(signals: IntentSignals) -> set[str]:

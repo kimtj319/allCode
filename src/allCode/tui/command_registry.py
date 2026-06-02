@@ -43,6 +43,12 @@ def default_commands() -> list[CommandSpec]:
     return [
         CommandSpec(name="/memory show", description="Show active memory.", usage="/memory show"),
         CommandSpec(name="/memory add", description="Add project memory.", usage="/memory add <text>"),
+        CommandSpec(name="/memory refresh", description="Reload active memory.", usage="/memory refresh"),
+        CommandSpec(name="/tools", description="Show available tools.", usage="/tools"),
+        CommandSpec(name="/model", description="Show active model configuration.", usage="/model"),
+        CommandSpec(name="/config", description="Show active runtime configuration.", usage="/config"),
+        CommandSpec(name="/status last", description="Show latest session diagnostics.", usage="/status last"),
+        CommandSpec(name="/debug last", description="Show raw latest session diagnostics.", usage="/debug last"),
         CommandSpec(name="/stop", description="Cancel the active turn.", usage="/stop"),
         CommandSpec(name="/exit", description="Exit allCode.", usage="/exit"),
         CommandSpec(name="/clear", description="Clear transcript view.", usage="/clear"),

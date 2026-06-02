@@ -13,6 +13,11 @@ class MemoryCommandBackend(Protocol):
         """Execute a memory command and return user-visible output."""
 
 
+class StatusCommandBackend(Protocol):
+    async def handle(self, command: str) -> str:
+        """Execute model/tool/config status commands."""
+
+
 class SlashCommandResult(CoreModel):
     message: str = ""
     clear_transcript: bool = False
@@ -26,9 +31,11 @@ class SlashCommandHandler:
         *,
         registry: CommandRegistry | None = None,
         memory_backend: MemoryCommandBackend | None = None,
+        status_backend: StatusCommandBackend | None = None,
     ) -> None:
         self.registry = registry or CommandRegistry()
         self.memory_backend = memory_backend
+        self.status_backend = status_backend
 
     async def handle(self, command: str) -> SlashCommandResult:
         normalized = " ".join(command.strip().split())
@@ -44,6 +51,10 @@ class SlashCommandHandler:
             if self.memory_backend is None:
                 return SlashCommandResult(message="메모리 명령 백엔드가 설정되지 않았습니다.")
             return SlashCommandResult(message=await self.memory_backend.handle(normalized))
+        if normalized.split(maxsplit=1)[0] in {"/tools", "/model", "/config", "/status", "/debug"}:
+            if self.status_backend is None:
+                return SlashCommandResult(message="상태 명령 백엔드가 설정되지 않았습니다.")
+            return SlashCommandResult(message=await self.status_backend.handle(normalized))
         if normalized in {"/help", "/commands"}:
             return SlashCommandResult(message=self._help_text())
         return SlashCommandResult(message=f"알 수 없는 명령어입니다: {normalized}")

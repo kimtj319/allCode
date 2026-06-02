@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pydantic import Field
@@ -23,7 +24,13 @@ class PathResolution(CoreModel):
 
 def safe_resolve_under_root(root: str | Path, path: str | Path) -> Path:
     root_path = Path(root).expanduser().resolve()
-    candidate = Path(path).expanduser()
+    raw_path = str(path)
+    if raw_path == "/workspace":
+        candidate = root_path
+    elif raw_path.startswith("/workspace/"):
+        candidate = root_path / raw_path[len("/workspace/") :]
+    else:
+        candidate = Path(path).expanduser()
     if not candidate.is_absolute():
         candidate = root_path / candidate
     resolved = candidate.resolve()
@@ -63,7 +70,8 @@ class PathResolver:
         recent = recent_paths or []
         target = explicit_target or query
         if explicit_target is None and is_followup_reference(query) and recent:
-            target = recent[0]
+            matched_recent = self._semantic_recent_match(query, recent)
+            target = matched_recent or recent[0]
         recent_match = self._match_recent(target, recent)
         if recent_match is not None and not Path(target).is_absolute():
             target = recent_match
@@ -117,6 +125,26 @@ class PathResolver:
                 return recent
         return None
 
+    def _semantic_recent_match(self, query: str, recent_paths: list[str]) -> str | None:
+        query_terms = _semantic_terms(query)
+        if not query_terms:
+            return None
+        ranked: list[tuple[int, int, str]] = []
+        for index, path in enumerate(recent_paths):
+            path_terms = _path_terms(path)
+            score = 0
+            for term in query_terms:
+                if term in path_terms:
+                    score += 4
+                elif any(term in path_term or path_term in term for path_term in path_terms if len(path_term) >= 3):
+                    score += 2
+            if score:
+                ranked.append((score, -index, path))
+        if not ranked:
+            return None
+        ranked.sort(reverse=True)
+        return ranked[0][2]
+
     def _resolved(self, query: str, path: Path) -> PathResolution:
         root = self.roots.find(path)
         return PathResolution(
@@ -124,3 +152,38 @@ class PathResolver:
             resolved_path=str(path),
             root=str(root.resolved) if root is not None else None,
         )
+
+
+ALIASES: dict[str, tuple[str, ...]] = {
+    "config": ("config", "setting", "settings", "configuration", "설정", "환경"),
+    "service": ("service", "services", "서비스"),
+    "test": ("test", "tests", "spec", "테스트", "검증"),
+    "util": ("util", "utils", "utility", "도구", "유틸"),
+    "text": ("text", "string", "문자열", "텍스트"),
+}
+
+
+def _semantic_terms(text: str) -> set[str]:
+    lowered = text.lower()
+    tokens = {token for token in re.split(r"[^0-9a-zA-Z가-힣_]+", lowered) if len(token) >= 2}
+    expanded = set(tokens)
+    for canonical, aliases in ALIASES.items():
+        if any(alias in lowered for alias in aliases):
+            expanded.add(canonical)
+            expanded.update(alias for alias in aliases if re.fullmatch(r"[0-9a-zA-Z_]+", alias))
+    return expanded
+
+
+def _path_terms(path: str) -> set[str]:
+    parts: set[str] = set()
+    for part in Path(path).parts:
+        lowered = part.lower()
+        parts.add(lowered)
+        parts.add(Path(lowered).stem)
+        parts.update(token for token in re.split(r"[^0-9a-zA-Z_]+", lowered) if len(token) >= 2)
+    expanded = set(parts)
+    for canonical, aliases in ALIASES.items():
+        if any(alias in parts for alias in aliases):
+            expanded.add(canonical)
+            expanded.update(alias for alias in aliases if re.fullmatch(r"[0-9a-zA-Z_]+", alias))
+    return expanded

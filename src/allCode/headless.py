@@ -43,10 +43,12 @@ def run_headless_sync(
     except Exception as exc:
         stderr.write(f"Headless execution failed: {exc}\n")
         return 1
-    if result.final_answer:
+    if result.status in {"success", "partial"} and result.final_answer:
         stdout.write(result.final_answer.rstrip() + "\n")
     if result.status in {"success", "partial"}:
         return 0
+    if result.final_answer:
+        stderr.write(result.final_answer.rstrip() + "\n")
     if result.error_message:
         stderr.write(result.error_message.rstrip() + "\n")
     return 1

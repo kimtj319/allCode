@@ -63,16 +63,19 @@ class AsyncEventBus:
     async def close(self, *, drain: bool = True) -> None:
         if self._closed:
             return
-        if self._dropped_count:
-            await self._queue.put(
-                EventDropped(
-                    turn_id="event-bus",
-                    message="Low-priority events were dropped due to backpressure.",
-                    dropped_count=self._dropped_count,
-                )
-            )
         if drain:
             await self._queue.join()
+            if self._dropped_count:
+                dropped = self._dropped_count
+                self._dropped_count = 0
+                await self._queue.put(
+                    EventDropped(
+                        turn_id="event-bus",
+                        message="Low-priority events were dropped due to backpressure.",
+                        dropped_count=dropped,
+                    )
+                )
+                await self._queue.join()
         else:
             self._clear_queue()
         self._closed = True
@@ -98,7 +101,10 @@ class AsyncEventBus:
         subscribers = list(self._subscribers)
         for event_type, handler in subscribers:
             if event_type is None or isinstance(event, event_type):
-                await handler(event)
+                try:
+                    await handler(event)
+                except Exception:
+                    self._dropped_count += 1
 
     def _clear_queue(self) -> None:
         while True:

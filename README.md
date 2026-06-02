@@ -17,12 +17,17 @@ unit/integration test는 명시적으로 주입한 fake LLM 또는 mock transpor
   all-rounder agent loop.
 - provider-neutral LLM protocol과 OpenAI-compatible chat completions adapter.
 - 단일 `ConfigManager` 진입점을 통한 config/env 기반 설정.
-- `allcode --headless` 기반 headless 실행.
-- Codex-style transcript, Markdown answer rendering, status, input recovery,
-  slash command palette, approval panel primitive, folded tool output renderer를
-  포함한 Textual 기반 TUI shell.
+- `allcode --headless` 기반 headless 실행. headless도 runtime builtin tool
+  registry와 route policy를 사용합니다.
+- 기본 `allcode` 실행 시 Codex-style terminal-native UI를 사용합니다.
+  일반 터미널 scrollback 위에 답변을 출력하고, 하단 composer만 고정합니다.
+- 선택 실행 가능한 Textual UI: `allcode --textual`.
+- Markdown answer rendering, status/spinner, input recovery, slash command
+  registry, history/completion, paste placeholder, folded tool output renderer.
 - registry, executor, approval check, core 표준 `ToolCall`/`ToolResult`,
   edit transaction을 사용하는 tool calling contract.
+- route 기반 tool 노출. 일반 답변에는 tool schema를 숨기고, inspect,
+  modify, operate, external answer route에 필요한 tool만 모델에 전달합니다.
 - 내장 file, search, shell/validation, evidence-only web tool.
 - workspace root, safe path resolution, indexing, symbol extraction.
 - hierarchical `ALLCODE.md` style memory, session summary, recent target,
@@ -76,11 +81,18 @@ python -m pip install -r requirements.txt
 - `ALLCODE_API_KEY_ENV`: API key를 담고 있는 다른 환경 변수명.
 - `ALLCODE_WORKSPACE`: workspace root.
 - `ALLCODE_APPROVAL_MODE`: `ask`, `auto`, `rules`.
+- `ALLCODE_WEB_SEARCH_URL`: provider-neutral HTTP JSON web search endpoint.
+- `ALLCODE_WEB_SEARCH_API_KEY_ENV`: web search endpoint token을 담은 환경 변수명.
+- `ALLCODE_WEB_SEARCH_TIMEOUT`: web search timeout seconds.
 
 config 파일에는 API key 값을 저장하지 않고, API key가 들어 있는 환경 변수명만
 저장합니다.
 프로젝트 루트의 `.env` 파일도 자동으로 읽습니다. 이때 `ALLCODE_`로 시작하는
 변수만 반영하며, 이미 셸에 설정된 환경 변수는 `.env` 값으로 덮어쓰지 않습니다.
+따라서 repository root에서 실행할 때는 `.env`에 `ALLCODE_API_KEY=...`를
+두는 것만으로 충분합니다. `source .env`를 쓸 경우에도 `export` 없이 정의한
+변수는 셸 하위 프로세스에 전달되지 않을 수 있으므로, allCode의 자동 `.env`
+loader를 기준으로 생각하는 편이 안전합니다.
 
 ```yaml
 model:
@@ -148,13 +160,18 @@ TUI shell:
 
 ```bash
 allcode
+allcode --textual
+allcode --plain-terminal
 ```
 
-TUI는 Textual이 필요합니다. 현재 TUI는 Codex-style dark transcript,
-Markdown answer rendering, status handling, input recovery, command palette,
-event renderer를 제공하며, 기본 `allcode` 실행 경로는 설정된 모델을 호출하는
-turn runner에 연결되어 있습니다. transcript는 `USER`, `ALLCODE`, `TOOL`,
-`STATUS` 블록으로 분리해 표시합니다.
+기본 `allcode`는 Textual fullscreen 앱이 아니라 terminal-native UI를
+실행합니다. 본문 출력은 일반 터미널 scrollback을 사용하고, 하단 composer만
+고정해 입력, history, completion, paste placeholder, runtime status/spinner를
+표시합니다. Enter/LF는 제출이고, multiline 입력은 Alt+Enter를 사용합니다.
+
+`allcode --textual`은 선택형 Textual UI입니다. Textual이 설치되지 않았으면
+terminal-native UI로 fallback합니다. `--plain-terminal`은 기본
+terminal-native UI를 명시하는 compatibility alias입니다.
 
 ## 프로젝트 구조
 
@@ -172,8 +189,10 @@ turn runner에 연결되어 있습니다. transcript는 `USER`, `ALLCODE`, `TOOL
 - `src/allCode/memory`: hierarchical memory, store, session store/summary,
   recent target, repo map/ranker, selector, compactor, auto-memory inbox,
   `/memory` command backend.
-- `src/allCode/tui`: Textual app shell, state controller, input box,
-  command palette/registry, approval panel, renderer, UI message model.
+- `src/allCode/tui`: default terminal-native UI, optional Textual app,
+  terminal composer/keymap/history/completion/paste handling, Markdown
+  normalization/rendering, transcript state/reducer/view, command registry,
+  approval panel state, event renderer, UI message model.
 - `src/allCode/config`: config schema, defaults, precedence-aware loader.
 - `src/allCode/generation`: language strategy registry와 Python, Node, Go,
   Rust, Java, generic project strategy.
@@ -206,16 +225,19 @@ python -m pytest tests/unit/config tests/unit/test_entrypoint.py
 python -m pytest tests/unit/core
 python -m pytest tests/unit/llm
 python -m pytest tests/unit/agent tests/unit/tools
+python -m pytest tests/unit/tools tests/unit/agent/test_policy.py tests/integration/test_mock_agent_loop.py tests/integration/test_agent_loop_context_validation.py
 python -m pytest tests/unit/workspace tests/unit/agent/test_context_builder.py
 python -m pytest tests/unit/memory tests/integration/test_followup_context_memory.py
 python -m pytest tests/integration/test_generation_workflow.py
 python -m pytest tests/integration/test_mock_agent_loop.py tests/integration/test_headless_runner.py
+python -m pytest tests/tty
 ```
 
 문서 작성 시점의 마지막 로컬 검증:
 
 - `python -m pytest tests/unit tests/integration tests/quality tests/tty`
 - `python -m pytest`
+- `allcode --help`
 - `PYTHONPATH=src python -m allCode --help`
 - `PYTHONPATH=src python -m allCode --headless "Hello from docs quickstart"`
 
@@ -225,6 +247,9 @@ python -m pytest tests/integration/test_mock_agent_loop.py tests/integration/tes
 - `core`는 provider SDK, Textual, Rich, 구체 UI 구현에 독립적이어야 합니다.
 - 계층 간 데이터는 표준 core `ToolCall`, `ToolResult`, `AgentEvent`,
   `TurnResult` 모델을 사용합니다.
+- 모델에 전달하는 tool schema는 route policy로 제한합니다. direct answer
+  route에는 tool을 노출하지 않고, external answer route에는 web evidence
+  tool만 노출합니다.
 - 실제 `CompletionEvidence` 없이 구현/수정 완료를 보고하지 않습니다.
 - 파일 변경은 tool execution과 edit transaction evidence를 거쳐야 합니다.
 - config 파일에는 secret을 저장하지 않고 환경 변수명만 저장합니다.
@@ -238,16 +263,22 @@ python -m pytest tests/integration/test_mock_agent_loop.py tests/integration/tes
   사용합니다. 개발/테스트에서 fake LLM이 필요하면 test helper나
   `run_headless_sync(..., llm_client=FakeLLMClient...)`처럼 명시적으로
   주입해야 합니다.
-- headless 일반 model tool call은 기본 빈 tool registry를 사용합니다.
-  project generation workflow는 자체 workflow와 built-in tool을 사용합니다.
-- Textual TUI는 실제 모델 runner와 연결되어 있지만, Codex 수준의 rich
-  markdown/diff transcript UI는 아직 최소 구현입니다.
-- web tool은 evidence-bundle tool입니다. MVP에서는 live network search를
-  직접 수행하지 않고, 호출자가 주입한 result/page data를 사용합니다.
+- headless, terminal-native UI, Textual UI 모두 runtime builtin tool registry를
+  사용합니다. 단, route policy가 모델에 노출되는 tool schema를 제한합니다.
+- terminal-native UI는 Codex-style scroll-region/composer 구조와 Markdown
+  rendering을 제공합니다. Codex와 완전히 동일한 editor 기능이나 diff review
+  UX는 아직 구현 범위 밖입니다.
+- Textual UI는 선택형 fallback UI입니다. 기본 UX 기준은 terminal-native UI입니다.
+- web search는 `web.search_url`이 설정된 HTTP JSON provider가 있을 때만 live
+  search를 수행합니다. `web_fetch`는 MVP에서 실제 URL fetch가 아니라 호출자가
+  주입한 page content를 evidence bundle로 정규화합니다.
+- 기본 `approval.mode=ask`에서는 file mutation과 일반 shell command가
+  approval_required 결과로 중단됩니다. 자동 코딩/검증 smoke에는
+  `--approval auto` 또는 session allow rule이 필요할 수 있습니다.
 - 실제 모델 통합 테스트는 선택 사항이며 기본 test suite에 포함되지 않습니다.
   unit test는 mock transport와 fake LLM scenario를 사용합니다.
-- non-headless fullscreen TUI smoke는 실행 환경에 의존합니다. 자동 TTY smoke
-  test는 TUI state/rendering contract를 검증합니다.
+- non-headless 실제 PTY smoke는 실행 환경에 의존합니다. 자동 TTY smoke test는
+  terminal-native/Textual state와 rendering contract를 검증합니다.
 - git auto-commit, plugin marketplace, MCP server manager, multi-agent swarm,
   cloud sandbox, PageRank-style repo ranking, full interactive diff editor는
   `docs/future_work.md`에 post-MVP 항목으로 기록되어 있습니다.
@@ -277,6 +308,8 @@ TUI가 시작되지 않는 경우:
 
 - `python -m pip install -e .` 또는
   `python -m pip install -r requirements.txt`로 dependency를 설치하세요.
+- 기본 `allcode`는 terminal-native UI입니다. Textual UI를 명시적으로 확인하려면
+  `allcode --textual`을 사용하세요.
 - non-interactive 환경에서는 `allcode --headless "prompt"`를 사용하세요.
 
 테스트 실패:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import hashlib
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -19,6 +21,12 @@ class WebEvidence(CoreModel):
     title: str = ""
     url: str = ""
     snippet: str = ""
+    source: str | None = None
+    published_at: str | None = None
+    display_domain: str | None = None
+    snippet_hash: str | None = None
+    retrieved_at: str | None = None
+    rank: int = 0
 
 
 class WebSearchProvider(Protocol):
@@ -28,7 +36,8 @@ class WebSearchProvider(Protocol):
 
 class DisabledWebSearchProvider:
     async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
-        raise WebSearchUnavailable("web_search provider is not configured.")
+        _ = query, top_n
+        raise WebSearchUnavailable("web_search backend is disabled. Configure ALLCODE_WEB_SEARCH_BACKEND and ALLCODE_WEB_SEARCH_URL.")
 
 
 class HttpWebSearchProvider:
@@ -65,9 +74,59 @@ class HttpWebSearchProvider:
             return parse_web_evidence(response.json(), top_n=top_n)
 
 
+class SearxngSearchProvider:
+    """SearXNG JSON API provider."""
+
+    def __init__(
+        self,
+        *,
+        search_url: str,
+        timeout_seconds: int = 15,
+        language: str = "ko-KR",
+        categories: list[str] | None = None,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._search_url = search_url
+        self._timeout_seconds = timeout_seconds
+        self._language = language
+        self._categories = categories or ["general"]
+        self._http_client = http_client
+
+    async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
+        params = {
+            "q": query,
+            "format": "json",
+            "language": self._language,
+            "categories": ",".join(self._categories),
+        }
+        if self._http_client is not None:
+            response = await self._http_client.get(self._search_url, params=params)
+            return self._parse_response(response, top_n)
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            response = await client.get(self._search_url, params=params)
+            return self._parse_response(response, top_n)
+
+    def _parse_response(self, response: httpx.Response, top_n: int) -> list[WebEvidence]:
+        if response.status_code in {403, 404, 406}:
+            raise WebSearchUnavailable("SearXNG JSON search API is unavailable or disabled for this instance.")
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise WebSearchUnavailable("SearXNG response was not JSON. Check format=json support.") from exc
+        return parse_web_evidence(payload, top_n=top_n)
+
+
 def provider_from_config(config: WebConfig) -> WebSearchProvider:
     if not config.search_url:
         return DisabledWebSearchProvider()
+    if config.backend == "searxng":
+        return SearxngSearchProvider(
+            search_url=config.search_url,
+            timeout_seconds=config.timeout_seconds,
+            language=config.default_language,
+            categories=config.default_categories,
+        )
     return HttpWebSearchProvider(
         endpoint=config.search_url,
         api_key_env=config.api_key_env,
@@ -84,7 +143,19 @@ def parse_web_evidence(payload: Any, *, top_n: int = 5) -> list[WebEvidence]:
         title = str(row.get("title") or row.get("name") or "")
         url = str(row.get("url") or row.get("link") or "")
         snippet = str(row.get("snippet") or row.get("description") or row.get("content") or "")
-        evidence.append(WebEvidence(title=title, url=url, snippet=snippet[:800]))
+        evidence.append(
+            WebEvidence(
+                title=title,
+                url=url,
+                snippet=snippet[:800],
+                source=str(row.get("engine") or row.get("source") or "") or None,
+                published_at=str(row.get("publishedDate") or row.get("published_at") or "") or None,
+                display_domain=_display_domain(url),
+                snippet_hash=_snippet_hash(snippet),
+                retrieved_at=_utc_timestamp(),
+                rank=len(evidence) + 1,
+            )
+        )
         if len(evidence) >= top_n:
             break
     return evidence
@@ -100,3 +171,22 @@ def _result_rows(payload: Any) -> list[Any]:
         if isinstance(value, list):
             return value
     return []
+
+
+def _display_domain(url: str) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    return parsed.netloc or None
+
+
+def _snippet_hash(snippet: str) -> str | None:
+    if not snippet:
+        return None
+    return hashlib.sha256(snippet.encode("utf-8")).hexdigest()[:16]
+
+
+def _utc_timestamp() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()

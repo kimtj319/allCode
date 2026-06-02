@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from allCode.memory.inbox import MemoryInbox
-from allCode.memory.schema import MemoryItem
+from allCode.memory.schema import MemoryItem, estimate_tokens
 from allCode.memory.session_store import SessionStore
 from allCode.memory.store import MemoryStore
 
@@ -24,14 +24,23 @@ class MemoryCommandService:
         action = parts[1]
         if action == "show":
             items = await self.store.load_active_items(cwd=self.cwd)
-            return "\n".join(f"- [{item.scope}/{item.kind}] {item.text}" for item in items)
+            if not items:
+                return "활성 메모리가 없습니다."
+            lines = [f"활성 메모리 {len(items)}개:"]
+            for item in items:
+                evidence = ", ".join(item.evidence[:2]) if item.evidence else "manual"
+                token_estimate = estimate_tokens(item.text)
+                lines.append(f"- [{item.scope}/{item.kind}] {item.text} ({token_estimate} tokens, source: {evidence})")
+            return "\n".join(lines)
         if action == "add" and len(parts) == 3:
             item = MemoryItem(scope="project", kind="instruction", text=parts[2])
             await self.store.add_item(item)
             return f"Added memory {item.id}."
         if action == "refresh":
-            count = len(await self.store.load_active_items(cwd=self.cwd))
-            return f"Loaded {count} active memory item(s)."
+            items = await self.store.load_active_items(cwd=self.cwd)
+            scopes = sorted({item.scope for item in items})
+            scope_text = ", ".join(scopes) if scopes else "none"
+            return f"Loaded {len(items)} active memory item(s). scopes: {scope_text}."
         if action == "inbox":
             candidates = await self.inbox.list_candidates()
             return "\n".join(f"- {item.id}: {item.text}" for item in candidates)

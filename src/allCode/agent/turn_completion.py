@@ -46,16 +46,16 @@ def finalize_completion(
     requires_change = requires_change_evidence(turn_input.user_prompt, routing=routing)
     status = outcome_status
     error_message = outcome_error
-    if status == "success" and requires_change and not evidence.has_file_change():
+    if status == "success" and requires_change and not evidence.has_resolution_evidence():
         status = "failed"
-        error_message = "Completion evidence missing: change request produced no file-change evidence."
+        error_message = "Completion evidence missing: change request produced no file-change or safe no-op evidence."
         evidence.status = "blocked"
         evidence.final_answer_ready = False
-    if status == "success" and routing.requires_validation and evidence.validation_passed is not True:
+    if status in {"success", "partial"} and routing.requires_validation and routing.requires_mutation and evidence.validation_passed is not True:
         status = "failed"
-        error_message = "Validation evidence missing: validation-required request did not pass validation."
+        error_message = "Validation evidence missing: validation did not pass."
         evidence.status = "blocked"
-        evidence.final_answer_ready = False
+        evidence.final_answer_ready = bool(outcome_answer.strip())
     return FinalizedCompletion(
         status=status,
         error_message=error_message,

@@ -28,6 +28,9 @@ def _event_time() -> datetime:
 class AgentEvent(CoreModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     turn_id: str
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
     event_type: str
     severity: EventSeverity = "status_only"
     message: str = ""
@@ -55,8 +58,28 @@ class RoutingDecided(AgentEvent):
     event_type: Literal["routing_decided"] = "routing_decided"
 
 
+class ContextBuilt(AgentEvent):
+    event_type: Literal["context_built"] = "context_built"
+    severity: EventSeverity = "debug_only"
+
+
 class ModelStreamStarted(AgentEvent):
     event_type: Literal["model_stream_started"] = "model_stream_started"
+
+
+class ModelRequestPrepared(AgentEvent):
+    event_type: Literal["model_request_prepared"] = "model_request_prepared"
+    severity: EventSeverity = "status_only"
+
+
+class ModelResponseParsed(AgentEvent):
+    event_type: Literal["model_response_parsed"] = "model_response_parsed"
+    severity: EventSeverity = "debug_only"
+
+
+class ModelMetricsRecorded(AgentEvent):
+    event_type: Literal["model_metrics_recorded"] = "model_metrics_recorded"
+    severity: EventSeverity = "debug_only"
 
 
 class ModelStreamHeartbeat(AgentEvent):
@@ -79,6 +102,11 @@ class ToolCallRequested(AgentEvent):
     tool_call: ToolCall
 
 
+class ToolPolicyChecked(AgentEvent):
+    event_type: Literal["tool_policy_checked"] = "tool_policy_checked"
+    severity: EventSeverity = "debug_only"
+
+
 class ToolExecutionStarted(AgentEvent):
     event_type: Literal["tool_execution_started"] = "tool_execution_started"
     tool_call: ToolCall
@@ -92,6 +120,11 @@ class ToolExecutionFinished(AgentEvent):
 class ApprovalRequested(AgentEvent):
     event_type: Literal["approval_requested"] = "approval_requested"
     severity: EventSeverity = "user_visible"
+
+
+class ToolApprovalChecked(AgentEvent):
+    event_type: Literal["tool_approval_checked"] = "tool_approval_checked"
+    severity: EventSeverity = "debug_only"
 
 
 class ApprovalResolved(AgentEvent):
@@ -156,6 +189,31 @@ class FinalAnswerReady(AgentEvent):
     final_answer: str
 
 
+class RecoveryStateUpdated(AgentEvent):
+    event_type: Literal["recovery_state_updated"] = "recovery_state_updated"
+    severity: EventSeverity = "status_only"
+
+
+class PhaseTransitioned(AgentEvent):
+    event_type: Literal["phase_transitioned"] = "phase_transitioned"
+    severity: EventSeverity = "status_only"
+
+
+class ValidationActionInjected(AgentEvent):
+    event_type: Literal["validation_action_injected"] = "validation_action_injected"
+    severity: EventSeverity = "status_only"
+
+
+class RepairAttemptExhausted(AgentEvent):
+    event_type: Literal["repair_attempt_exhausted"] = "repair_attempt_exhausted"
+    severity: EventSeverity = "user_visible"
+
+
+class TurnResultReady(AgentEvent):
+    event_type: Literal["turn_result_ready"] = "turn_result_ready"
+    severity: EventSeverity = "debug_only"
+
+
 class TurnFailed(AgentEvent):
     event_type: Literal["turn_failed"] = "turn_failed"
     severity: EventSeverity = "user_visible"
@@ -176,6 +234,24 @@ class EventDropped(AgentEvent):
 class ToolLoopDetected(AgentEvent):
     event_type: Literal["tool_loop_detected"] = "tool_loop_detected"
     severity: EventSeverity = "user_visible"
+    tool_call: ToolCall
+
+
+class ToolObservationReused(AgentEvent):
+    event_type: Literal["tool_observation_reused"] = "tool_observation_reused"
+    severity: EventSeverity = "debug_only"
+    tool_call: ToolCall
+
+
+class ToolCallSuppressed(AgentEvent):
+    event_type: Literal["tool_call_suppressed"] = "tool_call_suppressed"
+    severity: EventSeverity = "status_only"
+    tool_call: ToolCall
+
+
+class ToolCallSchemaDenied(AgentEvent):
+    event_type: Literal["tool_call_schema_denied"] = "tool_call_schema_denied"
+    severity: EventSeverity = "status_only"
     tool_call: ToolCall
 
 

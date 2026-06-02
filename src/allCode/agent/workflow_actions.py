@@ -74,7 +74,7 @@ class WorkflowActions:
                 workspace=turn_input.workspace,
                 session_id=turn_input.session_id,
                 turn_id=turn_id,
-                approval_mode="auto",
+                approval_mode=self.tool_executor.approval_mode,
             ),
             routing=routing,
             completion_evidence=completion_evidence,

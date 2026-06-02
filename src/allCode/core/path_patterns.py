@@ -19,6 +19,13 @@ FOLLOWUP_TERMS = (
     "해당 함수",
     "방금",
     "앞서",
+    "앞 문서",
+    "앞문서",
+    "이전 답변",
+    "앞선 답변",
+    "방금 답변",
+    "previous answer",
+    "previous response",
 )
 
 

@@ -60,11 +60,14 @@ class ApprovalConfig(StrictConfigModel):
 
 
 class WebConfig(StrictConfigModel):
+    backend: Literal["disabled", "http_json", "searxng"] = "disabled"
     search_url: str | None = None
     api_key_env: str | None = None
     timeout_seconds: int = 15
+    default_language: str = "ko-KR"
+    default_categories: list[str] = Field(default_factory=lambda: ["general"])
 
-    @field_validator("search_url", "api_key_env")
+    @field_validator("search_url", "api_key_env", "default_language")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:

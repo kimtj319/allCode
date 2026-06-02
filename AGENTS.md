@@ -23,10 +23,15 @@ Before making non-trivial changes, read:
    - TUI: `plan/10_tui_app_plan.md`
    - quality/testing: `plan/11_quality_testing_plan.md`
    - MVP milestones: `plan/12_mvp_execution_plan.md`
+6. UI follow-up notes when touching the terminal experience:
+   - `plan/15_codex_tui_alignment_plan.md`
+   - `plan/16_codex_default_terminal_ui_plan.md`
+   - `docs/codex_level_input_editor_plan.md`
 
 `plan/00` through `plan/12` are implementation contracts. `plan/13` and
 `plan/14` are review appendices; if they conflict, follow `plan/00` through
-`plan/12`. If design details are ambiguous, prefer
+`plan/12`. Later UI notes document current terminal decisions, but they do not
+override `plan/00` through `plan/12`. If design details are ambiguous, prefer
 `plan/01_open_source_alignment_contracts.md`.
 
 ## Code Modification Rules
@@ -45,6 +50,14 @@ Before making non-trivial changes, read:
 - File mutation must go through tool execution and edit transaction evidence.
 - Completion for implementation/modification work must be grounded in
   `CompletionEvidence`.
+- CLI/headless/TUI runtime paths use the real OpenAI-compatible adapter by
+  default and the runtime builtin tool registry unless a test explicitly injects
+  fake clients or custom tools.
+- Keep route-based tool exposure intact. Direct answer routes should not expose
+  tools; external answer routes should expose only web evidence tools; inspect,
+  modify, and operate routes should receive only their policy-allowed tools.
+- The default interactive UI is the terminal-native Codex-style shell. Textual
+  is optional via `allcode --textual`.
 - Prefer workspace/path policy helpers over ad hoc path handling.
 
 ## Prohibited Changes
@@ -58,6 +71,10 @@ Before making non-trivial changes, read:
 - Do not bind provider SDKs directly into `core`.
 - Do not make TUI code import agent internals directly; TUI consumes events and
   UI-facing message/state models.
+- Do not bypass `allCode.tui.runtime.run_interactive_session` when changing
+  interactive startup behavior.
+- Do not make `source .env` a required runtime step. The config layer already
+  loads project `.env` files and only accepts `ALLCODE_` variables.
 - Do not hardcode specific test prompts or project names into source code.
 - Do not implement post-MVP expansion items unless explicitly requested:
   git auto-commit, plugin marketplace, MCP server manager, multi-agent swarm,
@@ -121,6 +138,12 @@ TUI and quality:
 python -m pytest tests/tty tests/quality
 ```
 
+Terminal runtime and entrypoint:
+
+```bash
+python -m pytest tests/unit/test_entrypoint.py tests/tty
+```
+
 Full regression:
 
 ```bash
@@ -128,7 +151,8 @@ python -m pytest
 ```
 
 For README or AGENTS changes, verify that documented commands still match
-`allcode --help`, `pyproject.toml`, and the actual test layout.
+`allcode --help`, `pyproject.toml`, `requirements.txt`, and the actual test
+layout.
 
 ## Documentation Rules
 
@@ -139,6 +163,11 @@ For README or AGENTS changes, verify that documented commands still match
   pyproject file is canonical.
 - Runtime CLI/headless/TUI paths select the real OpenAI-compatible LLM adapter
   by default. Use fake LLMs only through explicit test injection.
+- Document the default interactive shell as terminal-native. Describe Textual
+  as optional unless the code changes that default.
+- Document Current Limitations whenever runtime behavior is intentionally
+  narrower than the plan, especially approval, web search/fetch, and TTY smoke
+  behavior.
 
 ## Final Response Rules
 

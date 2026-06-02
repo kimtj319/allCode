@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+
 from allCode.core.event_bus import EventBus
 from allCode.core.models import ToolCall, ToolResult
 from allCode.tools.base import ToolContext, ToolDefinition
@@ -43,13 +47,26 @@ class WebSearchTool:
         try:
             bundle = await self._provider.search(query, top_n=top_n)
         except WebSearchUnavailable as exc:
+            unavailable = {
+                "backend": "disabled",
+                "query": query,
+                "reason": str(exc),
+                "next_step": "Configure ALLCODE_WEB_SEARCH_BACKEND and ALLCODE_WEB_SEARCH_URL.",
+            }
             return ToolResult(
                 call_id=call.id,
                 name=call.name,
                 ok=False,
+                content="",
                 error=str(exc),
-                error_type="ExternalSearchUnavailable",
-                metadata={"query": query, "evidence_bundle": []},
+                error_type="web_search_unavailable",
+                metadata={
+                    "query": query,
+                    "backend": "disabled",
+                    "evidence_kind": "web_unavailable",
+                    "unavailable": unavailable,
+                    "evidence_bundle": [],
+                },
             )
         except Exception as exc:
             return ToolResult(
@@ -58,7 +75,7 @@ class WebSearchTool:
                 ok=False,
                 error=f"web_search provider failed: {exc}",
                 error_type=exc.__class__.__name__,
-                metadata={"query": query, "evidence_bundle": []},
+                metadata={"query": query, "evidence_kind": "web_error", "evidence_bundle": []},
             )
         if not bundle:
             return ToolResult(
@@ -67,7 +84,7 @@ class WebSearchTool:
                 ok=False,
                 error="web_search provider returned no evidence.",
                 error_type="ExternalSearchNoResults",
-                metadata={"query": query, "evidence_bundle": []},
+                metadata={"query": query, "evidence_kind": "web_no_results", "evidence_bundle": []},
             )
         return _bundle_result(call, query, bundle)
 
@@ -129,11 +146,19 @@ def _bundle_from_results(results: list, *, top_n: int) -> list[WebEvidence]:
     for item in results:
         if not isinstance(item, dict):
             continue
+        title = str(item.get("title", ""))
+        url = str(item.get("url", ""))
+        snippet = str(item.get("snippet", ""))[:800]
+        if not title and not url:
+            continue
         bundle.append(
             WebEvidence(
-                title=str(item.get("title", "")),
-                url=str(item.get("url", "")),
-                snippet=str(item.get("snippet", ""))[:800],
+                title=title,
+                url=url,
+                snippet=snippet,
+                display_domain=urlparse(url).netloc or None,
+                snippet_hash=hashlib.sha256(snippet.encode("utf-8")).hexdigest()[:16] if snippet else None,
+                retrieved_at=datetime.now(timezone.utc).isoformat(),
             )
         )
         if len(bundle) >= top_n:
@@ -147,5 +172,16 @@ def _bundle_result(call: ToolCall, query: str, bundle: list[WebEvidence]) -> Too
         name=call.name,
         ok=True,
         content=f"Collected {len(bundle)} web evidence item(s) for query: {query}",
-        metadata={"query": query, "evidence_bundle": [item.model_dump(mode="json") for item in bundle]},
+        metadata={
+            "query": query,
+            "evidence_kind": "web_evidence",
+            "evidence_count": len(bundle),
+            "evidence_bundle": [item.model_dump(mode="json") for item in bundle],
+            "observation": {
+                "kind": "web",
+                "target": query,
+                "summary": f"Collected {len(bundle)} web evidence item(s)",
+                "risk": "low",
+            },
+        },
     )

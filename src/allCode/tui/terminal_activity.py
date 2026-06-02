@@ -37,6 +37,8 @@ def _label_for_status(status: str) -> str:
         return "Sending request"
     if normalized in {messages.MODEL_WAITING_STATUS, messages.SLOW_STREAM_STATUS}:
         return "Waiting for model"
+    if normalized == messages.MODEL_CONTINUING_STATUS:
+        return "Continuing with tool result"
     if normalized == messages.ANSWERING_STATUS:
         return "Answering"
     if normalized == messages.ORGANIZING_STATUS:
@@ -46,7 +48,7 @@ def _label_for_status(status: str) -> str:
     if normalized == messages.REPAIR_STATUS:
         return "Repairing"
     if normalized == messages.RECOVERY_STATUS:
-        return "Retrying"
+        return "Requesting answer again"
     if normalized == messages.APPROVAL_STATUS:
         return "Waiting for approval"
     if normalized.startswith("도구 실행 중:"):

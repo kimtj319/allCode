@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import Field
 
@@ -18,6 +18,10 @@ class ToolDefinition(CoreModel):
     requires_approval: bool = False
     group: str = "general"
     aliases: list[str] = Field(default_factory=list)
+    risk: Literal["low", "medium", "high"] = "low"
+    side_effects: list[Literal["filesystem", "process", "network"]] = Field(default_factory=list)
+    output_mode: Literal["evidence", "diff", "log", "artifact"] = "evidence"
+    idempotent: bool = False
 
 
 class ToolContext(CoreModel):

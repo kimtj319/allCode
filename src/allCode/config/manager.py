@@ -19,7 +19,9 @@ from allCode.config.defaults import (
     ENV_BASE_URL,
     ENV_CONFIG_PATH,
     ENV_MODEL,
+    ENV_WEB_SEARCH_BACKEND,
     ENV_WEB_SEARCH_API_KEY_ENV,
+    ENV_WEB_SEARCH_LANGUAGE,
     ENV_WEB_SEARCH_TIMEOUT,
     ENV_WEB_SEARCH_URL,
     ENV_WORKSPACE,
@@ -157,10 +159,14 @@ class ConfigManager:
             data.setdefault("approval", {})["mode"] = env[ENV_APPROVAL_MODE]
         if env.get(ENV_WEB_SEARCH_URL):
             data.setdefault("web", {})["search_url"] = env[ENV_WEB_SEARCH_URL]
+        if env.get(ENV_WEB_SEARCH_BACKEND):
+            data.setdefault("web", {})["backend"] = env[ENV_WEB_SEARCH_BACKEND]
         if env.get(ENV_WEB_SEARCH_API_KEY_ENV):
             data.setdefault("web", {})["api_key_env"] = env[ENV_WEB_SEARCH_API_KEY_ENV]
         if env.get(ENV_WEB_SEARCH_TIMEOUT):
             data.setdefault("web", {})["timeout_seconds"] = env[ENV_WEB_SEARCH_TIMEOUT]
+        if env.get(ENV_WEB_SEARCH_LANGUAGE):
+            data.setdefault("web", {})["default_language"] = env[ENV_WEB_SEARCH_LANGUAGE]
         return data
 
     @classmethod

@@ -28,7 +28,24 @@ def build_completion_evidence(
         list(state.created_files),
         list(base_evidence.created_files if base_evidence is not None else []),
     )
-    file_change_present = bool(changed_files or created_files)
+    deleted_files = _merge_unique(
+        list(state.deleted_files),
+        list(base_evidence.deleted_files if base_evidence is not None else []),
+    )
+    noop_targets = list(base_evidence.noop_targets if base_evidence is not None else [])
+    safe_noop = bool(base_evidence.safe_noop if base_evidence is not None else False)
+    noop_reason = base_evidence.noop_reason if base_evidence is not None else None
+    search_candidate_paths = list(base_evidence.search_candidate_paths if base_evidence is not None else [])
+    inspected_paths = list(base_evidence.inspected_paths if base_evidence is not None else [])
+    zero_result_queries = list(base_evidence.zero_result_queries if base_evidence is not None else [])
+    not_found_targets = list(base_evidence.not_found_targets if base_evidence is not None else [])
+    validation_failure_symbols = list(base_evidence.validation_failure_symbols if base_evidence is not None else [])
+    policy_denied_tools = list(base_evidence.policy_denied_tools if base_evidence is not None else [])
+    web_unavailable_queries = list(base_evidence.web_unavailable_queries if base_evidence is not None else [])
+    grounding_required = bool(base_evidence.grounding_required if base_evidence is not None else False)
+    project_manifest = base_evidence.project_manifest if base_evidence is not None else None
+    document_manifest = base_evidence.document_manifest if base_evidence is not None else None
+    file_change_present = bool(changed_files or created_files or deleted_files or safe_noop)
     final_answer_ready = outcome_status == "success" and bool(outcome_answer.strip())
     if requires_change and not file_change_present:
         final_answer_ready = False
@@ -44,9 +61,23 @@ def build_completion_evidence(
         status=status,
         changed_files=changed_files,
         created_files=created_files,
+        deleted_files=deleted_files,
+        noop_targets=noop_targets,
+        noop_reason=noop_reason,
+        safe_noop=safe_noop,
         validation_commands=list(base_evidence.validation_commands if base_evidence is not None else []),
         validation_passed=base_evidence.validation_passed if base_evidence is not None else None,
         final_answer_ready=final_answer_ready,
+        grounding_required=grounding_required,
+        search_candidate_paths=search_candidate_paths,
+        inspected_paths=inspected_paths,
+        zero_result_queries=zero_result_queries,
+        not_found_targets=not_found_targets,
+        validation_failure_symbols=validation_failure_symbols,
+        policy_denied_tools=policy_denied_tools,
+        web_unavailable_queries=web_unavailable_queries,
+        project_manifest=project_manifest,
+        document_manifest=document_manifest,
     )
 
 

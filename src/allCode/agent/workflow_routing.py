@@ -2,34 +2,77 @@
 
 from __future__ import annotations
 
-import re
+from pathlib import Path
 
 from allCode.agent.router import RoutingDecision
 
-GENERATION_MARKERS = (
+
+SOURCE_SUFFIXES = {
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".java",
+    ".go",
+    ".rs",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".kt",
+    ".rb",
+    ".php",
+}
+
+NEW_PROJECT_MARKERS = (
     "new project",
     "create a project",
-    "generate project",
+    "generate a project",
     "scaffold",
     "bootstrap",
-    "프로젝트 생성",
+    "project skeleton",
+    "프로젝트 뼈대",
     "새 프로젝트",
-    "프로젝트를 생성",
+    "프로젝트 생성",
+    "프로젝트를 만들어",
+    "프로젝트를 만들",
 )
-GENERATION_ACTIONS = ("create", "generate", "scaffold", "bootstrap", "생성", "만들")
-PROJECT_TERMS = ("project", "프로젝트")
-EXISTING_PROJECT_TERMS = ("existing project", "existing python project", "기존 프로젝트", "기존")
-ENGLISH_GENERATION_ACTION = re.compile(r"\b(create|generate|scaffold|bootstrap)\b")
 
 
-def should_use_generation_workflow(prompt: str, routing: RoutingDecision) -> bool:
+def should_use_generation_workflow(
+    prompt: str,
+    routing: RoutingDecision,
+    *,
+    workspace_root: str | Path | None = None,
+) -> bool:
     if routing.kind != "modify" or routing.read_only_requested:
         return False
-    lowered = prompt.lower()
-    if any(marker in lowered for marker in GENERATION_MARKERS):
-        return True
-    if any(term in lowered for term in EXISTING_PROJECT_TERMS):
+    if routing.target_hint and Path(routing.target_hint).suffix:
         return False
-    english_action = ENGLISH_GENERATION_ACTION.search(lowered) is not None
-    korean_action = any(action in lowered for action in ("생성", "만들"))
-    return (english_action or korean_action) and any(term in lowered for term in PROJECT_TERMS)
+    if routing.workflow_hint != "multi_file_generation":
+        return False
+    if workspace_root is None:
+        return True
+    if not _workspace_has_source_files(Path(workspace_root)):
+        return True
+    return _has_explicit_new_project_intent(prompt)
+
+
+def _has_explicit_new_project_intent(prompt: str) -> bool:
+    lowered = " ".join(prompt.lower().split())
+    return any(marker in lowered for marker in NEW_PROJECT_MARKERS)
+
+
+def _workspace_has_source_files(root: Path) -> bool:
+    if not root.exists():
+        return False
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in {".git", ".venv", "node_modules", "__pycache__", "dist", "build"} for part in path.parts):
+            continue
+        if path.suffix.lower() in SOURCE_SUFFIXES:
+            return True
+    return False

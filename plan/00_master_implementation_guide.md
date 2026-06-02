@@ -5,7 +5,7 @@
 - 모든 모듈은 실행 및 테스트 가능한 완전한 코드로 작성한다. 임의의 `pass`, `TODO`, `...`, `구현 예정` 문구로 핵심 구현을 생략하지 않는다.
 - 전체 구현은 `12_mvp_execution_plan.md`의 마일스톤 순서를 따른다. 한 번에 모든 코드를 생성하더라도 내부적으로는 Alignment -> Config -> Core -> Mock Loop -> Real LLM -> Tool/Workspace -> Memory -> TUI 순서로 체크포인트를 통과해야 한다.
 - 파일 분리는 줄 수만 기준으로 하지 않는다. 단일 책임, 높은 응집도, 단방향 의존성, 순환 import 방지를 함께 만족해야 한다.
-- `00`~`12`는 기본 구현 대상 문서이고, `15`는 Codex 수준 TUI 보강 구현 문서다. `16`은 실제 Codex 기본 실행 관찰을 반영한 terminal-native UI 정정 문서다. `13`~`14`는 검토 이력 부록이다. 구현 중 판단이 충돌하면 부록보다 `00`~`12`, `15`, `16`의 최신 계약을 우선한다.
+- `00`~`12`는 기본 구현 대상 문서이고, `15`는 Codex 수준 TUI 보강 구현 문서다. `16`은 실제 Codex 기본 실행 관찰을 반영한 terminal-native UI 정정 문서다. `17`은 실제 tool 사용 검증 이후의 model-routed tool system 보강 문서다. `18`은 공개 agent pattern 기반 hardening 문서다. `19`는 실제 모델 stress의 남은 completion gap을 닫기 위한 후속 보강 문서다. `20`은 agy 토론과 최신 stress 결과를 반영한 harness-agent completion 보강 문서다. `21`은 오픈소스 에이전트 대비 95% 완성도 목표를 위한 strict gate, large-file context, loop SRP, diagnostic 보강 문서다. `13`~`14`는 검토 이력 부록이다. 구현 중 판단이 충돌하면 부록보다 `00`~`12`, `15`, `16`, `17`, `18`, `19`, `20`, `21`의 최신 계약을 우선한다.
 
 ## GPT-5.5 전달 순서
 
@@ -30,6 +30,11 @@ GPT-5.5에게 구현을 맡길 때는 아래 순서대로 문서를 전달한다
 | 14 | `14_agy_review_round2_feedback.md` | 참고 부록: 2차 검토 이력 |
 | 15 | `15_codex_tui_alignment_plan.md` | Codex 수준 persistent composer, cell transcript, streaming markdown 보강 |
 | 16 | `16_codex_default_terminal_ui_plan.md` | 실제 Codex 기본 실행에 맞춘 terminal-native scroll-region UI 정정 계획 |
+| 17 | `17_model_routed_tool_system_remediation_plan.md` | 실제 tool 검증 이슈를 반영한 model routing, tool lifecycle, SearXNG web backend 보강 |
+| 18 | `18_open_source_agent_hardening_plan.md` | 공개 agent 패턴 기반 trace, stuck detector, repo-map search, memory visibility, stress regression 보강 |
+| 19 | `19_open_source_completion_gap_plan.md` | agy 토론과 실제 모델 stress 잔여 fail/warning을 반영한 validation repair, preflight, no-op evidence, tool budget 보강 |
+| 20 | `20_harness_agent_open_source_completion_plan.md` | 최신 stress 결과와 agy 토론을 반영한 validation repair phase, observation cache, finalization gate, loop SRP 보강 |
+| 21 | `21_open_source_parity_95_hardening_plan.md` | 오픈소스 에이전트 대비 95% 완성도 목표를 위한 strict phase gate, large-file context suppression, loop SRP, session diagnostic 보강 |
 
 ## GPT-5.5 구현 요청 방식
 
@@ -206,6 +211,12 @@ allCode의 context memory는 `plan/08_context_memory_plan.md`를 따른다.
 - `13_agy_review_feedback.md`: agy 검토 피드백 반영 기록.
 - `14_agy_review_round2_feedback.md`: agy 2차 토론 및 review 반영 기록.
 - `15_codex_tui_alignment_plan.md`: 실제 Codex CLI 소스와 TTY 관찰 결과를 반영한 persistent composer, cell transcript, streaming markdown 보강 계획.
+- `16_codex_default_terminal_ui_plan.md`: 실제 Codex 기본 실행에 맞춘 terminal-native scroll-region UI 정정 계획.
+- `17_model_routed_tool_system_remediation_plan.md`: 실제 tool 사용 검증에서 발견된 routing, approval, file tool, web backend 문제 보강 계획.
+- `18_open_source_agent_hardening_plan.md`: Aider/Gemini CLI/Qwen Code/OpenHands 공개 패턴을 현재 allCode 코드에 현실적으로 추가 적용하는 hardening 계획.
+- `19_open_source_completion_gap_plan.md`: agy 토론과 실제 모델 stress 잔여 fail/warning을 반영한 validation repair, preflight, no-op evidence, tool budget 보강 계획.
+- `20_harness_agent_open_source_completion_plan.md`: 최신 stress 결과와 agy 토론을 반영한 validation repair phase, observation cache, finalization gate, loop SRP 보강 계획.
+- `21_open_source_parity_95_hardening_plan.md`: 오픈소스 에이전트 대비 95% 완성도 목표를 위한 strict phase gate, large-file context suppression, loop SRP, session diagnostic 보강 계획.
 
 ## 공개 오픈소스 참조 기반 보강 계약
 

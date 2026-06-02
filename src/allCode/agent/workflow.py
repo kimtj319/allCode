@@ -18,7 +18,7 @@ from allCode.core.events import (
     GenerationWorkflowStarted,
 )
 from allCode.core.models import CoreModel, TurnInput
-from allCode.core.result import CompletionEvidence, RecoveryState, TurnResult
+from allCode.core.result import CompletionEvidence, ProjectManifest, RecoveryState, TurnResult
 from allCode.generation.strategy import GenerationRequest, StrategyRegistry
 from allCode.generation.strategies import default_strategy_registry
 from allCode.tools.approval import ApprovalManager
@@ -62,9 +62,17 @@ class GenerationWorkflow:
         )
         self.actions = WorkflowActions(tool_executor=self.tool_executor, event_bus=self.event_bus)
 
-    async def run(self, turn_input: TurnInput) -> GenerationWorkflowResult:
+    async def run(self, turn_input: TurnInput, *, routing: RoutingDecision | None = None) -> GenerationWorkflowResult:
         turn_id = uuid4().hex
-        routing = self.router.classify(turn_input.user_prompt)
+        routing = routing or self.router.classify(turn_input.user_prompt)
+        routing = routing.model_copy(
+            update={
+                "tool_capabilities": set(routing.tool_capabilities) | {"mutate_file", "run_validation"},
+                "requires_tools": True,
+                "requires_mutation": True,
+                "requires_validation": True,
+            }
+        )
         request = GenerationRequest(
             prompt=turn_input.user_prompt,
             workspace_root=turn_input.workspace.root,
@@ -115,6 +123,10 @@ class GenerationWorkflow:
                 plan=plan,
                 completion_evidence=completion_evidence,
                 validation_results=validation_results,
+            )
+            completion_evidence.project_manifest = self._build_project_manifest(
+                plan=plan,
+                completion_evidence=completion_evidence,
             )
             final_report = ""
             final_check = preliminary_check
@@ -284,3 +296,48 @@ class GenerationWorkflow:
 
     async def _publish(self, event) -> None:
         await self.event_bus.publish(event)
+
+    def _build_project_manifest(
+        self,
+        *,
+        plan: ProjectPlan,
+        completion_evidence: CompletionEvidence,
+    ) -> ProjectManifest:
+        files = [planned_file.path for planned_file in plan.files]
+        entrypoints = [
+            f"{plan.target_root}/{path}"
+            for path in files
+            if path.endswith(("main.py", "cli.py", "__main__.py", "index.js", "main.go", "Main.java"))
+            or "/cli" in path.lower()
+        ]
+        if not entrypoints:
+            entrypoints = [
+                f"{plan.target_root}/{path}"
+                for path in files
+                if path.endswith((".py", ".js", ".ts", ".go", ".rs", ".java")) and "test" not in path.lower()
+            ][:3]
+        test_paths = [f"{plan.target_root}/{path}" for path in files if "test" in path.lower() or "spec" in path.lower()]
+        package_candidates = [
+            f"{plan.target_root}/{path.rsplit('/', 1)[0]}"
+            for path in files
+            if "/" in path and "test" not in path.lower()
+        ]
+        package_root = package_candidates[0] if package_candidates else plan.target_root
+        validation_commands = completion_evidence.validation_commands or [command.command for command in plan.validation_commands]
+        validation_cwd = plan.validation_commands[0].cwd if plan.validation_commands else plan.target_root
+        last_modified = [
+            path
+            for path in [*completion_evidence.created_files, *completion_evidence.changed_files]
+            if path not in completion_evidence.deleted_files
+        ]
+        return ProjectManifest(
+            project_root=plan.target_root,
+            package_root=package_root,
+            entrypoints=entrypoints,
+            test_paths=test_paths,
+            validation_commands=validation_commands,
+            validation_cwd=validation_cwd,
+            last_modified_files=last_modified,
+            language=plan.language,
+            confidence=0.85 if last_modified else 0.5,
+        )

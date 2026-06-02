@@ -11,6 +11,7 @@ from pydantic import Field
 
 from allCode.core.events import ModelEvent, ModelToolCallDelta
 from allCode.core.models import CoreModel, TokenUsage, ToolCall
+from allCode.llm.tool_argument_repair import ToolArgumentRepairer
 
 ParseStatus = Literal[
     "ok_text",
@@ -19,6 +20,7 @@ ParseStatus = Literal[
     "reasoning_only",
     "length_cutoff",
     "malformed_tool_call",
+    "pseudo_tool_call",
     "slow_stream",
     "stream_timeout",
 ]
@@ -31,6 +33,8 @@ class ParsedResponse(CoreModel):
     finish_reason: str | None = None
     usage: TokenUsage | None = None
     error: str | None = None
+    metrics: dict[str, int] = Field(default_factory=dict)
+    tool_argument_repairs: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ToolArgumentBuffer(CoreModel):
@@ -40,8 +44,9 @@ class ToolArgumentBuffer(CoreModel):
     last_valid_arguments: dict[str, Any] = Field(default_factory=dict)
     malformed: bool = False
     error: str | None = None
+    repair_metadata: dict[str, str] = Field(default_factory=dict)
 
-    def append(self, delta: ModelToolCallDelta) -> None:
+    def append(self, delta: ModelToolCallDelta, repairer: ToolArgumentRepairer) -> None:
         if delta.name:
             self.name = delta.name
         self.text += delta.arguments_delta
@@ -51,6 +56,17 @@ class ToolArgumentBuffer(CoreModel):
         try:
             parsed = json.loads(self.text or "{}")
         except json.JSONDecodeError as exc:
+            repaired = repairer.repair(tool_name=self.name, text=self.text)
+            if repaired is not None:
+                self.last_valid_arguments = repaired.arguments
+                self.malformed = False
+                self.error = None
+                self.repair_metadata = {
+                    "tool_name": self.name or "",
+                    "confidence": repaired.confidence,
+                    "reason": repaired.reason,
+                }
+                return
             self.malformed = True
             self.error = str(exc)
             return
@@ -58,7 +74,7 @@ class ToolArgumentBuffer(CoreModel):
             self.malformed = True
             self.error = "tool arguments must decode to an object"
             return
-        self.last_valid_arguments = parsed
+        self.last_valid_arguments = repairer.normalize_valid_arguments(tool_name=self.name, arguments=parsed)
 
     def to_tool_call(self) -> ToolCall | None:
         if self.malformed or self.name is None:
@@ -99,6 +115,9 @@ class ToolArgumentBuffer(CoreModel):
 class ResponseParser:
     """Aggregates provider-neutral stream events into one response summary."""
 
+    def __init__(self, repairer: ToolArgumentRepairer | None = None) -> None:
+        self._repairer = repairer or ToolArgumentRepairer()
+
     def parse_events(self, events: Iterable[ModelEvent]) -> ParsedResponse:
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -107,19 +126,39 @@ class ResponseParser:
         usage: TokenUsage | None = None
         failed_error: str | None = None
         saw_reasoning_only_delta = False
+        metrics = {
+            "event_count": 0,
+            "text_delta_chars": 0,
+            "reasoning_delta_chars": 0,
+            "tool_argument_delta_chars": 0,
+            "tool_argument_repairs": 0,
+        }
+        tool_argument_repairs: list[dict[str, str]] = []
 
         for event in events:
+            metrics["event_count"] += 1
             if event.kind == "text_delta":
                 if any(
                     event.metadata.get(key)
                     for key in ("reasoning", "reasoning_delta", "reasoning_content")
                 ):
                     saw_reasoning_only_delta = True
+                    metrics["reasoning_delta_chars"] += len(
+                        str(
+                            event.metadata.get("reasoning_delta")
+                            or event.metadata.get("reasoning_content")
+                            or event.metadata.get("reasoning")
+                            or ""
+                        )
+                    )
+                else:
+                    metrics["text_delta_chars"] += len(event.text)
                 text_parts.append(event.text)
             elif event.kind == "tool_call_delta" and event.tool_call_delta is not None:
                 delta = event.tool_call_delta
+                metrics["tool_argument_delta_chars"] += len(delta.arguments_delta)
                 buffer = buffers.setdefault(delta.id, ToolArgumentBuffer(id=delta.id))
-                buffer.append(delta)
+                buffer.append(delta, self._repairer)
             elif event.kind == "tool_call_completed" and event.tool_call is not None:
                 tool_calls.append(event.tool_call)
             elif event.kind == "usage":
@@ -140,10 +179,15 @@ class ResponseParser:
                     finish_reason=finish_reason,
                     usage=usage,
                     error=buffer.error,
+                    metrics=metrics,
+                    tool_argument_repairs=tool_argument_repairs,
                 )
             buffered_call = buffer.to_tool_call()
             if buffered_call is not None:
                 tool_calls.append(buffered_call)
+                if buffer.repair_metadata:
+                    metrics["tool_argument_repairs"] += 1
+                    tool_argument_repairs.append(buffer.repair_metadata)
             elif buffer.text.strip():
                 return ParsedResponse(
                     status="malformed_tool_call",
@@ -152,6 +196,8 @@ class ResponseParser:
                     finish_reason=finish_reason,
                     usage=usage,
                     error="tool call arguments ended before valid JSON completed",
+                    metrics=metrics,
+                    tool_argument_repairs=tool_argument_repairs,
                 )
 
         text = "".join(text_parts)
@@ -163,6 +209,8 @@ class ResponseParser:
                 finish_reason=finish_reason,
                 usage=usage,
                 error=failed_error,
+                metrics=metrics,
+                tool_argument_repairs=tool_argument_repairs,
             )
         if finish_reason == "length":
             return ParsedResponse(
@@ -171,6 +219,8 @@ class ResponseParser:
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
                 usage=usage,
+                metrics=metrics,
+                tool_argument_repairs=tool_argument_repairs,
             )
         if tool_calls:
             return ParsedResponse(
@@ -179,23 +229,30 @@ class ResponseParser:
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
                 usage=usage,
+                metrics=metrics,
+                tool_argument_repairs=tool_argument_repairs,
             )
         pseudo_call, pseudo_error = self._pseudo_tool_call_from_text(text)
         if pseudo_call is not None:
             return ParsedResponse(
-                status="ok_tool_calls",
-                text="",
+                status="pseudo_tool_call",
+                text=text,
                 tool_calls=[pseudo_call],
                 finish_reason=finish_reason,
                 usage=usage,
+                error=f"model wrote a textual pseudo tool call for {pseudo_call.name}",
+                metrics=metrics,
+                tool_argument_repairs=tool_argument_repairs,
             )
         if pseudo_error is not None:
             return ParsedResponse(
-                status="malformed_tool_call",
-                text="",
+                status="pseudo_tool_call",
+                text=text,
                 finish_reason=finish_reason,
                 usage=usage,
                 error=pseudo_error,
+                metrics=metrics,
+                tool_argument_repairs=tool_argument_repairs,
             )
         if text.strip():
             return ParsedResponse(
@@ -203,17 +260,24 @@ class ResponseParser:
                 text=text,
                 finish_reason=finish_reason,
                 usage=usage,
+                metrics=metrics,
+                tool_argument_repairs=tool_argument_repairs,
             )
         if saw_reasoning_only_delta:
             return ParsedResponse(
                 status="reasoning_only",
                 finish_reason=finish_reason,
                 usage=usage,
+                error="model emitted reasoning-only deltas without user-visible text",
+                metrics=metrics,
+                tool_argument_repairs=tool_argument_repairs,
             )
         return ParsedResponse(
             status="empty_response",
             finish_reason=finish_reason,
             usage=usage,
+            metrics=metrics,
+            tool_argument_repairs=tool_argument_repairs,
         )
 
     def _pseudo_tool_call_from_text(self, text: str) -> tuple[ToolCall | None, str | None]:
@@ -258,7 +322,7 @@ class ResponseParser:
                 name="web_fetch",
                 arguments={"url": url.strip()},
             ), None
-        if action in {"read_file", "write_file", "patch_file", "run_command", "run_tests"}:
+        if action in {"read_file", "write_file", "patch_file", "delete_path", "run_command", "run_tests"}:
             return None, f"pseudo tool call must use native tool-calling protocol: {action}"
         return None, None
 

@@ -26,7 +26,49 @@ RecoveryReason = Literal[
     "stream_timeout",
     "validation_failed",
     "external_tool_failed",
+    "no_progress",
 ]
+
+
+class ProjectManifest(CoreModel):
+    """Session-scoped summary of a generated or discovered project layout."""
+
+    project_root: str = ""
+    package_root: str = ""
+    entrypoints: list[str] = Field(default_factory=list)
+    test_paths: list[str] = Field(default_factory=list)
+    validation_commands: list[str] = Field(default_factory=list)
+    validation_cwd: str = ""
+    last_modified_files: list[str] = Field(default_factory=list)
+    language: str = ""
+    confidence: float = 0.0
+
+    def candidate_targets(self) -> list[str]:
+        seen: list[str] = []
+        for value in [
+            *self.entrypoints,
+            *self.test_paths,
+            *self.last_modified_files,
+            self.package_root,
+            self.project_root,
+        ]:
+            if value and value not in seen:
+                seen.append(value)
+        return seen
+
+
+class DocumentManifest(CoreModel):
+    """Session-scoped summary of a generated or edited document artifact."""
+
+    path: str = ""
+    title: str = ""
+    artifact_kind: str = ""
+    section_headings: list[str] = Field(default_factory=list)
+    last_requested_changes: list[str] = Field(default_factory=list)
+    updated_at_turn_id: str = ""
+
+    def candidate_targets(self) -> list[str]:
+        return [self.path] if self.path else []
 
 
 class CompletionEvidence(CoreModel):
@@ -35,12 +77,29 @@ class CompletionEvidence(CoreModel):
     status: CompletionStatus = "not_started"
     changed_files: list[str] = Field(default_factory=list)
     created_files: list[str] = Field(default_factory=list)
+    deleted_files: list[str] = Field(default_factory=list)
+    noop_targets: list[str] = Field(default_factory=list)
+    noop_reason: str | None = None
+    safe_noop: bool = False
     validation_commands: list[str] = Field(default_factory=list)
     validation_passed: bool | None = None
     final_answer_ready: bool = False
+    grounding_required: bool = False
+    search_candidate_paths: list[str] = Field(default_factory=list)
+    inspected_paths: list[str] = Field(default_factory=list)
+    zero_result_queries: list[str] = Field(default_factory=list)
+    not_found_targets: list[str] = Field(default_factory=list)
+    validation_failure_symbols: list[str] = Field(default_factory=list)
+    policy_denied_tools: list[str] = Field(default_factory=list)
+    web_unavailable_queries: list[str] = Field(default_factory=list)
+    project_manifest: ProjectManifest | None = None
+    document_manifest: DocumentManifest | None = None
 
     def has_file_change(self) -> bool:
-        return bool(self.changed_files or self.created_files)
+        return bool(self.changed_files or self.created_files or self.deleted_files)
+
+    def has_resolution_evidence(self) -> bool:
+        return self.has_file_change() or self.safe_noop
 
 
 class RecoveryState(CoreModel):
@@ -81,6 +140,7 @@ class TurnResult(CoreModel):
     final_answer: str = ""
     created_files: list[str] = Field(default_factory=list)
     modified_files: list[str] = Field(default_factory=list)
+    deleted_files: list[str] = Field(default_factory=list)
     validation_passed: bool | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     error_message: str | None = None
@@ -108,6 +168,9 @@ class TurnResult(CoreModel):
         return bool(
             self.created_files
             or self.modified_files
+            or self.deleted_files
             or self.completion_evidence.created_files
             or self.completion_evidence.changed_files
+            or self.completion_evidence.deleted_files
+            or self.completion_evidence.safe_noop
         )

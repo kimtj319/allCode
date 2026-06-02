@@ -40,6 +40,13 @@ class IntentExtractor:
         "수정 금지",
         "변경 금지",
         "파일 변경 금지",
+        "수정하지",
+        "수정하지 마",
+        "수정하지마",
+        "변경하지",
+        "파일 수정은 하지",
+        "파일은 수정하지",
+        "절대 수정",
         "읽기만",
         "분석만",
     )
@@ -166,13 +173,22 @@ class IntentExtractor:
         re.IGNORECASE,
     )
     KOREAN_CHANGE_COMMAND = re.compile(
-        r"(?:구현|생성|수정|변경|추가|작성|삭제|보강|고쳐|만들)(?:해\s*줘|해줘|해주세요|하라|해라|하시오|하자|해야|어\s*줘|어줘)"
+        r"(?:구현|생성|수정|변경|추가|작성|삭제|보강|고쳐|만들)(?:해\s*줘|해줘|해주세요|하라|해라|하시오|하자|해야|어\s*줘|어줘|줘)"
     )
     KOREAN_CHANGE_CONNECTIVE = re.compile(
         r"(?:구현|생성|수정|변경|추가|작성|삭제|보강|고쳐|만들)(?:하고|해서|하여)"
     )
     KOREAN_TRAILING_COMMAND = re.compile(
         r"(?:실행|테스트|검증)(?:해\s*줘|해줘|해주세요|하라|해라|하시오)"
+    )
+    KOREAN_OPERATE_COMMAND = re.compile(
+        r"(?:실행|테스트|검증|빌드|컴파일)(?:해\s*줘|해줘|해주세요|하라|해라|하시오)"
+    )
+    ENGLISH_OPERATE_COMMAND = re.compile(
+        r"^\s*(?:please\s+)?(?:run|execute|rerun|build|compile|install)\b"
+        r"|(?:can|could|would)\s+you\s+(?:run|execute|rerun|build|compile|install)\b"
+        r"|\b(?:run|execute|rerun)\s+(?:the\s+)?(?:tests?|pytest|npm|cargo|gradle|mvn|build|compile)\b",
+        re.IGNORECASE,
     )
     GENERATION_MARKERS = (
         "create a project",
@@ -204,6 +220,7 @@ class IntentExtractor:
             target_hint=target_hint,
             modify_term_found=modify_term_found,
         )
+        validation_requested = self._has_validation_request(prompt, lowered)
         return IntentSignals(
             read_only_requested=has_any(self.READ_ONLY_TERMS),
             no_shell_requested=has_any(self.NO_SHELL_TERMS),
@@ -212,8 +229,12 @@ class IntentExtractor:
             explicit_change_request=explicit_change_request,
             conceptual_question=conceptual_question,
             inspect_action=has_any(self.INSPECT_TERMS),
-            operate_action=has_any(self.OPERATE_TERMS),
-            validation_requested=self._has_validation_request(prompt, lowered),
+            operate_action=self._has_operate_action(
+                prompt=prompt,
+                lowered=lowered,
+                validation_requested=validation_requested,
+            ),
+            validation_requested=validation_requested,
             external_knowledge_requested=has_any(self.EXTERNAL_TERMS),
             followup_requested=has_any(FOLLOWUP_TERMS),
             target_hint=target_hint,
@@ -227,12 +248,22 @@ class IntentExtractor:
         return any(term in lowered for term in self.CONCEPTUAL_TERMS)
 
     def _has_validation_request(self, prompt: str, lowered: str) -> bool:
-        if any(term in lowered for term in ("pytest", "validate", "validation", "run tests", "run the tests")):
+        if any(term in lowered for term in ("pytest", "validate", "validation", "run tests", "run the tests", "tests")):
             return True
         if re.search(r"\b(?:run|execute|rerun)\s+(?:the\s+)?tests?\b", lowered):
             return True
         compact_prompt = prompt.replace(" ", "")
-        return any(term in compact_prompt for term in ("테스트까지", "테스트실행", "테스트를실행", "검증", "재검증"))
+        return any(term in compact_prompt for term in ("테스트", "테스트까지", "테스트실행", "테스트를실행", "검증", "재검증"))
+
+    def _has_operate_action(self, *, prompt: str, lowered: str, validation_requested: bool) -> bool:
+        if validation_requested:
+            return True
+        if self.ENGLISH_OPERATE_COMMAND.search(prompt):
+            return True
+        if re.search(r"\b(?:pytest|npm|cargo|gradle|mvn)\b", lowered):
+            return True
+        compact_prompt = prompt.replace(" ", "")
+        return bool(self.KOREAN_OPERATE_COMMAND.search(compact_prompt))
 
     def _has_explicit_change_request(
         self,

@@ -12,6 +12,7 @@ from allCode.core.event_bus import EventBus
 from allCode.core.models import ToolCall, ToolResult
 from allCode.tools.base import ToolContext, ToolDefinition
 from allCode.tools.builtin.file_ops import resolve_under_root
+from allCode.workspace.project_locator import ProjectLocator
 
 MAX_STREAM_CHARS = 20_000
 
@@ -56,7 +57,6 @@ class RunTestsTool:
                 "cwd": {"type": "string"},
                 "timeout_seconds": {"type": "integer"},
             },
-            "required": ["command"],
             "additionalProperties": False,
         },
         read_only=True,
@@ -69,12 +69,28 @@ class RunTestsTool:
 
 async def run_shell_call(call: ToolCall, context: ToolContext, *, validation: bool) -> ToolResult:
     try:
-        command = str(call.arguments["command"])
-        execution_command = _portable_command(command)
         cwd_arg = str(call.arguments.get("cwd", "."))
         cwd = resolve_under_root(context.workspace.root, cwd_arg)
+        raw_command = call.arguments.get("command")
+        command = _command_to_string(raw_command)
+        if validation and cwd_arg in {"", "."}:
+            cwd = ProjectLocator(context.workspace.root).validation_root(preferred=cwd)
+        if validation and not command:
+            command = _default_validation_command(cwd)
+        if not command:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                ok=False,
+                error="command is required",
+                error_type="missing_command",
+                metadata={"cwd": str(cwd), "validation_command": validation},
+            )
+        execution_command = _portable_command(command)
         timeout = int(call.arguments.get("timeout_seconds", 180 if validation else 60))
         env = _allowed_environment(context.environment)
+        if validation:
+            env = _with_validation_pythonpath(env, cwd)
         process = await asyncio.create_subprocess_shell(
             execution_command,
             cwd=str(cwd),
@@ -129,6 +145,21 @@ def _allowed_environment(extra: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def _with_validation_pythonpath(env: dict[str, str], cwd: Path) -> dict[str, str]:
+    updated = dict(env)
+    candidates = [str(cwd)]
+    src_path = cwd / "src"
+    if src_path.is_dir():
+        candidates.append(str(src_path))
+    existing = updated.get("PYTHONPATH", "")
+    for value in existing.split(os.pathsep):
+        stripped = value.strip()
+        if stripped and stripped not in candidates:
+            candidates.append(stripped)
+    updated["PYTHONPATH"] = os.pathsep.join(candidates)
+    return updated
+
+
 def _portable_command(command: str) -> str:
     try:
         parts = shlex.split(command)
@@ -137,3 +168,27 @@ def _portable_command(command: str) -> str:
     if not parts or parts[0] != "python":
         return command
     return " ".join([shlex.quote(sys.executable), *[shlex.quote(part) for part in parts[1:]]])
+
+
+def _command_to_string(raw_command) -> str:
+    if raw_command is None:
+        return ""
+    if isinstance(raw_command, (list, tuple)):
+        return " ".join(shlex.quote(str(part)) for part in raw_command if str(part).strip())
+    return str(raw_command).strip()
+
+
+def _default_validation_command(cwd: Path) -> str:
+    if (cwd / "pyproject.toml").exists() or any(cwd.rglob("*.py")):
+        return "python -m pytest -q"
+    if (cwd / "package.json").exists():
+        return "npm test"
+    if (cwd / "Cargo.toml").exists():
+        return "cargo test"
+    if (cwd / "go.mod").exists():
+        return "go test ./..."
+    if (cwd / "gradlew").exists():
+        return "./gradlew test"
+    if (cwd / "pom.xml").exists():
+        return "mvn test"
+    return ""

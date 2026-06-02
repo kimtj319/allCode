@@ -143,7 +143,18 @@ class ValidationRunner:
         lines = [line.rstrip() for line in log.splitlines() if line.strip()]
         if not lines:
             return ""
-        summary_lines = lines[:40]
+        failure_markers = (
+            "FAILED",
+            "ERROR",
+            "Traceback",
+            "AssertionError",
+            "ZeroDivisionError",
+            "CommandFailed",
+            "E       ",
+        )
+        focused = [line for line in lines if any(marker in line for marker in failure_markers)]
+        summary_lines = focused[:20] + [line for line in lines[:40] if line not in focused[:20]]
+        summary_lines = summary_lines[:60]
         summary = "\n".join(summary_lines)
         if len(summary) > self.max_log_chars:
             return summary[: self.max_log_chars] + "\n[truncated]"

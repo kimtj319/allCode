@@ -42,7 +42,10 @@ class ApprovalManager:
         return ApprovalDecision(
             allowed=False,
             requires_approval=True,
-            reason="File mutation requires approval.",
+            reason=(
+                "File mutation requires approval. 실행하지 않았습니다. "
+                "변경하려면 approval auto 또는 session allow rule을 명시하세요."
+            ),
             preview=preview,
             risk="medium",
         )
@@ -54,7 +57,10 @@ class ApprovalManager:
             return ApprovalDecision(
                 allowed=False,
                 requires_approval=True,
-                reason="Destructive shell command requires explicit approval.",
+                reason=(
+                    "Destructive shell command requires explicit approval. 실행하지 않았습니다. "
+                    "워크스페이스 안전을 위해 승인 없이는 파괴적 명령을 실행할 수 없습니다."
+                ),
                 preview=preview,
                 risk="high",
             )
@@ -63,7 +69,10 @@ class ApprovalManager:
         return ApprovalDecision(
             allowed=False,
             requires_approval=True,
-            reason="Shell command requires approval.",
+            reason=(
+                "Shell command requires approval. 실행하지 않았습니다. "
+                "명령 실행을 허용하려면 승인 모드나 session allow rule을 설정하세요."
+            ),
             preview=preview,
             risk="medium",
         )

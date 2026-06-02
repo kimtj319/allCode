@@ -5,20 +5,29 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from allCode.config.defaults import DEFAULT_GLOBAL_MEMORY_PATH
 from allCode.memory.redaction import redact_text
 from allCode.memory.schema import MemoryItem, MemoryKind
 
 
 class MemoryStore:
-    def __init__(self, project_root: Path, global_config_dir: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        global_config_dir: Path,
+        *,
+        global_memory_path: Path | None = None,
+    ) -> None:
         self.project_root = project_root.expanduser().resolve()
         self.global_config_dir = global_config_dir.expanduser().resolve()
         self.project_memory_path = self.project_root / ".allCode" / "ALLCODE.md"
         self.items_path = self.project_root / ".allCode" / "memory" / "items.jsonl"
         self.global_memory_path = self.global_config_dir / "ALLCODE.md"
+        self.state_global_memory_path = (global_memory_path or DEFAULT_GLOBAL_MEMORY_PATH).expanduser()
 
     async def load_active_items(self, *, cwd: Path) -> list[MemoryItem]:
         items: list[MemoryItem] = []
+        items.extend(self._read_markdown(self.state_global_memory_path, scope="global"))
         items.extend(self._read_markdown(self.global_memory_path, scope="global"))
         items.extend(self._read_markdown(self.project_memory_path, scope="project"))
         items.extend(self._read_directory_memories(cwd))

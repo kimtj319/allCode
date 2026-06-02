@@ -138,5 +138,6 @@ class TurnState(CoreModel):
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     created_files: list[str] = Field(default_factory=list)
     modified_files: list[str] = Field(default_factory=list)
+    deleted_files: list[str] = Field(default_factory=list)
     started_at: datetime = Field(default_factory=_utc_now)
     completed_at: datetime | None = None

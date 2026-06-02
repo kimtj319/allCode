@@ -46,7 +46,13 @@ class EventRenderer:
     def _render_turn_started(self, event: AgentEvent) -> RenderedEvent:
         return RenderedEvent(status=messages.MODEL_REQUEST_STATUS, spinner=True, severity=event.severity)
 
+    def _render_model_request_prepared(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status=messages.MODEL_REQUEST_STATUS, spinner=True, severity=event.severity)
+
     def _render_model_stream_started(self, event: AgentEvent) -> RenderedEvent:
+        stream_phase = event.data.get("stream_phase")
+        if stream_phase == "continuation":
+            return RenderedEvent(status=messages.MODEL_CONTINUING_STATUS, spinner=True, severity=event.severity)
         retry = event.data.get("retry")
         if retry is None:
             message = event.message.lower()
@@ -154,6 +160,19 @@ class EventRenderer:
             spinner=True,
             severity=event.severity,
         )
+
+    def _render_recovery_state_updated(self, event: AgentEvent) -> RenderedEvent:
+        reason = str(event.data.get("reason", ""))
+        blocked = bool(event.data.get("blocked", False))
+        if reason == "validation_failed":
+            status = messages.REPAIR_STATUS if not blocked else messages.FINAL_GATE_STATUS
+        elif reason in {"reasoning_only", "empty_response", "stream_timeout"}:
+            status = messages.RECOVERY_STATUS
+        elif reason in {"tool_loop", "no_progress"}:
+            status = messages.FINAL_GATE_STATUS if blocked else messages.MODEL_CONTINUING_STATUS
+        else:
+            status = messages.RECOVERY_STATUS
+        return RenderedEvent(status=status, spinner=not blocked, severity=event.severity)
 
     def _render_final_answer_ready(self, event: AgentEvent) -> RenderedEvent:
         final_answer = getattr(event, "final_answer", event.message)
