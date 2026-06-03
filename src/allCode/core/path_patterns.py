@@ -36,6 +36,15 @@ def extract_prompt_path(prompt: str) -> str | None:
     return None
 
 
+def extract_prompt_paths(prompt: str) -> list[str]:
+    paths: list[str] = []
+    for match in PATH_PATTERN.finditer(prompt):
+        path = match.group("path").lstrip("@")
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def is_followup_reference(prompt: str) -> bool:
     lowered = prompt.lower()
     return any(term in lowered for term in FOLLOWUP_TERMS)

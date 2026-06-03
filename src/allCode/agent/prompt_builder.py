@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-
 from allCode.agent.context import ContextBundle
 from allCode.agent.router import RoutingDecision
 from allCode.core.models import Message, ToolResult, TurnInput
+from allCode.core.result import RepairTarget
+from allCode.memory.project_obligations import feature_objectives_from_prompt
 
 SYSTEM_PROMPT = (
     "You are allCode, a lightweight all-rounder coding agent. "
     "Use tools when needed, keep actions observable, and provide a grounded final answer."
 )
-
 
 class PromptBuilder:
     def initial_messages(
@@ -24,12 +24,14 @@ class PromptBuilder:
         content = SYSTEM_PROMPT
         if routing is not None:
             content = f"{content}\n\n{self._routing_instruction(routing)}"
+        objectives = feature_objectives_from_prompt(turn_input.user_prompt)
+        if objectives:
+            content = f"{content}\n\n{self._feature_objective_instruction(objectives)}"
         messages = [Message(role="system", content=content)]
         if context_bundle is not None and context_bundle.sections:
             messages.append(Message(role="system", content=self._context_instruction(context_bundle)))
         messages.append(Message(role="user", content=turn_input.user_prompt))
         return messages
-
     def append_tool_results(
         self,
         messages: Sequence[Message],
@@ -52,7 +54,6 @@ class PromptBuilder:
                 )
             )
         return updated
-
     def final_answer_request(self, messages: Sequence[Message]) -> list[Message]:
         return [
             *messages,
@@ -75,16 +76,104 @@ class PromptBuilder:
             ),
         ]
 
-    def validation_repair_request(self, messages: Sequence[Message]) -> list[Message]:
+    def validation_repair_request(
+        self,
+        messages: Sequence[Message],
+        *,
+        repair_targets: Sequence[RepairTarget] = (),
+        patch_ambiguous_files: Sequence[str] = (),
+        preferred_next_tools: Sequence[str] = (),
+        failure_symbols: Sequence[str] = (),
+        api_expectations: Sequence[str] = (),
+        failure_excerpt: str = "",
+        phase_block_reason: str = "",
+    ) -> list[Message]:
+        target_lines = self._format_repair_targets(repair_targets)
+        ambiguous = [path for path in patch_ambiguous_files if path][:3]
+        symbols = [symbol for symbol in failure_symbols if symbol][:3]
+        expectations = [expectation for expectation in api_expectations if expectation][:5]
+        preferred = [tool for tool in preferred_next_tools if tool][:3]
+        details: list[str] = []
+        if target_lines:
+            details.append("Detected repair targets:\n" + "\n".join(target_lines))
+        if symbols:
+            details.append("Failure symbols: " + ", ".join(symbols))
+        if expectations:
+            details.append("Public API expectations from validation: " + "; ".join(expectations))
+        if ambiguous:
+            details.append("Patch ambiguity files: " + ", ".join(ambiguous))
+        if preferred:
+            details.append("Preferred next tools: " + ", ".join(preferred))
+        if failure_excerpt:
+            details.append("Failure excerpt:\n" + failure_excerpt[:900])
+        if phase_block_reason:
+            details.append(f"Blocked phase feedback: {phase_block_reason}")
+        detail_text = "\n".join(details)
         return [
             *messages,
             Message(
                 role="user",
-                content=(
+                content=self._join_prompt_parts(
                     "Validation is failing or missing for this change. "
-                    "Inspect the failing file or test output, repair the concrete issue with write_file or patch_file, "
-                    "and replace the full file with write_file if patching has produced duplicated or malformed code. "
-                    "then rerun run_tests. Do not provide a final answer until validation passes."
+                    "Use the latest validation failure metadata as the repair source. "
+                    "Inspect the failing file and line range when a repair target is present, then repair the concrete issue. "
+                    "If patching was ambiguous, do not repeat the same patch; read the relevant range first and then use write_file when the current file context is available. "
+                    "If the failure is a ModuleNotFoundError or missing import, create the missing source module instead of repeatedly validating. "
+                    "If the failure is a TypeError about missing or unexpected constructor/function arguments, preserve backward-compatible public APIs already exercised by existing tests unless the user explicitly requested a breaking change. "
+                    "If public API expectations are listed, satisfy them in the source code rather than weakening tests. "
+                    "After a successful mutation, rerun run_tests. Do not provide a final answer until validation passes. "
+                    "Use exactly one allowed native tool call and provide arguments matching that tool schema.",
+                    detail_text,
+                ),
+            ),
+        ]
+
+    def test_authoring_request(
+        self,
+        messages: Sequence[Message],
+        *,
+        missing_artifacts: Sequence[str] = (),
+        recent_source_paths: Sequence[str] = (),
+        feature_objectives: Sequence[str] = (),
+        phase_block_reason: str = "",
+    ) -> list[Message]:
+        missing = ", ".join(artifact for artifact in missing_artifacts if artifact) or "test"
+        sources = [path for path in recent_source_paths if path][:5]
+        details = [f"Missing artifact obligation: {missing}"]
+        explicit_targets = [
+            artifact.split(":", 1)[1]
+            for artifact in missing_artifacts
+            if ":" in artifact and artifact.split(":", 1)[1]
+        ][:5]
+        if explicit_targets:
+            details.append("Exact missing target paths: " + ", ".join(explicit_targets))
+        if sources:
+            details.append("Recent source files to cover: " + ", ".join(sources))
+        objectives = [objective for objective in feature_objectives if objective][:8]
+        if objectives:
+            details.append("Active feature objectives to cover: " + ", ".join(objectives))
+        if phase_block_reason:
+            details.append(f"Blocked phase feedback: {phase_block_reason}")
+        return [
+            *messages,
+            Message(
+                role="user",
+                content=self._join_prompt_parts(
+                    "A requested source, document, or test artifact is still missing. "
+                    "Create or update the missing artifact now with write_file or patch_file. "
+                    "If a missing artifact includes a target path and only write_file is allowed, "
+                    "your next response must be one write_file tool call with file_path set to that exact path "
+                    "and content containing the complete requested artifact. "
+                    "If source and test artifacts are both missing, create the source file first. "
+                    "If active feature objectives are listed, implement visible source behavior/API for them "
+                    "and write tests that exercise those objectives instead of adding unrelated coverage only. "
+                    "For non-English domain objectives in code, choose conventional code-facing English identifiers "
+                    "when the language ecosystem normally uses English APIs, while preserving user-facing wording where useful. "
+                    "Do not inspect configuration files or directory listings when only mutation tools are exposed. "
+                    "Do not call list_directory, search_files, read_file, run_tests, or any hidden tool in this phase. "
+                    "Do not call run_tests and do not provide a final answer until the missing artifact has changed. "
+                    "Use exactly one allowed native tool call and provide arguments matching that tool schema.",
+                    "\n".join(details),
                 ),
             ),
         ]
@@ -173,6 +262,18 @@ class PromptBuilder:
                 lines.append(f"  - {result.name}: {status} - {detail}")
         lines.append(f"- 다음 단계: {self._blocked_next_step(reason, tool_results)}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _feature_objective_instruction(objectives: Sequence[str]) -> str:
+        compact = ", ".join(list(dict.fromkeys(objective for objective in objectives if objective))[:8])
+        return (
+            "Active feature objectives for this turn: "
+            f"{compact}.\n"
+            "Treat these as implementation and validation obligations, not as final-answer keywords. "
+            "When modifying code, implement visible behavior/API and tests for the objectives. "
+            "For non-English domain objectives, use conventional code-facing English identifiers when appropriate "
+            "for the target language, and keep the original user-facing meaning intact."
+        )
 
     def _routing_instruction(self, routing: RoutingDecision) -> str:
         lines = [
@@ -273,6 +374,30 @@ class PromptBuilder:
                 lines.append(f"  snippet: {snippet}")
         return "\n".join(line for line in lines if line)
 
+    @staticmethod
+    def _format_repair_targets(repair_targets: Sequence[RepairTarget]) -> list[str]:
+        lines: list[str] = []
+        for target in repair_targets[:3]:
+            path = target.file_path
+            if not path:
+                continue
+            location = f"{path}:{target.line_number}" if target.line_number is not None else path
+            if target.symbol:
+                location = f"{location} ({target.symbol})"
+            if target.reason:
+                location = f"- {location} [{target.reason}]"
+            else:
+                location = f"- {location}"
+            lines.append(location)
+        return lines
+
+    @staticmethod
+    def _join_prompt_parts(instruction: str, details: str = "") -> str:
+        detail = details.strip()
+        if not detail:
+            return instruction
+        return f"{instruction}\n\n{detail}"
+
     def _tool_results_from_messages(self, messages: Sequence[Message]) -> list[ToolResult]:
         results: list[ToolResult] = []
         for message in messages:
@@ -299,7 +424,7 @@ class PromptBuilder:
             return "위험하거나 권한이 필요한 작업이라 승인 없이 실행하지 않았습니다."
         if any(result.error_type in {"tool_loop_detected", "no_progress_detected"} for result in tool_results):
             return "같은 도구 호출이 반복되어 더 진행해도 새 근거가 나오지 않는 상태입니다."
-        if any(result.error_type in {"patch_ambiguous", "patch_not_found", "patch_invalid_request"} for result in tool_results):
+        if any(result.error_type in {"patch_ambiguous", "patch_not_found", "patch_invalid_request", "patch_strategy_required"} for result in tool_results):
             return "patch_file 검색 블록이 현재 파일 내용과 정확히 일치하지 않아 수리 전에 파일을 다시 확인해야 합니다."
         return None
 
@@ -314,6 +439,8 @@ class PromptBuilder:
             return "이미 확인한 결과와 다른 파일, 검색어, 또는 검증 조건을 지정해 주세요."
         if any(result.error_type == "patch_ambiguous" for result in tool_results):
             return "해당 파일의 관련 범위를 다시 읽은 뒤 더 구체적인 patch_file 또는 write_file로 수리해야 합니다."
+        if any(result.error_type == "patch_strategy_required" for result in tool_results):
+            return "같은 patch를 반복하지 말고 관련 범위를 read_file로 다시 확인한 뒤 더 구체적인 patch_file 또는 write_file로 전환해야 합니다."
         if any(result.error_type in {"patch_not_found", "patch_invalid_request"} for result in tool_results):
             return "현재 파일 내용을 다시 읽은 뒤 실제 존재하는 텍스트를 기준으로 patch_file을 재시도해야 합니다."
         return "필요한 파일명, 승인, 또는 검색/검증 조건을 명확히 지정해 다시 요청해 주세요."

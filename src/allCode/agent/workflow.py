@@ -8,10 +8,12 @@ from pydantic import Field
 
 from allCode.agent.completion_checker import CompletionCheck, CompletionChecker
 from allCode.agent.final_reporter import FinalReporter
+from allCode.agent.project_planner import ModelProjectPlanner
 from allCode.agent.router import RoutingDecision, RuleBasedRouter
 from allCode.agent.task_plan import ProjectPlan
 from allCode.agent.validation_runner import ValidationResult, ValidationRunner
 from allCode.agent.workflow_actions import WorkflowActions, WorkflowStepRecord
+from allCode.agent.workflow_routing import workflow_target_root_from_routing
 from allCode.core.event_bus import AsyncEventBus, EventBus
 from allCode.core.events import (
     GenerationWorkflowFinished,
@@ -21,6 +23,8 @@ from allCode.core.models import CoreModel, TurnInput
 from allCode.core.result import CompletionEvidence, ProjectManifest, RecoveryState, TurnResult
 from allCode.generation.strategy import GenerationRequest, StrategyRegistry
 from allCode.generation.strategies import default_strategy_registry
+from allCode.llm.client import LLMClient
+from allCode.llm.settings import ModelSettings
 from allCode.tools.approval import ApprovalManager
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.executor import ToolExecutor
@@ -47,6 +51,9 @@ class GenerationWorkflow:
         validation_runner: ValidationRunner | None = None,
         completion_checker: CompletionChecker | None = None,
         final_reporter: FinalReporter | None = None,
+        llm_client: LLMClient | None = None,
+        settings: ModelSettings | None = None,
+        model_planner: ModelProjectPlanner | None = None,
         max_repair_attempts: int = 5,
     ) -> None:
         self.strategy_registry = strategy_registry or default_strategy_registry()
@@ -55,6 +62,11 @@ class GenerationWorkflow:
         self.validation_runner = validation_runner or ValidationRunner()
         self.completion_checker = completion_checker or CompletionChecker()
         self.final_reporter = final_reporter or FinalReporter()
+        self.model_planner = model_planner or (
+            ModelProjectPlanner(llm_client=llm_client, settings=settings)
+            if llm_client is not None and settings is not None
+            else None
+        )
         self.max_repair_attempts = max_repair_attempts
         self.tool_executor = tool_executor or ToolExecutor(
             registry=ToolRegistry(builtin_tools()),
@@ -76,10 +88,10 @@ class GenerationWorkflow:
         request = GenerationRequest(
             prompt=turn_input.user_prompt,
             workspace_root=turn_input.workspace.root,
-            target_root=routing.target_hint,
+            target_root=workflow_target_root_from_routing(turn_input.user_prompt, routing),
         )
         strategy = self.strategy_registry.select(request)
-        plan = strategy.create_plan(request)
+        plan = await self._create_plan(request, routing=routing, strategy=strategy)
         completion_evidence = CompletionEvidence()
         recovery_states: list[RecoveryState] = []
         step_history: list[WorkflowStepRecord] = []
@@ -236,6 +248,17 @@ class GenerationWorkflow:
         status = "succeeded" if results and results[-1].ok else "failed"
         await self.actions.finish_step("validation", turn_id, step_history, status, "Validation completed.")
         return results
+
+    async def _create_plan(self, request: GenerationRequest, *, routing: RoutingDecision, strategy) -> ProjectPlan:
+        target_hint = routing.target_hint or request.target_root
+        if self.model_planner is not None:
+            try:
+                model_plan = await self.model_planner.create_plan(request.prompt, target_hint=target_hint)
+            except Exception:
+                model_plan = None
+            if model_plan is not None:
+                return model_plan
+        return strategy.create_plan(request)
 
     async def _repair_until_valid(
         self,

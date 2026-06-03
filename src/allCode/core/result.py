@@ -71,6 +71,25 @@ class DocumentManifest(CoreModel):
         return [self.path] if self.path else []
 
 
+class RequestedArtifact(CoreModel):
+    """Prompt-derived artifact obligation tracked through completion evidence."""
+
+    kind: Literal["source", "test", "document", "validation"]
+    target: str = ""
+    satisfied: bool = False
+    evidence_paths: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+class RepairTarget(CoreModel):
+    """Validation-derived file or symbol target that should drive repair."""
+
+    file_path: str
+    line_number: int | None = None
+    symbol: str = ""
+    reason: str = ""
+
+
 class CompletionEvidence(CoreModel):
     """Evidence required before reporting a turn as complete."""
 
@@ -90,16 +109,35 @@ class CompletionEvidence(CoreModel):
     zero_result_queries: list[str] = Field(default_factory=list)
     not_found_targets: list[str] = Field(default_factory=list)
     validation_failure_symbols: list[str] = Field(default_factory=list)
+    validation_failure_targets: list[RepairTarget] = Field(default_factory=list)
+    validation_failure_command: str = ""
+    validation_failure_excerpt: str = ""
+    validation_failure_counts: dict[str, int] = Field(default_factory=dict)
+    public_api_expectations: list[str] = Field(default_factory=list)
+    feature_objectives: list[str] = Field(default_factory=list)
+    patch_ambiguous_files: list[str] = Field(default_factory=list)
     policy_denied_tools: list[str] = Field(default_factory=list)
     web_unavailable_queries: list[str] = Field(default_factory=list)
     project_manifest: ProjectManifest | None = None
     document_manifest: DocumentManifest | None = None
+    requested_artifacts: list[RequestedArtifact] = Field(default_factory=list)
 
     def has_file_change(self) -> bool:
         return bool(self.changed_files or self.created_files or self.deleted_files)
 
     def has_resolution_evidence(self) -> bool:
         return self.has_file_change() or self.safe_noop
+
+    def unsatisfied_artifacts(self, *kinds: str) -> list[RequestedArtifact]:
+        allowed = set(kinds)
+        return [
+            artifact
+            for artifact in self.requested_artifacts
+            if not artifact.satisfied and (not allowed or artifact.kind in allowed)
+        ]
+
+    def has_unsatisfied_artifacts(self, *kinds: str) -> bool:
+        return bool(self.unsatisfied_artifacts(*kinds))
 
 
 class RecoveryState(CoreModel):

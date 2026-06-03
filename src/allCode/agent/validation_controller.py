@@ -59,6 +59,26 @@ class ValidationRepairController:
                 awaiting_revalidation_after_mutation=False,
                 reason="validation already passed",
             )
+        if (
+            snapshot.last_validation_status is False
+            and not snapshot.mutation_succeeded_after_failed_validation
+            and not awaiting_revalidation_after_mutation
+        ):
+            if snapshot.repair_attempts >= self.max_repair_attempts:
+                return ValidationControlDecision(
+                    phase="repair_exhausted",
+                    required_next_action="report_partial",
+                    repair_exhausted=True,
+                    reason="validation repair attempts are exhausted",
+                )
+            return ValidationControlDecision(
+                phase="repair_mutation_required",
+                required_next_action="repair",
+                validation_repair_pending=True,
+                mutation_action_pending=True,
+                reason="validation failed and a repair mutation is required before revalidation",
+                allowed_tool_names={"read_file", "search_files", "list_directory", "patch_file", "write_file"},
+            )
         if validation_repair_needed(routing, evidence) and not awaiting_revalidation_after_mutation:
             if snapshot.repair_attempts >= self.max_repair_attempts:
                 return ValidationControlDecision(

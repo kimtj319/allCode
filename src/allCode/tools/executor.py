@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from allCode.agent.policy import ToolPolicy
+from allCode.agent.phase_gate import satisfy_requested_artifacts
 from allCode.agent.router import RoutingDecision
 from allCode.core.event_bus import EventBus
 from allCode.core.events import (
@@ -100,7 +101,7 @@ class ToolExecutor:
         metadata["duration_ms"] = elapsed_ms
         result = result.model_copy(update={"metadata": metadata})
         if completion_evidence is not None:
-            self._update_completion_evidence(result, completion_evidence)
+            self._update_completion_evidence(result, completion_evidence, workspace_root=context.workspace.root)
         if call.name == "run_tests" and event_bus is not None:
             await event_bus.publish(
                 ValidationFinished(
@@ -227,7 +228,7 @@ class ToolExecutor:
             return self._approval.is_destructive_command(str(call.arguments.get("command", "")))
         return False
 
-    def _update_completion_evidence(self, result: ToolResult, evidence: CompletionEvidence) -> None:
+    def _update_completion_evidence(self, result: ToolResult, evidence: CompletionEvidence, *, workspace_root: str) -> None:
         if result.name == "search_files":
             query = str(result.metadata.get("query") or result.metadata.get("search_query") or "")
             if not query:
@@ -266,6 +267,7 @@ class ToolExecutor:
                         evidence.validation_failure_symbols.append(symbol)
             if evidence.validation_passed is True:
                 evidence.status = "validated"
+        satisfy_requested_artifacts(evidence, workspace_root=workspace_root)
         if not result.ok:
             return
         noop_targets = [str(path) for path in result.metadata.get("noop_targets", [])]
@@ -294,6 +296,7 @@ class ToolExecutor:
             evidence.status = "validated"
         elif evidence.has_resolution_evidence():
             evidence.status = "changed"
+        satisfy_requested_artifacts(evidence, workspace_root=workspace_root)
 
 
 def _search_query_from_content(content: str) -> str:

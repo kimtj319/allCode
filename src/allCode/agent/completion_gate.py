@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from allCode.agent.intent import IntentExtractor
+from allCode.agent.phase_gate import ensure_requested_artifacts, satisfy_requested_artifacts
 from allCode.agent.router import RoutingDecision
 from allCode.core.models import TurnInput, TurnState
 from allCode.core.result import CompletionEvidence, ToolLoopSignature
@@ -45,6 +46,8 @@ def build_completion_evidence(
     grounding_required = bool(base_evidence.grounding_required if base_evidence is not None else False)
     project_manifest = base_evidence.project_manifest if base_evidence is not None else None
     document_manifest = base_evidence.document_manifest if base_evidence is not None else None
+    requested_artifacts = list(base_evidence.requested_artifacts if base_evidence is not None else [])
+    feature_objectives = list(base_evidence.feature_objectives if base_evidence is not None else [])
     file_change_present = bool(changed_files or created_files or deleted_files or safe_noop)
     final_answer_ready = outcome_status == "success" and bool(outcome_answer.strip())
     if requires_change and not file_change_present:
@@ -57,7 +60,7 @@ def build_completion_evidence(
         status = "blocked"
     else:
         status = "not_started"
-    return CompletionEvidence(
+    evidence = CompletionEvidence(
         status=status,
         changed_files=changed_files,
         created_files=created_files,
@@ -78,7 +81,21 @@ def build_completion_evidence(
         web_unavailable_queries=web_unavailable_queries,
         project_manifest=project_manifest,
         document_manifest=document_manifest,
+        requested_artifacts=requested_artifacts,
+        feature_objectives=feature_objectives,
     )
+    ensure_requested_artifacts(
+        turn_input.user_prompt,
+        evidence,
+        workspace_root=turn_input.workspace.root,
+        routing=routing,
+    )
+    satisfy_requested_artifacts(evidence, workspace_root=turn_input.workspace.root)
+    if evidence.has_unsatisfied_artifacts("source", "test", "document", "validation"):
+        evidence.final_answer_ready = False
+        if evidence.status in {"changed", "validated", "reported"}:
+            evidence.status = "blocked"
+    return evidence
 
 
 def requires_change_evidence(prompt: str, *, routing: RoutingDecision | None = None) -> bool:

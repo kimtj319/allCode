@@ -49,6 +49,20 @@ class ToolLoopGuard:
         reason = "same_action_error" if not result.ok else "same_action_observation"
         return count, detected, reason
 
+    def reset_after_mutation(self) -> None:
+        """Allow validation and inspections to run again after new file evidence.
+
+        Repeating the same command before any workspace change is usually a loop.
+        Repeating it after a successful mutation is revalidation against a new
+        state, so old tool signatures should not suppress it.
+        """
+
+        self._window.clear()
+        self._counts.clear()
+        self._observation_window.clear()
+        self._observation_counts.clear()
+        self.signatures_by_key.clear()
+
     @staticmethod
     def _hash(tool_call: ToolCall) -> str:
         payload = {

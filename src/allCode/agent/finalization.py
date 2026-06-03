@@ -23,12 +23,14 @@ def apply_final_answer_policy(
     answer = _apply_policy_denied_wording(answer, evidence, language=language)
     answer = _apply_safe_alternative_wording(answer, prompt, language=language)
     answer = _apply_validation_wording(answer, evidence, language=language)
+    answer = _apply_missing_artifact_wording(answer, evidence, language=language)
     answer = _apply_not_found_wording(answer, messages, evidence, language=language)
     answer = _apply_no_search_results_wording(answer, messages, evidence, language=language)
     answer = _apply_config_wording(answer, prompt, messages, language=language)
     answer = _apply_budget_wording(answer, messages, language=language)
-    answer = _apply_schema_denied_wording(answer, messages, language=language)
+    answer = _apply_schema_denied_wording(answer, messages, evidence=evidence, routing=routing, language=language)
     answer = _apply_web_unavailable_wording(answer, messages, evidence, language=language)
+    answer = _apply_feature_objective_wording(answer, messages, evidence, language=language)
     return answer
 
 
@@ -107,6 +109,24 @@ def _apply_validation_wording(final_answer: str, evidence: CompletionEvidence, *
             return final_answer.rstrip() + f"\n\nValidation command: `{command}`\nValidation result: failed{symbol_text}"
         return final_answer.rstrip() + f"\n\n검증 명령: `{command}`\n검증 결과: 실패{symbol_text}"
     return final_answer
+
+
+def _apply_missing_artifact_wording(final_answer: str, evidence: CompletionEvidence, *, language: str) -> str:
+    missing = evidence.unsatisfied_artifacts("source", "test", "document", "validation")
+    if not missing:
+        return final_answer
+    labels = []
+    for artifact in missing:
+        label = artifact.kind if not artifact.target else f"{artifact.kind}:{artifact.target}"
+        if label not in labels:
+            labels.append(label)
+    if language == "en":
+        if "missing requested artifacts" in final_answer.lower():
+            return final_answer
+        return final_answer.rstrip() + "\n\nMissing requested artifacts: " + ", ".join(labels)
+    if "요청된 산출물" in final_answer:
+        return final_answer
+    return final_answer.rstrip() + "\n\n아직 충족되지 않은 요청된 산출물: " + ", ".join(labels)
 
 
 def _apply_not_found_wording(
@@ -190,7 +210,18 @@ def _apply_budget_wording(final_answer: str, messages: Sequence[Message], *, lan
     return final_answer.rstrip() + "\n\n같은 대상에 대한 반복 도구 호출은 새 근거가 없어 중단하고 기존 관찰 결과를 재사용했습니다."
 
 
-def _apply_schema_denied_wording(final_answer: str, messages: Sequence[Message], *, language: str) -> str:
+def _apply_schema_denied_wording(
+    final_answer: str,
+    messages: Sequence[Message],
+    *,
+    evidence: CompletionEvidence,
+    routing,
+    language: str,
+) -> str:
+    if not getattr(routing, "requires_tools", False):
+        return final_answer
+    if evidence.validation_passed is True and evidence.has_file_change():
+        return final_answer
     schema_denied = any(
         message.role == "tool" and message.metadata.get("error_type") == "schema_denied"
         for message in messages
@@ -220,10 +251,52 @@ def _apply_web_unavailable_wording(
     return final_answer.rstrip() + "\n\n현재 웹 검색 backend가 설정되어 있지 않습니다."
 
 
+def _apply_feature_objective_wording(
+    final_answer: str,
+    messages: Sequence[Message],
+    evidence: CompletionEvidence,
+    *,
+    language: str,
+) -> str:
+    if not (evidence.has_resolution_evidence() or evidence.validation_commands):
+        return final_answer
+    objectives = _feature_objectives(final_answer, messages, evidence)
+    if not objectives:
+        return final_answer
+    if language == "en":
+        return final_answer.rstrip() + "\n\nFeature summary: " + ", ".join(objectives[:6])
+    return final_answer.rstrip() + "\n\n핵심 기능: " + ", ".join(objectives[:6])
+
+
 def _prompt_language(prompt: str) -> str:
     hangul = sum(1 for char in prompt if "\uac00" <= char <= "\ud7a3")
     latin = sum(1 for char in prompt if char.isascii() and char.isalpha())
     return "ko" if hangul >= max(1, latin // 3) else "en"
+
+
+def _feature_objectives(
+    final_answer: str,
+    messages: Sequence[Message],
+    evidence: CompletionEvidence,
+) -> list[str]:
+    lowered_answer = final_answer.lower()
+    candidates: list[str] = []
+    for value in evidence.feature_objectives:
+        _append_feature_candidate(candidates, value)
+    return [value for value in candidates if value.lower() not in lowered_answer][:8]
+
+
+def _append_feature_candidate(values: list[str], value: str) -> None:
+    cleaned = value.strip(" .,;:()[]{}\"'")
+    if len(cleaned) < 3:
+        return
+    lowered = cleaned.lower()
+    if lowered in _FEATURE_STOP_TERMS:
+        return
+    if any(separator in cleaned for separator in ("/", "\\", ".")):
+        return
+    if lowered not in {item.lower() for item in values}:
+        values.append(cleaned)
 
 
 def _missing_symbols(final_answer: str, symbols: Sequence[str]) -> list[str]:
@@ -234,3 +307,37 @@ def _missing_symbols(final_answer: str, symbols: Sequence[str]) -> list[str]:
         if clean and clean.lower() not in lowered and clean not in missing:
             missing.append(clean)
     return missing[:5]
+
+
+_FEATURE_STOP_TERMS = {
+    "assert",
+    "class",
+    "command",
+    "content",
+    "false",
+    "file",
+    "from",
+    "game",
+    "import",
+    "lightweight",
+    "metadata",
+    "minimal",
+    "modified",
+    "module",
+    "none",
+    "patch",
+    "patches",
+    "provides",
+    "pytest",
+    "replace",
+    "return",
+    "search",
+    "self",
+    "test",
+    "tests",
+    "true",
+    "typical",
+    "usage",
+    "validation",
+    "write",
+}

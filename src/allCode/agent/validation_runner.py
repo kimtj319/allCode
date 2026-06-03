@@ -9,7 +9,10 @@ from pydantic import Field
 
 from allCode.agent.router import RoutingDecision
 from allCode.agent.task_plan import ProjectPlan, ValidationCommand
+from allCode.agent.tool_evidence import ToolEvidenceRecorder
+from allCode.agent.validation_repair import attach_validation_failure_summary
 from allCode.core.event_bus import EventBus
+from allCode.core.events import ToolCallRequested
 from allCode.core.models import CoreModel, ToolCall, WorkspaceRef
 from allCode.core.result import CompletionEvidence
 from allCode.tools.base import ToolContext
@@ -31,6 +34,7 @@ class ValidationResult(CoreModel):
 class ValidationRunner:
     def __init__(self, *, max_log_chars: int = 8000) -> None:
         self.max_log_chars = max_log_chars
+        self._evidence_recorder = ToolEvidenceRecorder()
 
     def candidates(self, plan: ProjectPlan) -> list[ValidationCommand]:
         if plan.validation_commands:
@@ -95,6 +99,14 @@ class ValidationRunner:
             environment=command.environment,
             approval_mode="auto",
         )
+        if event_bus is not None:
+            await event_bus.publish(
+                ToolCallRequested(
+                    turn_id=turn_id,
+                    message=f"Tool requested: {call.name}",
+                    tool_call=call,
+                )
+            )
         tool_result = await tool_executor.execute(
             call,
             context,
@@ -102,6 +114,8 @@ class ValidationRunner:
             completion_evidence=completion_evidence,
             event_bus=event_bus,
         )
+        tool_result = attach_validation_failure_summary(tool_result)
+        self._evidence_recorder.record(tool_result, completion_evidence, workspace_root=workspace.root)
         stdout = str(tool_result.metadata.get("stdout", tool_result.content or ""))
         stderr = str(tool_result.metadata.get("stderr", tool_result.error or ""))
         log = stderr or stdout or tool_result.error or ""

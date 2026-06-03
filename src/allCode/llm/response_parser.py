@@ -83,6 +83,22 @@ class ToolArgumentBuffer(CoreModel):
             return None
         return ToolCall(id=self.id, name=self.name, arguments=self.last_valid_arguments)
 
+    def repair_to_tool_call(self, repairer: ToolArgumentRepairer) -> ToolCall | None:
+        if self.malformed or self.name is None or not self.text.strip():
+            return None
+        repaired = repairer.repair(tool_name=self.name, text=self.text)
+        if repaired is None:
+            return None
+        self.last_valid_arguments = repaired.arguments
+        self.malformed = False
+        self.error = None
+        self.repair_metadata = {
+            "tool_name": self.name or "",
+            "confidence": repaired.confidence,
+            "reason": f"last-mile {repaired.reason}",
+        }
+        return ToolCall(id=self.id, name=self.name, arguments=self.last_valid_arguments)
+
     @staticmethod
     def _looks_complete_json(text: str) -> bool:
         stripped = text.strip()
@@ -183,6 +199,8 @@ class ResponseParser:
                     tool_argument_repairs=tool_argument_repairs,
                 )
             buffered_call = buffer.to_tool_call()
+            if buffered_call is None:
+                buffered_call = buffer.repair_to_tool_call(self._repairer)
             if buffered_call is not None:
                 tool_calls.append(buffered_call)
                 if buffer.repair_metadata:

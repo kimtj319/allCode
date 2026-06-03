@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 import shutil
 from typing import Any
@@ -10,93 +9,15 @@ from typing import Any
 from allCode.core.event_bus import EventBus
 from allCode.core.models import ToolCall, ToolResult
 from allCode.tools.base import ToolContext, ToolDefinition
+from allCode.tools.builtin.file_common import (
+    PatchApplicationError,
+    apply_exact_patches,
+    content_hash,
+    read_text_if_exists,
+    resolve_under_root,
+)
+from allCode.tools.builtin.file_read import ReadFileTool
 from allCode.tools.diff import EditTransaction
-from allCode.workspace.path_resolver import safe_resolve_under_root
-
-DEFAULT_READ_MAX_BYTES = 12_000
-LARGE_FILE_BYTES = 20_000
-
-
-class PatchApplicationError(ValueError):
-    """Structured patch failure with tool-result metadata."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_type: str,
-        match_count: int | None = None,
-        search_preview: str = "",
-    ) -> None:
-        super().__init__(message)
-        self.error_type = error_type
-        self.match_count = match_count
-        self.search_preview = search_preview
-
-    def metadata(self, *, file_path: str) -> dict[str, Any]:
-        return {
-            "file_path": file_path,
-            "match_count": self.match_count,
-            "search_preview": self.search_preview,
-            "recommended_next_tools": ["read_file", "write_file"] if self.error_type == "patch_ambiguous" else ["read_file", "patch_file"],
-            "must_not_repeat_same_patch": True,
-            "observation": {
-                "kind": "patch_failure",
-                "target": file_path,
-                "summary": str(self),
-                "risk": "low",
-            },
-        }
-
-
-def resolve_under_root(root: str, file_path: str) -> Path:
-    return safe_resolve_under_root(root, file_path)
-
-
-def read_text_if_exists(path: Path) -> str:
-    if not path.exists():
-        return ""
-    if not path.is_file():
-        raise ValueError(f"path is not a file: {path}")
-    return path.read_text(encoding="utf-8")
-
-
-def content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def apply_exact_patches(content: str, patches: Any) -> str:
-    if not isinstance(patches, list) or not patches:
-        raise PatchApplicationError(
-            "patches must be a non-empty list",
-            error_type="patch_invalid_request",
-        )
-    updated = content
-    for patch in patches:
-        if not isinstance(patch, dict):
-            raise PatchApplicationError(
-                "each patch must be an object",
-                error_type="patch_invalid_request",
-            )
-        search = str(patch.get("search", ""))
-        replace = str(patch.get("replace", ""))
-        if not search:
-            raise PatchApplicationError(
-                "patch search must be a non-empty string",
-                error_type="patch_invalid_request",
-                match_count=0,
-            )
-        count = updated.count(search)
-        if count != 1:
-            error_type = "patch_not_found" if count == 0 else "patch_ambiguous"
-            raise PatchApplicationError(
-                f"patch search must match exactly once, matched {count} times",
-                error_type=error_type,
-                match_count=count,
-                search_preview=search[:240],
-            )
-        updated = updated.replace(search, replace, 1)
-    return updated
 
 
 class ListDirectoryTool:
@@ -123,139 +44,6 @@ class ListDirectoryTool:
                 kind = "dir" if child.is_dir() else "file"
                 rows.append(f"{kind}\t{child.name}")
             return ToolResult(call_id=call.id, name=call.name, ok=True, content="\n".join(rows))
-        except Exception as exc:
-            return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
-
-
-class ReadFileTool:
-    definition = ToolDefinition(
-        name="read_file",
-        description=(
-            "Read a UTF-8 text file within the workspace. For large files, prefer start_line/end_line "
-            "or max_bytes after search_files instead of reading the full file."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "file_path": {"type": "string"},
-                "start_line": {"type": "integer", "minimum": 1},
-                "end_line": {"type": "integer", "minimum": 1},
-                "max_bytes": {"type": "integer", "minimum": 1},
-                "include_line_numbers": {"type": "boolean"},
-            },
-            "required": ["file_path"],
-            "additionalProperties": False,
-        },
-        read_only=True,
-        group="file",
-        aliases=["cat"],
-    )
-
-    async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
-        try:
-            path = resolve_under_root(context.workspace.root, str(call.arguments["file_path"]))
-            if not path.exists():
-                return ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    ok=False,
-                    error=f"file does not exist: {path} (없음; 찾지 못했습니다)",
-                    error_type="not_found",
-                    metadata={
-                        "file_path": str(path),
-                        "observation": {
-                            "kind": "file_read",
-                            "target": str(path),
-                            "summary": f"File not found: {path.name}",
-                            "risk": "low",
-                        },
-                    },
-                )
-            content = read_text_if_exists(path)
-            max_bytes = int(call.arguments.get("max_bytes", DEFAULT_READ_MAX_BYTES))
-            start_line = call.arguments.get("start_line")
-            end_line = call.arguments.get("end_line")
-            include_line_numbers = bool(call.arguments.get("include_line_numbers", False))
-            all_lines = content.splitlines(keepends=True)
-            selected_lines = all_lines
-            range_start = 1
-            range_end = len(all_lines)
-            content_bytes = len(content.encode("utf-8"))
-            range_requested = start_line is not None or end_line is not None
-            range_first_required = content_bytes > LARGE_FILE_BYTES and not range_requested
-            if range_first_required:
-                preview_lines = "".join(all_lines[: min(20, len(all_lines))])
-                selected = (
-                    f"[large file: {content_bytes} bytes, {len(all_lines)} lines]\n"
-                    "Use search_files first, then read_file with start_line/end_line for the relevant range.\n\n"
-                    f"[first lines preview]\n{preview_lines}".rstrip()
-                )
-                return ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    ok=True,
-                    content=selected,
-                    metadata={
-                        "file_path": str(path),
-                        "content_hash": content_hash(content),
-                        "line_count": len(all_lines),
-                        "full_size_bytes": content_bytes,
-                        "returned_range": [1, min(20, len(all_lines))],
-                        "truncated": True,
-                        "range_first_required": True,
-                        "range_first_recommended": True,
-                        "observation": {
-                            "kind": "file_read",
-                            "target": str(path),
-                            "summary": f"Large file preview only: {path.name}; use search_files and ranged read_file",
-                            "risk": "low",
-                        },
-                    },
-                )
-            if start_line is not None or end_line is not None:
-                range_start = max(int(start_line or 1), 1)
-                range_end = min(int(end_line or len(all_lines)), len(all_lines))
-                selected_lines = all_lines[range_start - 1 : range_end]
-            selected = "".join(selected_lines)
-            encoded = selected.encode("utf-8")
-            truncated = len(encoded) > max_bytes
-            if truncated:
-                selected = encoded[:max_bytes].decode("utf-8", errors="replace")
-                selected = (
-                    selected.rstrip()
-                    + "\n\n[truncated: use search_files plus read_file start_line/end_line or max_bytes to inspect a precise range]"
-                )
-            range_first_recommended = content_bytes > LARGE_FILE_BYTES and not range_requested
-            if include_line_numbers:
-                numbered = []
-                for offset, line in enumerate(selected.splitlines(), start=range_start):
-                    numbered.append(f"{offset}: {line}")
-                selected = "\n".join(numbered)
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                ok=True,
-                content=selected,
-                metadata={
-                    "file_path": str(path),
-                    "content_hash": content_hash(content),
-                    "line_count": len(all_lines),
-                    "full_size_bytes": content_bytes,
-                    "returned_range": [range_start, range_end],
-                    "truncated": truncated,
-                    "range_first_recommended": range_first_recommended,
-                    "observation": {
-                        "kind": "file_read",
-                        "target": str(path),
-                        "summary": (
-                            f"Read {path.name}; large file, use ranged reads for more detail"
-                            if range_first_recommended
-                            else f"Read {path.name}"
-                        ),
-                        "risk": "low",
-                    },
-                },
-            )
         except Exception as exc:
             return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
 

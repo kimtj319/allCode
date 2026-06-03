@@ -38,4 +38,7 @@ class RoundStateSnapshot(CoreModel):
     validation_attempts: int = 0
     repair_attempts: int = 0
     last_validation_status: bool | None = None
+    mutation_attempted_after_failed_validation: bool = False
+    mutation_succeeded_after_failed_validation: bool = False
+    last_validation_failure_symbols: list[str] = []
     required_next_action: RequiredNextAction = "none"

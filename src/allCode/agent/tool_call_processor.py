@@ -5,17 +5,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from allCode.agent.policy import ToolPolicy
-from allCode.agent.phase_gate import PhaseToolGate
+from allCode.agent.phase_gate import PhaseToolGate, target_matches_any
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
 from allCode.agent.tool_action_ledger import ToolActionLedger
+from allCode.agent.tool_evidence import ToolEvidenceRecorder
+from allCode.agent.tool_schema_denial import deny_tool_schema
+from allCode.agent.tool_schema_filter import ToolSchemaFilter, normalize_tool_call_for_routing
+from allCode.agent.tool_schema_validation import strip_harmless_extra_arguments, validate_tool_arguments
 from allCode.agent.tool_targets import ToolTargetRecorder
 from allCode.core.event_bus import EventBus
-from allCode.agent.tool_orchestrator import ObservationCache, ToolBudgetTracker, suppressed_tool_result
+from allCode.agent.tool_orchestrator import (
+    ObservationCache,
+    PatchFailureTracker,
+    ToolBudgetTracker,
+    suppressed_tool_result,
+)
 from allCode.agent.validation_repair import attach_validation_failure_summary
 from allCode.core.events import (
     RecoveryStateUpdated,
     ToolCallRequested,
-    ToolCallSchemaDenied,
     ToolCallSuppressed,
     ToolLoopDetected,
     ToolObservationReused,
@@ -23,7 +31,6 @@ from allCode.core.events import (
 )
 from allCode.core.models import ToolCall, ToolResult, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence
-from allCode.llm.settings import ToolSchema
 from allCode.tools.approval import ApprovalManager
 from allCode.tools.base import ToolContext
 from allCode.tools.executor import ToolExecutor
@@ -44,6 +51,7 @@ class ToolCallProcessor:
         target_recorder: ToolTargetRecorder,
         observation_cache: ObservationCache | None = None,
         tool_budget: ToolBudgetTracker | None = None,
+        patch_failures: PatchFailureTracker | None = None,
         action_ledger: ToolActionLedger | None = None,
     ) -> None:
         self._tools = tools
@@ -54,7 +62,10 @@ class ToolCallProcessor:
         self._target_recorder = target_recorder
         self._observation_cache = observation_cache or ObservationCache()
         self._tool_budget = tool_budget or ToolBudgetTracker()
+        self._patch_failures = patch_failures or PatchFailureTracker()
         self._action_ledger = action_ledger or ToolActionLedger()
+        self._evidence_recorder = ToolEvidenceRecorder()
+        self._schema_filter = ToolSchemaFilter(registry=tools, policy=tool_policy)
 
     async def execute(
         self,
@@ -71,6 +82,7 @@ class ToolCallProcessor:
     ) -> list[ToolResult]:
         results: list[ToolResult] = []
         self._tool_budget.reset_for_turn(state.turn_id)
+        self._patch_failures.reset_for_turn(state.turn_id)
         context = ToolContext(
             workspace=turn_input.workspace,
             session_id=turn_input.session_id,
@@ -78,52 +90,42 @@ class ToolCallProcessor:
             approval_mode=self._approval.mode,
         )
         for tool_call in tool_calls:
-            tool_call = self._normalize_tool_call_for_routing(tool_call, routing)
+            tool_call = normalize_tool_call_for_routing(tool_call, routing)
             self._action_ledger.record(tool_call, "requested")
             tool = self._tools.get(tool_call.name)
+            if tool is not None:
+                tool_call = strip_harmless_extra_arguments(tool_call, tool.definition)
             if allowed_tool_names is not None and tool_call.name not in allowed_tool_names:
                 self._action_ledger.record(tool_call, "schema_denied")
-                next_action = phase_gate.required_next_action if phase_gate is not None else ""
-                phase_reason = phase_gate.reason if phase_gate is not None else ""
                 reason = f"Tool {tool_call.name} is not in the allowed schema for this round."
-                if next_action:
-                    reason = f"{reason} Required next action: {next_action}"
-                await self._event_bus.publish(
-                    ToolCallSchemaDenied(
+                results.append(
+                    await deny_tool_schema(
+                        event_bus=self._event_bus,
                         turn_id=state.turn_id,
-                        message=f"Tool schema denied: {tool_call.name}.",
                         tool_call=tool_call,
-                        data={
-                            "tool_name": tool_call.name,
-                            "allowed_tools": sorted(allowed_tool_names),
-                            "reason": reason,
-                            "phase": phase_gate.phase if phase_gate is not None else None,
-                            "phase_reason": phase_reason,
-                            "required_next_action": next_action,
-                            "category": self._tool_policy.category_for_tool(tool_call.name),
-                        },
+                        policy=self._tool_policy,
+                        allowed_tool_names=allowed_tool_names,
+                        phase_gate=phase_gate,
+                        reason=reason,
                     )
                 )
+                continue
+            target_denial = self._phase_target_denial(
+                tool_call,
+                phase_gate=phase_gate,
+                workspace_root=turn_input.workspace.root,
+            )
+            if target_denial is not None:
+                self._action_ledger.record(tool_call, "schema_denied")
                 results.append(
-                    ToolResult(
-                        call_id=tool_call.id,
-                        name=tool_call.name,
-                        ok=False,
-                        error=reason,
-                        error_type="schema_denied",
-                        metadata={
-                            "category": self._tool_policy.category_for_tool(tool_call.name),
-                            "allowed_tools": sorted(allowed_tool_names),
-                            "phase": phase_gate.phase if phase_gate is not None else None,
-                            "phase_reason": phase_reason,
-                            "required_next_action": next_action,
-                            "observation": {
-                                "kind": "schema_denied",
-                                "target": tool_call.name,
-                                "summary": reason,
-                                "risk": "low",
-                            },
-                        },
+                    await deny_tool_schema(
+                        event_bus=self._event_bus,
+                        turn_id=state.turn_id,
+                        tool_call=tool_call,
+                        policy=self._tool_policy,
+                        allowed_tool_names=allowed_tool_names,
+                        phase_gate=phase_gate,
+                        reason=target_denial,
                     )
                 )
                 continue
@@ -133,6 +135,22 @@ class ToolCallProcessor:
                     tool_call=tool_call,
                     definition=tool.definition if tool is not None else None,
                 )
+            if tool is not None:
+                schema_error = validate_tool_arguments(tool_call, tool.definition)
+                if schema_error:
+                    self._action_ledger.record(tool_call, "schema_denied")
+                    results.append(
+                        await deny_tool_schema(
+                            event_bus=self._event_bus,
+                            turn_id=state.turn_id,
+                            tool_call=tool_call,
+                            policy=self._tool_policy,
+                            allowed_tool_names=allowed_tool_names,
+                            phase_gate=phase_gate,
+                            reason=schema_error,
+                        )
+                    )
+                    continue
             await self._event_bus.publish(
                 ToolPolicyChecked(
                     turn_id=state.turn_id,
@@ -185,6 +203,31 @@ class ToolCallProcessor:
                 )
                 self._target_recorder.record(state, cached_result)
                 results.append(cached_result)
+                continue
+
+            patch_strategy = self._patch_failures.repeated_failure(
+                tool_call,
+                workspace_root=turn_input.workspace.root,
+            )
+            if patch_strategy is not None:
+                self._action_ledger.record(tool_call, "suppressed")
+                await self._record_recovery(
+                    state,
+                    recovery,
+                    "no_progress",
+                    attempts=int(patch_strategy.metadata.get("repeat_count") or 1),
+                    last_error=patch_strategy.error,
+                    blocked=True,
+                )
+                await self._event_bus.publish(
+                    ToolCallSuppressed(
+                        turn_id=state.turn_id,
+                        message=f"Patch strategy required before retry: {tool_call.name}.",
+                        tool_call=tool_call,
+                        data=patch_strategy.metadata,
+                    )
+                )
+                results.append(patch_strategy)
                 continue
 
             budget_decision = self._tool_budget.check(tool_call, workspace_root=turn_input.workspace.root)
@@ -277,9 +320,16 @@ class ToolCallProcessor:
                 event_bus=self._event_bus,
             )
             result = attach_validation_failure_summary(result)
-            self._record_validation_failure_symbols(result, completion_evidence)
+            self._evidence_recorder.record(
+                result,
+                completion_evidence,
+                workspace_root=turn_input.workspace.root,
+            )
+            self._patch_failures.record_result(tool_call, result, workspace_root=turn_input.workspace.root)
             self._observation_cache.invalidate_from_result(result)
             self._tool_budget.reset_for_mutation_attempt(result)
+            if result.name in {"write_file", "patch_file", "delete_path"} and result.ok:
+                loop_guard.reset_after_mutation()
             self._observation_cache.store(tool_call, result, workspace_root=turn_input.workspace.root)
             self._target_recorder.record(state, result)
             results.append(result)
@@ -318,48 +368,8 @@ class ToolCallProcessor:
                 )
         return results
 
-    def tool_schemas_for_routing(
-        self,
-        routing,
-        *,
-        suppress_validation: bool = False,
-        only_mutation: bool = False,
-        only_validation: bool = False,
-        include_validation_probe: bool = False,
-        allowed_only: set[str] | None = None,
-    ) -> list[ToolSchema]:
-        definitions = self._tools.definitions()
-        allowed_names = self._tool_policy.allowed_registered_tool_names(routing, definitions)
-        if suppress_validation:
-            allowed_names = {name for name in allowed_names if name != "run_tests"}
-        if only_mutation:
-            mutation_names = {"patch_file", "write_file"}
-            if include_validation_probe:
-                mutation_names.add("run_tests")
-            allowed_names = {name for name in allowed_names if name in mutation_names}
-        if only_validation:
-            allowed_names = {name for name in allowed_names if name == "run_tests"}
-        if allowed_only is not None:
-            allowed_names = {name for name in allowed_names if name in allowed_only}
-        return [
-            ToolSchema(
-                name=definition.name,
-                description=definition.description,
-                parameters=definition.parameters,
-            )
-            for definition in definitions
-            if definition.name in allowed_names
-        ]
-
-    def _normalize_tool_call_for_routing(self, tool_call: ToolCall, routing) -> ToolCall:
-        if tool_call.name in {"run_validation", "run_test"} and routing.requires_validation:
-            return tool_call.model_copy(update={"name": "run_tests"})
-        if tool_call.name != "run_command" or not routing.requires_validation:
-            return tool_call
-        command = str(tool_call.arguments.get("command", "")).strip().lower()
-        if not self._looks_like_validation_command(command):
-            return tool_call
-        return tool_call.model_copy(update={"name": "run_tests"})
+    def tool_schemas_for_routing(self, routing, **kwargs):
+        return self._schema_filter.schemas_for_routing(routing, **kwargs)
 
     async def _record_recovery(
         self,
@@ -382,26 +392,33 @@ class ToolCallProcessor:
         )
 
     @staticmethod
-    def _looks_like_validation_command(command: str) -> bool:
-        validation_markers = (
-            "pytest",
-            "python -m pytest",
-            "unittest",
-            "npm test",
-            "npm run test",
-            "cargo test",
-            "go test",
-            "gradle test",
-            "./gradlew test",
-            "mvn test",
+    def _phase_target_denial(
+        tool_call: ToolCall,
+        *,
+        phase_gate: PhaseToolGate | None,
+        workspace_root: str,
+    ) -> str | None:
+        if phase_gate is None or phase_gate.phase != "test_authoring_required":
+            return None
+        if tool_call.name not in {"patch_file", "write_file"}:
+            return None
+        required_targets = list(phase_gate.required_target_paths)
+        if not required_targets:
+            return None
+        target = _tool_file_target(tool_call)
+        if not target:
+            return "This phase requires updating the missing test artifact target, but the tool call did not include a file path."
+        if target_matches_any(target, required_targets, workspace_root=workspace_root):
+            return None
+        return (
+            "This phase requires updating the missing test artifact target. "
+            f"Use one of these target paths: {', '.join(required_targets[:3])}."
         )
-        return any(marker in command for marker in validation_markers)
 
-    @staticmethod
-    def _record_validation_failure_symbols(result: ToolResult, evidence: CompletionEvidence) -> None:
-        failure = result.metadata.get("validation_failure")
-        if not isinstance(failure, dict):
-            return
-        for symbol in failure.get("failing_symbols", []):
-            if isinstance(symbol, str) and symbol and symbol not in evidence.validation_failure_symbols:
-                evidence.validation_failure_symbols.append(symbol)
+
+def _tool_file_target(tool_call: ToolCall) -> str:
+    for key in ("file_path", "path", "target_path"):
+        value = tool_call.arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""

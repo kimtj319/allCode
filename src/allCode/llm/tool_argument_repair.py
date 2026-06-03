@@ -160,7 +160,7 @@ class ToolArgumentRepairer:
 
     def _patch_pairs(self, text: str) -> list[dict[str, str]]:
         pair_pattern = re.compile(
-            r'"(?:search|old)"\s*:\s*"(?P<search>(?:\\.|[^"\\])*)".{0,400}?'
+            r'"(?:search|old)"\s*:\s*"(?P<search>(?:\\.|[^"\\])*)".*?'
             r'"(?:replace|new)"\s*:\s*"(?P<replace>(?:\\.|[^"\\])*)"',
             re.DOTALL,
         )

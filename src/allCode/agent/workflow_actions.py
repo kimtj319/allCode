@@ -7,7 +7,7 @@ from uuid import uuid4
 from allCode.agent.router import RoutingDecision
 from allCode.agent.task_plan import GenerationStep, PlannedFile, ProjectPlan
 from allCode.core.event_bus import EventBus
-from allCode.core.events import GenerationStepFinished, GenerationStepStarted
+from allCode.core.events import GenerationStepFinished, GenerationStepStarted, ToolCallRequested
 from allCode.core.models import CoreModel, ToolCall, TurnInput
 from allCode.core.result import CompletionEvidence
 from allCode.tools.base import ToolContext
@@ -67,6 +67,13 @@ class WorkflowActions:
             id=f"write-{uuid4().hex[:10]}",
             name="write_file",
             arguments={"file_path": f"{plan.target_root}/{planned_file.path}", "content": planned_file.content},
+        )
+        await self.event_bus.publish(
+            ToolCallRequested(
+                turn_id=turn_id,
+                message=f"Tool requested: {call.name}",
+                tool_call=call,
+            )
         )
         result = await self.tool_executor.execute(
             call,

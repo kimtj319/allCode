@@ -13,6 +13,7 @@ from allCode.core.models import ToolCall, ToolResult
 
 READ_OBSERVATION_TOOLS = {"read_file", "search_files", "list_directory"}
 MUTATION_TOOLS = {"write_file", "patch_file", "delete_path"}
+PATCH_FAILURE_TYPES = {"patch_ambiguous", "patch_not_found", "patch_invalid_request"}
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,116 @@ class ToolBudgetTracker:
             target = dict(sorted(args.items()))
         payload = {"workspace": workspace_root, "turn": self._turn_id, "tool": tool_call.name, "target": target}
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
+class PatchFailureTracker:
+    """Tracks failed patch search blocks and recommends a strategy switch."""
+
+    def __init__(self) -> None:
+        self._failures: dict[str, int] = {}
+        self._failure_files: dict[str, str] = {}
+        self._ambiguous_files: set[str] = set()
+        self._turn_id: str | None = None
+
+    def reset_for_turn(self, turn_id: str) -> None:
+        if self._turn_id == turn_id:
+            return
+        self._turn_id = turn_id
+        self._failures.clear()
+        self._failure_files.clear()
+        self._ambiguous_files.clear()
+
+    def repeated_failure(self, tool_call: ToolCall, *, workspace_root: str) -> ToolResult | None:
+        if tool_call.name != "patch_file":
+            return None
+        file_path = _normalize_path_argument(str(tool_call.arguments.get("file_path") or ""), workspace_root=workspace_root)
+        if file_path in self._ambiguous_files:
+            return ToolResult(
+                call_id=tool_call.id,
+                name=tool_call.name,
+                ok=False,
+                error=(
+                    "Patch search was ambiguous for this file. Read the target range first, "
+                    "then use write_file or a narrower patch."
+                ),
+                error_type="patch_strategy_required",
+                metadata={
+                    "patch_strategy_required": True,
+                    "file_path": file_path,
+                    "recommended_next_tools": ["read_file", "write_file"],
+                    "must_not_repeat_same_patch": True,
+                    "observation": {
+                        "kind": "patch_strategy",
+                        "target": file_path,
+                        "summary": "Ambiguous patch state is active for this file; switch to ranged read or full-file rewrite.",
+                        "risk": "low",
+                    },
+                },
+            )
+        key = self._key(tool_call, workspace_root=workspace_root)
+        count = self._failures.get(key, 0)
+        if count <= 0:
+            return None
+        return ToolResult(
+            call_id=tool_call.id,
+            name=tool_call.name,
+            ok=False,
+            error="Repeated patch search failed previously; switch strategy before retrying the same patch.",
+            error_type="patch_strategy_required",
+            metadata={
+                "patch_strategy_required": True,
+                "repeat_count": count + 1,
+                "recommended_next_tools": ["read_file", "write_file"],
+                "must_not_repeat_same_patch": True,
+                "observation": {
+                    "kind": "patch_strategy",
+                    "target": str(tool_call.arguments.get("file_path") or ""),
+                    "summary": "Use a ranged read to inspect the exact block, then issue a narrower patch or rewrite the full file.",
+                    "risk": "low",
+                },
+            },
+        )
+
+    def record_result(self, tool_call: ToolCall, result: ToolResult, *, workspace_root: str) -> None:
+        file_path = _normalize_path_argument(str(tool_call.arguments.get("file_path") or ""), workspace_root=workspace_root)
+        if tool_call.name in {"write_file", "patch_file"} and result.ok:
+            if file_path:
+                self._ambiguous_files.discard(file_path)
+                for failure_key, failure_file in list(self._failure_files.items()):
+                    if failure_file == file_path:
+                        self._failures.pop(failure_key, None)
+                        self._failure_files.pop(failure_key, None)
+            if tool_call.name == "patch_file":
+                self._failures.pop(self._key(tool_call, workspace_root=workspace_root), None)
+            return
+        if tool_call.name != "patch_file":
+            return
+        key = self._key(tool_call, workspace_root=workspace_root)
+        if result.error_type in PATCH_FAILURE_TYPES:
+            self._failures[key] = self._failures.get(key, 0) + 1
+            self._failure_files[key] = file_path
+        if result.error_type == "patch_ambiguous" and file_path:
+            self._ambiguous_files.add(file_path)
+
+    def _key(self, tool_call: ToolCall, *, workspace_root: str) -> str:
+        args = tool_call.arguments
+        payload = {
+            "workspace": workspace_root,
+            "file_path": _normalize_path_argument(str(args.get("file_path") or ""), workspace_root=workspace_root),
+            "search_hash": self._patch_search_hash(args.get("patches")),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _patch_search_hash(patches: Any) -> str:
+        searches: list[str] = []
+        if isinstance(patches, list):
+            for patch in patches:
+                if isinstance(patch, dict):
+                    searches.append(str(patch.get("search") or ""))
+        encoded = json.dumps(searches, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
 

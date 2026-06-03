@@ -56,9 +56,13 @@ class ContextBuilder:
 
     async def build(self, turn_input: TurnInput) -> ContextBundle:
         memory_sections = await self.memory_selector.select(turn_input)
+        project_sections = self._project_state_sections()
+        recent_file_sections = self._recent_file_sections(turn_input)
         session_sections = self._session_note_sections(turn_input)
         workspace_sections = self._workspace_sections(turn_input)
-        sections = self.compactor.fit([*workspace_sections, *session_sections, *memory_sections])
+        sections = self.compactor.fit(
+            [*project_sections, *recent_file_sections, *workspace_sections, *session_sections, *memory_sections]
+        )
         return ContextBundle(sections=sections)
 
     def remember_target(self, path: str, *, turn_id: str, summary: str = "", symbol: str | None = None) -> None:
@@ -180,6 +184,87 @@ class ContextBuilder:
             )
         ]
 
+    def _project_state_sections(self) -> list[ContextSection]:
+        sections: list[ContextSection] = []
+        repair = self.session_state.latest_repair_context
+        if repair is not None:
+            content = repair.render()
+            if content:
+                sections.append(
+                    ContextSection(
+                        name="repair_context",
+                        priority=130,
+                        token_estimate=estimate_tokens(content),
+                        content=content,
+                        source="session_repair_context",
+                        section_type="repair_context",
+                    )
+                )
+        obligations = self.session_state.active_project_obligations
+        if obligations is not None:
+            content = obligations.render()
+            if content:
+                sections.append(
+                    ContextSection(
+                        name="active_project_obligations",
+                        priority=125,
+                        token_estimate=estimate_tokens(content),
+                        content=content,
+                        source="session_project_obligations",
+                        section_type="project_obligations",
+                    )
+                )
+        return sections
+
+    def _recent_file_sections(self, turn_input: TurnInput) -> list[ContextSection]:
+        workspace_root = Path(turn_input.workspace.root).expanduser().resolve()
+        recent_paths = [
+            *self.manifest_recent_paths(),
+            *self.recent_targets.recent_paths(),
+        ]
+        sections: list[ContextSection] = []
+        total_bytes = 0
+        seen: set[str] = set()
+        for raw_path in recent_paths:
+            path = self._resolve_recent_file(raw_path, workspace_root=workspace_root)
+            if path is None:
+                continue
+            try:
+                relative = path.relative_to(workspace_root).as_posix()
+            except ValueError:
+                continue
+            if relative in seen:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > 16_000 or total_bytes + size > 36_000:
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            if b"\0" in raw[:1024]:
+                continue
+            content = redact_text(raw.decode("utf-8", errors="replace"))
+            section_content = f"path: {relative}\n```text\n{content}\n```"
+            sections.append(
+                ContextSection(
+                    name=f"recent_file:{relative}",
+                    priority=118,
+                    token_estimate=estimate_tokens(section_content),
+                    content=section_content,
+                    source=relative,
+                    section_type="recent_file",
+                )
+            )
+            total_bytes += size
+            seen.add(relative)
+            if len(sections) >= 4:
+                break
+        return sections
+
     def _extract_session_note(self, prompt: str) -> str | None:
         compact = " ".join(prompt.strip().split())
         if not compact:
@@ -218,6 +303,25 @@ class ContextBuilder:
             return path.expanduser().resolve().exists()
         except OSError:
             return False
+
+    @staticmethod
+    def _resolve_recent_file(raw_path: str, *, workspace_root: Path) -> Path | None:
+        value = str(raw_path or "").strip()
+        if not value:
+            return None
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+        try:
+            resolved = candidate.expanduser().resolve()
+            resolved.relative_to(workspace_root)
+        except (OSError, ValueError):
+            return None
+        if not resolved.exists() or not resolved.is_file():
+            return None
+        if any(part in {".git", ".venv", "node_modules", "__pycache__", "dist", "build"} for part in resolved.parts):
+            return None
+        return resolved
 
     @staticmethod
     def _document_followup_prompt(lowered_prompt: str) -> bool:

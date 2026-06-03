@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import re
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import Field
 
 from allCode.core.models import CoreModel, ToolResult
-from allCode.core.result import CompletionEvidence
+from allCode.core.result import CompletionEvidence, RepairTarget
 
 
 class RepairPhaseState(StrEnum):
@@ -27,6 +28,8 @@ class ValidationFailureSummary(CoreModel):
     returncode: int | None = None
     failed_files: list[str] = Field(default_factory=list)
     failing_symbols: list[str] = Field(default_factory=list)
+    public_api_expectations: list[str] = Field(default_factory=list)
+    failing_targets: list[RepairTarget] = Field(default_factory=list)
     traceback_excerpt: str = ""
     assertion_excerpt: str = ""
     suggested_read_targets: list[str] = Field(default_factory=list)
@@ -55,10 +58,17 @@ def summarize_validation_tool_result(result: ToolResult) -> ValidationFailureSum
     returncode = result.metadata.get("returncode")
     failed_files = _extract_failed_files(lines)
     failing_symbols = _extract_failing_symbols(lines)
+    api_expectations = _extract_public_api_expectations(lines)
+    failing_targets = _extract_repair_targets(lines)
+    if not failing_targets:
+        failing_targets = [
+            RepairTarget(file_path=path, reason="pytest_failed_file")
+            for path in failed_files[:3]
+        ]
     failure_type = _classify_failure(lines)
     traceback_excerpt = _excerpt(lines, ("Traceback", "ZeroDivisionError", "Exception", "Error"))
     assertion_excerpt = _excerpt(lines, ("AssertionError", "E       ", "assert ", "FAILED"))
-    suggested = sorted(set(failed_files + _path_like_mentions(lines)))[:8]
+    suggested = sorted(set(failed_files + _path_like_mentions(lines) + _missing_module_paths(lines)))[:8]
     summary = _summary(lines)
     return ValidationFailureSummary(
         failure_type=failure_type,
@@ -66,6 +76,8 @@ def summarize_validation_tool_result(result: ToolResult) -> ValidationFailureSum
         returncode=returncode if isinstance(returncode, int) else None,
         failed_files=failed_files,
         failing_symbols=failing_symbols,
+        public_api_expectations=api_expectations,
+        failing_targets=failing_targets,
         traceback_excerpt=traceback_excerpt,
         assertion_excerpt=assertion_excerpt,
         suggested_read_targets=suggested,
@@ -90,6 +102,51 @@ def attach_validation_failure_summary(result: ToolResult) -> ToolResult:
     return result.model_copy(update={"content": content, "metadata": metadata})
 
 
+def rank_repair_targets(
+    targets: list[RepairTarget],
+    *,
+    evidence: CompletionEvidence,
+    workspace_root: str,
+) -> list[RepairTarget]:
+    """Rank validation targets by repair usefulness without scenario-specific paths."""
+
+    changed = {
+        _relative_path(path, workspace_root=workspace_root)
+        for path in [*evidence.created_files, *evidence.changed_files]
+        if path
+    }
+
+    def score(target: RepairTarget) -> tuple[int, str]:
+        relative = _relative_path(target.file_path, workspace_root=workspace_root)
+        lowered = relative.lower()
+        value = 0
+        if target.reason in {"traceback", "pytest_failed_item", "pytest_failed_file", "path_line"}:
+            value += 400
+        if target.reason == "missing_module":
+            value += 500
+        if relative in changed:
+            value += 300
+        if lowered.startswith("tests/") or "/tests/" in lowered or Path(lowered).name.startswith("test_"):
+            value += 200
+        if target.line_number is not None:
+            value += 50
+        if _looks_external_runtime(target.file_path, workspace_root=workspace_root):
+            value -= 600
+        if any(symbol in {"SyntaxError", "IndentationError"} for symbol in evidence.validation_failure_symbols):
+            if target.reason in {"traceback", "path_line"}:
+                value += 150
+        return (-value, relative)
+
+    ranked: list[RepairTarget] = []
+    for target in sorted(targets, key=score):
+        normalized = _relative_path(target.file_path, workspace_root=workspace_root)
+        copied = target.model_copy(update={"file_path": normalized})
+        key = (copied.file_path, copied.line_number, copied.symbol)
+        if not any((item.file_path, item.line_number, item.symbol) == key for item in ranked):
+            ranked.append(copied)
+    return ranked
+
+
 def _extract_failed_files(lines: list[str]) -> list[str]:
     found: list[str] = []
     patterns = (
@@ -104,6 +161,115 @@ def _extract_failed_files(lines: list[str]) -> list[str]:
     return found[:8]
 
 
+def _relative_path(path: str, *, workspace_root: str) -> str:
+    raw = str(path or "").replace("\\", "/").strip()
+    if not raw:
+        return ""
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        return candidate.as_posix()
+    try:
+        return candidate.expanduser().resolve().relative_to(Path(workspace_root).expanduser().resolve()).as_posix()
+    except (OSError, ValueError):
+        return candidate.as_posix()
+
+
+def _looks_external_runtime(path: str, *, workspace_root: str) -> bool:
+    raw = str(path or "")
+    lowered = raw.lower().replace("\\", "/")
+    if not Path(raw).is_absolute():
+        return False
+    try:
+        Path(raw).expanduser().resolve().relative_to(Path(workspace_root).expanduser().resolve())
+        return False
+    except (OSError, ValueError):
+        pass
+    markers = ("/site-packages/", "/dist-packages/", "/lib/python", "/python.framework/")
+    return any(marker in lowered for marker in markers)
+
+
+def _extract_repair_targets(lines: list[str]) -> list[RepairTarget]:
+    targets: list[RepairTarget] = []
+
+    traceback_pattern = re.compile(
+        r'File\s+"(?P<path>[^"]+\.(?:py|js|ts|tsx|java|go|rs))",\s+line\s+(?P<line>\d+)(?:,\s+in\s+(?P<symbol>[A-Za-z_][A-Za-z0-9_]*))?'
+    )
+    path_line_pattern = re.compile(
+        r"\b(?P<path>[A-Za-z0-9_./\\-]+\.(?:py|js|jsx|ts|tsx|java|go|rs)):(?P<line>\d+)(?::\d+)?"
+    )
+    pytest_failed_pattern = re.compile(
+        r"\bFAILED\s+(?P<path>[A-Za-z0-9_./\\-]+\.(?:py|js|jsx|ts|tsx|java|go|rs))(?:[:]{2}(?P<symbol>[A-Za-z_][A-Za-z0-9_]*))?"
+    )
+    missing_module_pattern = re.compile(
+        r"(?:No module named|ModuleNotFoundError:\s*No module named)\s+['\"](?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)['\"]"
+    )
+
+    for line in lines[:160]:
+        for match in traceback_pattern.finditer(line):
+            _add_repair_target(
+                targets,
+                file_path=match.group("path"),
+                line_number=_safe_int(match.group("line")),
+                symbol=match.group("symbol") or "",
+                reason="traceback",
+            )
+        for match in path_line_pattern.finditer(line):
+            _add_repair_target(
+                targets,
+                file_path=match.group("path"),
+                line_number=_safe_int(match.group("line")),
+                reason="path_line",
+            )
+        for match in pytest_failed_pattern.finditer(line):
+            symbol = match.group("symbol") or ""
+            _add_repair_target(
+                targets,
+                file_path=match.group("path"),
+                symbol=symbol,
+                reason="pytest_failed_item" if symbol else "pytest_failed_file",
+            )
+        for match in missing_module_pattern.finditer(line):
+            _add_repair_target(
+                targets,
+                file_path=_module_to_path(match.group("module")),
+                reason="missing_module",
+            )
+    return targets[:8]
+
+
+def _add_repair_target(
+    targets: list[RepairTarget],
+    *,
+    file_path: str,
+    line_number: int | None = None,
+    symbol: str = "",
+    reason: str = "",
+) -> None:
+    normalized = file_path.replace("\\", "/").strip()
+    if not normalized:
+        return
+    key = (normalized, line_number, symbol)
+    if any((target.file_path, target.line_number, target.symbol) == key for target in targets):
+        return
+    targets.append(
+        RepairTarget(
+            file_path=normalized,
+            line_number=line_number,
+            symbol=symbol,
+            reason=reason,
+        )
+    )
+
+
+def _safe_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _extract_failing_symbols(lines: list[str]) -> list[str]:
     symbols: list[str] = []
     pattern = re.compile(r"\b(test_[A-Za-z0-9_]+|[A-Za-z_][A-Za-z0-9_]*Error)\b")
@@ -112,6 +278,43 @@ def _extract_failing_symbols(lines: list[str]) -> list[str]:
             if match not in symbols:
                 symbols.append(match)
     return symbols[:10]
+
+
+def _extract_public_api_expectations(lines: list[str]) -> list[str]:
+    expectations: list[str] = []
+    patterns = (
+        (
+            re.compile(
+                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\(\)\s+got an unexpected keyword argument ['\"](?P<arg>[A-Za-z_][A-Za-z0-9_]*)['\"]"
+            ),
+            lambda match: f"accept keyword argument {match.group('arg')} in {match.group('name')}",
+        ),
+        (
+            re.compile(
+                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\(\)\s+missing\s+\d+\s+required positional argument[s]?:\s+(?P<args>.+)"
+            ),
+            lambda match: f"accept required positional argument(s) {match.group('args')} in {match.group('name')}",
+        ),
+        (
+            re.compile(
+                r"cannot import name ['\"](?P<name>[A-Za-z_][A-Za-z0-9_]*)['\"] from ['\"](?P<module>[^'\"]+)['\"]"
+            ),
+            lambda match: f"export {match.group('name')} from {match.group('module')}",
+        ),
+        (
+            re.compile(
+                r"has no attribute ['\"](?P<name>[A-Za-z_][A-Za-z0-9_]*)['\"]"
+            ),
+            lambda match: f"provide attribute or method {match.group('name')}",
+        ),
+    )
+    for line in lines[:160]:
+        for pattern, formatter in patterns:
+            for match in pattern.finditer(line):
+                value = formatter(match).strip()
+                if value and value not in expectations:
+                    expectations.append(value)
+    return expectations[:8]
 
 
 def _classify_failure(lines: list[str]) -> str:
@@ -154,6 +357,24 @@ def _path_like_mentions(lines: list[str]) -> list[str]:
             if match not in mentions:
                 mentions.append(match)
     return mentions[:8]
+
+
+def _missing_module_paths(lines: list[str]) -> list[str]:
+    paths: list[str] = []
+    pattern = re.compile(r"No module named ['\"](?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)['\"]")
+    for line in lines[:120]:
+        for match in pattern.finditer(line):
+            path = _module_to_path(match.group("module"))
+            if path and path not in paths:
+                paths.append(path)
+    return paths[:8]
+
+
+def _module_to_path(module: str) -> str:
+    parts = [part for part in module.split(".") if part]
+    if len(parts) < 2:
+        return ""
+    return "/".join(parts) + ".py"
 
 
 def _excerpt(lines: list[str], markers: tuple[str, ...], *, limit: int = 1200) -> str:

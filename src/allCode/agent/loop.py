@@ -19,6 +19,7 @@ from allCode.agent.preflight import (
     should_force_mutation_after_inspection,
 )
 from allCode.agent.prompt_builder import PromptBuilder
+from allCode.agent.phase_gate import seed_known_artifact_targets
 from allCode.agent.model_router import ModelRouter
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
 from allCode.agent.router import RuleBasedRouter
@@ -42,6 +43,7 @@ from allCode.core.models import Message, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence, TurnResult
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings
+from allCode.memory.project_obligations import feature_objectives_from_prompt
 from allCode.tools.approval import ApprovalManager
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.executor import ToolExecutor
@@ -92,6 +94,8 @@ class AgentLoop:
             event_bus=self._event_bus,
             tool_executor=self._tool_executor,
             router=self._router,
+            llm_client=self._llm_client,
+            settings=self._settings,
         )
         self._context_builder = context_builder
         session_state = context_builder.session_state if context_builder is not None else None
@@ -199,11 +203,17 @@ class AgentLoop:
             if self._context_builder is not None:
                 for path in [*workflow_result.turn_result.created_files, *workflow_result.turn_result.modified_files]:
                     self._context_builder.remember_target(path, turn_id=workflow_result.turn_result.turn_id, summary="generation workflow output")
+                self._context_builder.session_state.remember_turn_outcome(
+                    workflow_result.turn_result.completion_evidence,
+                    status=workflow_result.turn_result.status,
+                    workspace_root=turn_input.workspace.root,
+                )
             return workflow_result.turn_result
         state.messages = self._prompt_builder.initial_messages(turn_input, routing, context_bundle)
         recovery = RecoveryTracker()
         loop_guard = ToolLoopGuard()
         completion_evidence = CompletionEvidence()
+        self._seed_session_artifact_obligations(turn_input, completion_evidence)
         force_mutation_action = False
 
         try:
@@ -311,6 +321,12 @@ class AgentLoop:
                 requires_change_evidence=finalized.requires_change,
                 validation_required=routing.requires_validation and routing.requires_mutation,
             )
+            if self._context_builder is not None:
+                self._context_builder.session_state.remember_turn_outcome(
+                    result.completion_evidence,
+                    status=result.status,
+                    workspace_root=turn_input.workspace.root,
+                )
             await self._publish(
                 TurnResultReady(
                     turn_id=state.turn_id,
@@ -369,6 +385,26 @@ class AgentLoop:
 
     async def _publish(self, event) -> None:
         await self._event_bus.publish(event)
+
+    def _seed_session_artifact_obligations(self, turn_input: TurnInput, evidence: CompletionEvidence) -> None:
+        for objective in feature_objectives_from_prompt(turn_input.user_prompt):
+            if objective not in evidence.feature_objectives:
+                evidence.feature_objectives.append(objective)
+        if self._context_builder is None:
+            return
+        obligations = self._context_builder.session_state.active_project_obligations
+        if obligations is None:
+            return
+        for objective in obligations.feature_objectives:
+            if objective not in evidence.feature_objectives:
+                evidence.feature_objectives.append(objective)
+        seed_known_artifact_targets(
+            turn_input.user_prompt,
+            evidence,
+            workspace_root=turn_input.workspace.root,
+            source_files=obligations.source_files,
+            test_files=obligations.test_files,
+        )
 
     @staticmethod
     def _target_hint_exists(workspace_root: str, target_hint: str) -> bool:
