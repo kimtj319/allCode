@@ -18,6 +18,8 @@ from allCode.core.result import CompletionEvidence
 from allCode.tools.base import ToolContext
 from allCode.tools.executor import ToolExecutor
 
+MAX_SUMMARY_LINE_CHARS = 250
+
 
 class ValidationResult(CoreModel):
     command: str
@@ -157,6 +159,7 @@ class ValidationRunner:
         lines = [line.rstrip() for line in log.splitlines() if line.strip()]
         if not lines:
             return ""
+        lines = [_trim_summary_line(line) for line in lines]
         failure_markers = (
             "FAILED",
             "ERROR",
@@ -177,3 +180,9 @@ class ValidationRunner:
     def _hash_log(self, log: str) -> str:
         normalized = "\n".join(line.strip() for line in log.splitlines() if line.strip())
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _trim_summary_line(line: str) -> str:
+    if len(line) <= MAX_SUMMARY_LINE_CHARS:
+        return line
+    return line[:MAX_SUMMARY_LINE_CHARS] + "..."

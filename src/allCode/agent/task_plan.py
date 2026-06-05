@@ -60,6 +60,28 @@ class ValidationCommand(CoreModel):
         return stripped
 
 
+class ApiObligation(CoreModel):
+    path: str
+    symbol: str
+    reason: str = ""
+
+    @field_validator("path")
+    @classmethod
+    def require_relative_path(cls, value: str) -> str:
+        normalized = value.strip().replace("\\", "/")
+        if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
+            raise ValueError("api obligation paths must be relative to the target root")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def require_symbol(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("api obligation symbol must not be empty")
+        return stripped
+
+
 class ProjectPlan(CoreModel):
     target_root: str
     language: str
@@ -68,6 +90,7 @@ class ProjectPlan(CoreModel):
     constraints: list[str] = Field(default_factory=list)
     forbidden_files: list[str] = Field(default_factory=list)
     tasks: list[TaskItem] = Field(default_factory=list)
+    api_obligations: list[ApiObligation] = Field(default_factory=list)
 
     @field_validator("target_root")
     @classmethod

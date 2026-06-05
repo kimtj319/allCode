@@ -12,6 +12,7 @@ from allCode.agent.artifact_detection import (
     looks_like_test_artifact,
     prompt_requests_tests as _prompt_requests_tests,
 )
+from allCode.agent.related_tests import changed_source_paths, discovery_symbols, related_test_discovery_needed
 from allCode.core.models import CoreModel
 from allCode.core.path_patterns import extract_prompt_paths
 from allCode.core.result import CompletionEvidence, RepairTarget, RequestedArtifact
@@ -21,6 +22,7 @@ PhaseName = Literal[
     "inspection_required",
     "mutation_required",
     "test_authoring_required",
+    "related_test_discovery_required",
     "validation_required",
     "validation_failed",
     "repair_mutation_required",
@@ -31,6 +33,7 @@ PhaseName = Literal[
 INSPECTION_TOOLS = {"read_file", "search_files", "list_directory"}
 MUTATION_TOOLS = {"patch_file", "write_file"}
 VALIDATION_TOOLS = {"run_tests"}
+RELATED_TEST_DISCOVERY_TOOLS = {"search_files", "glob_files", "list_tree", "source_overview"}
 
 
 class PhaseToolGate(CoreModel):
@@ -292,6 +295,17 @@ def build_phase_tool_gate(
             required_target_paths=missing_targets,
         )
     if validation_action_pending or awaiting_revalidation_after_mutation:
+        if related_test_discovery_needed(routing, evidence, workspace_root=workspace_root):
+            source_paths = changed_source_paths(evidence)
+            symbols = discovery_symbols(evidence)
+            return PhaseToolGate(
+                phase="related_test_discovery_required",
+                allowed_tool_names=set(RELATED_TEST_DISCOVERY_TOOLS),
+                required_next_action="Discover related tests before running validation.",
+                reason="changed source files require validation, but no related test discovery or validation command exists yet",
+                preferred_next_tools=["search_files", "source_overview"],
+                required_target_paths=[*source_paths, *symbols][:8],
+            )
         return PhaseToolGate(
             phase="validation_required" if validation_action_pending else "revalidation_required",
             allowed_tool_names=set(VALIDATION_TOOLS),

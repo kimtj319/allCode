@@ -72,7 +72,7 @@ def normalize_response_language(language: str | None) -> ResponseLanguage:
 def language_instruction(language: ResponseLanguage) -> str:
     if language == "ko":
         return (
-            "Write the final user-facing explanation in Korean. Preserve paths, "
+            "Write the final user-facing explanation in Korean even when tool observations are English. Preserve paths, "
             "commands, code identifiers, symbols, and error names exactly."
         )
     return (
@@ -85,7 +85,8 @@ def final_answer_request_text(language: ResponseLanguage) -> str:
     if language == "ko":
         return (
             "최종 답변은 반드시 한국어로만 작성하세요. 섹션 제목과 설명 문장도 한국어로 작성하세요. "
-            "관찰한 도구 결과에 근거해서 최종 답변만 작성하세요. "
+            "관찰한 도구 결과에 근거해서 사용자에게 보이는 assistant content 본문에 최종 답변을 작성하세요. "
+            "reasoning, thinking, 분석 채널에만 쓰고 끝내지 마세요. "
             "확인한 근거와 추론한 내용을 구분하고, 완료할 수 없으면 무엇을 확인했는지, "
             "왜 막혔는지, 안전한 다음 단계가 무엇인지 명시하세요. "
             "소스 구조 분석에서는 source_overview의 주요 package role을 누락하지 말고, "
@@ -93,7 +94,8 @@ def final_answer_request_text(language: ResponseLanguage) -> str:
             "파일 경로, 명령어, 코드 식별자는 원문 그대로 유지하세요."
         )
     return (
-        "Provide the final answer only, grounded in the observed tool results. "
+        "Write the final answer as user-visible assistant content, grounded in the observed tool results. "
+        "Do not stop after writing only to a reasoning, thinking, or analysis channel. "
         "Separate confirmed evidence from inferred roles. If the task cannot be completed, "
         "explicitly say what was checked, why it is blocked, and what safe next step is available. "
         "For source-structure analysis, do not omit major package roles from source_overview; "

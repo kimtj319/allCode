@@ -7,6 +7,10 @@ from typing import Any
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?([A-Za-z0-9._\-+/=]{8,})['\"]?"),
+    re.compile(
+        r"(?i)\b(api[_-]?key|token|password|secret)\b\s+['\"]?"
+        r"((?=[A-Za-z0-9._\-+/=]{8,})(?=[A-Za-z0-9._\-+/=]*[0-9._\-+/=])[A-Za-z0-9._\-+/=]+)['\"]?"
+    ),
     re.compile(r"(?i)(authorization)\s*:\s*bearer\s+([A-Za-z0-9._\-+/=]{8,})"),
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-+/=]{8,}"),
     re.compile(r"sk-[A-Za-z0-9]{16,}"),

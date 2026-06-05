@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from allCode.agent.language import ResponseLanguage, detect_response_language, normalize_response_language
+from allCode.agent.related_tests import related_test_discovery_needed
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
 from allCode.core.models import ToolCall, ToolResult, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence
@@ -34,6 +35,8 @@ class RevalidationOrchestrator:
         if not getattr(routing, "requires_validation", False) or evidence.validation_passed is True:
             return False
         if not evidence.has_file_change():
+            return False
+        if related_test_discovery_needed(routing, evidence):
             return False
         if evidence.validation_passed is False and not awaiting_revalidation_after_mutation:
             return False

@@ -107,6 +107,7 @@ class OpenAICompatibleClient:
             "max_tokens": settings.max_output_tokens,
             "temperature": settings.temperature,
         }
+        self._merge_extra_body(payload, settings.extra_body)
         if tools:
             payload["tools"] = [
                 {
@@ -120,6 +121,14 @@ class OpenAICompatibleClient:
                 for tool in tools
             ]
         return payload
+
+    @staticmethod
+    def _merge_extra_body(payload: dict[str, Any], extra_body: dict[str, object]) -> None:
+        reserved = {"model", "messages", "stream", "tools"}
+        for key, value in extra_body.items():
+            if key in reserved:
+                continue
+            payload[key] = value
 
     def _headers(self, settings: ModelSettings) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

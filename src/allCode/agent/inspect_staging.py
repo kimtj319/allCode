@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
 
+from allCode.agent.inspect_targets import (
+    dedupe_targets,
+    explicit_target_paths,
+    looks_path_like,
+    normalize_target,
+    target_matches_path,
+    target_observed,
+)
 from allCode.core.models import CoreModel
 from allCode.core.result import CompletionEvidence
 
@@ -46,11 +55,11 @@ def decide_inspect_stage(
     if not getattr(routing, "read_only_requested", False) and not _source_inventory_request(prompt):
         return InspectToolStage()
 
-    explicit_targets = _explicit_target_paths(prompt)
+    explicit_targets = explicit_target_paths(prompt)
     target_hint = str(getattr(routing, "target_hint", "") or "").strip()
     if target_hint:
         explicit_targets.append(target_hint)
-    explicit_targets = _dedupe(explicit_targets)
+    explicit_targets = dedupe_targets(explicit_targets)
 
     if _evidence_complete(evidence=evidence, explicit_targets=explicit_targets):
         return InspectToolStage(
@@ -69,6 +78,15 @@ def decide_inspect_stage(
             target_paths=explicit_targets,
         )
 
+    missing_overview_targets = _missing_explicit_overview_targets(evidence, explicit_targets)
+    if missing_overview_targets and round_index < max(1, inspect_round_budget - 1):
+        return InspectToolStage(
+            stage="source_discovery",
+            allowed_tool_names={"source_overview"},
+            reason="Explicit source target still needs source overview before representative reads.",
+            target_paths=missing_overview_targets,
+        )
+
     if explicit_targets and _has_file_target(explicit_targets) and round_index == 0:
         return InspectToolStage(
             stage="targeted_read",
@@ -78,7 +96,7 @@ def decide_inspect_stage(
         )
 
     if evidence.source_overview_paths or evidence.search_candidate_paths or evidence.inspected_paths:
-        representative_targets = _representative_targets(evidence)
+        representative_targets = _representative_targets(evidence, explicit_targets)
         if representative_targets:
             return InspectToolStage(
                 stage="targeted_read",
@@ -110,14 +128,16 @@ def decide_inspect_stage(
 
 
 def _evidence_complete(*, evidence: CompletionEvidence, explicit_targets: Sequence[str]) -> bool:
+    if _missing_explicit_overview_targets(evidence, explicit_targets):
+        return False
     inspected = set(evidence.inspected_paths)
-    if explicit_targets and _has_file_target(explicit_targets) and any(
-        _target_observed(target, inspected) for target in explicit_targets
+    if explicit_targets and _has_file_target(explicit_targets) and all(
+        target_observed(target, inspected) for target in explicit_targets
     ):
         return True
     if evidence.source_overview_paths:
-        return not _representative_targets(evidence)
-    if explicit_targets and any(_target_observed(target, inspected) for target in explicit_targets):
+        return not _representative_targets(evidence, explicit_targets)
+    if explicit_targets and all(target_observed(target, inspected) for target in explicit_targets):
         return True
     if evidence.search_candidate_paths and evidence.inspected_paths:
         return True
@@ -126,7 +146,24 @@ def _evidence_complete(*, evidence: CompletionEvidence, explicit_targets: Sequen
     return False
 
 
-def _representative_targets(evidence: CompletionEvidence) -> list[str]:
+def _missing_explicit_overview_targets(evidence: CompletionEvidence, explicit_targets: Sequence[str]) -> list[str]:
+    directory_targets = [target for target in explicit_targets if not _is_file_target(target)]
+    if len(directory_targets) <= 1:
+        return []
+    coverage_paths = _overview_coverage_paths(evidence)
+    if not coverage_paths:
+        return directory_targets
+    return [target for target in directory_targets if not target_observed(target, coverage_paths)]
+
+
+def _overview_coverage_paths(evidence: CompletionEvidence) -> set[str]:
+    overview_targets = {_normalize_path(path) for path in evidence.source_overview_targets if path}
+    if overview_targets:
+        return overview_targets
+    return {_normalize_path(path) for path in evidence.source_overview_paths if path}
+
+
+def _representative_targets(evidence: CompletionEvidence, explicit_targets: Sequence[str] = ()) -> list[str]:
     if not evidence.source_overview_paths:
         return []
     observed = {_normalize_path(path) for path in [*evidence.inspected_paths, *evidence.representative_read_paths]}
@@ -143,7 +180,57 @@ def _representative_targets(evidence: CompletionEvidence) -> list[str]:
     if not candidates:
         return []
     remaining_needed = max(1, required_count - observed_count)
-    return candidates[: min(3, remaining_needed)]
+
+    groups = _candidate_groups(candidates, explicit_targets)
+
+    for key in groups:
+        groups[key].sort(
+            key=lambda path: evidence.source_representative_scores.get(path, 0.0),
+            reverse=True,
+        )
+
+    balanced_selection: list[str] = []
+    group_keys = sorted(groups.keys())
+
+    while len(balanced_selection) < remaining_needed:
+        added_any = False
+        for key in group_keys:
+            if groups[key]:
+                balanced_selection.append(groups[key].pop(0))
+                added_any = True
+                if len(balanced_selection) >= remaining_needed:
+                    break
+        if not added_any:
+            break
+
+    return balanced_selection
+
+
+def _candidate_groups(candidates: Sequence[str], explicit_targets: Sequence[str]) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    normalized_targets = [normalize_target(target) for target in explicit_targets if normalize_target(target)]
+    if normalized_targets:
+        for candidate in candidates:
+            bucket = _matching_explicit_target(candidate, normalized_targets) or "__unmatched__"
+            groups.setdefault(bucket, []).append(candidate)
+        if any(key != "__unmatched__" for key in groups):
+            return groups
+    return _package_candidate_groups(candidates)
+
+
+def _matching_explicit_target(candidate: str, targets: Sequence[str]) -> str:
+    for target in targets:
+        if target_matches_path(target, candidate):
+            return target
+    return ""
+
+
+def _package_candidate_groups(candidates: Sequence[str]) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    for candidate in candidates:
+        group = Path(candidate).parent.as_posix()
+        groups.setdefault(group, []).append(candidate)
+    return groups
 
 
 def _required_representative_read_count(evidence: CompletionEvidence, *, candidate_count: int) -> int:
@@ -192,49 +279,35 @@ def _int_value(value, *, default: int) -> int:
 
 
 def _target_observed(target: str, inspected: set[str]) -> bool:
-    normalized = _normalize_path(target)
-    if not normalized:
-        return False
-    return any(_paths_overlap(path, normalized) for path in inspected)
+    return target_observed(target, inspected)
 
 
 def _paths_overlap(path: str, target: str) -> bool:
-    cleaned = _normalize_path(path)
-    return bool(cleaned and target and (cleaned.endswith(target) or target.endswith(cleaned)))
+    return target_matches_path(target, path)
 
 
 def _has_file_target(targets: Sequence[str]) -> bool:
-    return any(bool(re.search(r"\.[A-Za-z0-9]{1,8}$", target.strip())) for target in targets)
+    return any(_is_file_target(target) for target in targets)
+
+
+def _is_file_target(target: str) -> bool:
+    return bool(re.search(r"\.[A-Za-z0-9]{1,8}$", target.strip()))
 
 
 def _explicit_target_paths(prompt: str) -> list[str]:
-    candidates: list[str] = []
-    for quoted in re.findall(r"`([^`]+)`", prompt):
-        if _looks_path_like(quoted):
-            candidates.append(quoted)
-    for token in re.findall(r"(?<!\w)(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9]+)?", prompt):
-        candidates.append(token)
-    for token in re.findall(r"(?<!\w)[A-Za-z0-9_.-]+\.(?:py|js|ts|tsx|java|go|rs|md|toml|yaml|yml|json)(?!\w)", prompt):
-        candidates.append(token)
-    return _dedupe(candidates)
+    return explicit_target_paths(prompt)
 
 
 def _looks_path_like(value: str) -> bool:
-    stripped = value.strip()
-    return "/" in stripped or bool(re.search(r"\.[A-Za-z0-9]{1,8}$", stripped))
+    return looks_path_like(value)
 
 
 def _dedupe(values: Sequence[str]) -> list[str]:
-    seen: list[str] = []
-    for value in values:
-        cleaned = value.strip().strip("`")
-        if cleaned and cleaned not in seen:
-            seen.append(cleaned)
-    return seen[:8]
+    return dedupe_targets(values)
 
 
 def _normalize_path(path: str) -> str:
-    return path.strip().strip("`").replace("\\", "/")
+    return normalize_target(path)
 
 
 def _source_inventory_request(prompt: str) -> bool:

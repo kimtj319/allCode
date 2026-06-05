@@ -1,0 +1,30 @@
+"""Focused prompt contracts for answer routes."""
+
+from __future__ import annotations
+
+from allCode.agent.router import RoutingDecision
+
+
+def answer_route_instruction(routing: RoutingDecision) -> str:
+    if routing.kind != "answer":
+        return ""
+    if routing.requires_external_knowledge:
+        return "\n".join(
+            [
+                "Answer route: external evidence only.",
+                "Only use web_search or web_fetch for external evidence; do not call file, shell, mutation, or validation tools.",
+                "Use the registered native web_search or web_fetch tool only to collect external evidence.",
+                "If web_search reports web_search_unavailable or backend disabled, state that the web backend is not configured and cite the setting to configure.",
+                "When explaining unavailable web evidence in Korean, include the term 검색 so the user can recognize the web-search failure.",
+                "Never print tool-call plans, action JSON, or raw search results as the final answer.",
+                "After web evidence is observed, write a natural-language answer grounded in that evidence.",
+            ]
+        )
+    lines = [
+        "Answer route: direct natural-language response only.",
+        "Do not call tools for this turn; answer from the prompt and supplied context.",
+        "If the answer depends on unavailable current facts, say what is missing instead of inventing evidence.",
+    ]
+    if "refused" in routing.reason.lower() or "disallowed" in routing.reason.lower():
+        lines.append("For safety refusals, explicitly mention that the request is 위험 and cannot proceed without proper 승인.")
+    return "\n".join(lines)

@@ -20,6 +20,7 @@ class ModelConfig(StrictConfigModel):
     api_key_env: str = "OPENAI_API_KEY"
     timeout_seconds: int = 120
     max_output_tokens: int = 8192
+    extra_body: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("model_name", "api_key_env")
     @classmethod

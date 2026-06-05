@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from allCode.agent.prompt_builder import PromptBuilder
+from allCode.agent.related_tests import changed_source_paths, discovery_symbols
 from allCode.core.models import Message, ToolResult
 from allCode.core.result import CompletionEvidence
 
@@ -65,6 +66,40 @@ class PhaseBlockHelper:
             api_expectations=evidence.public_api_expectations[:5],
             failure_excerpt=evidence.validation_failure_excerpt,
             phase_block_reason=phase_block_reason or self.feedback(phase_gate, ()),
+        )
+
+    def related_test_discovery_messages(
+        self,
+        messages: list[Message],
+        evidence: CompletionEvidence,
+        *,
+        phase_gate,
+        phase_block_reason: str = "",
+    ) -> list[Message]:
+        targets = list(getattr(phase_gate, "required_target_paths", []) or [])
+        source_paths = [path for path in changed_source_paths(evidence) if path in targets or not targets]
+        symbols = [symbol for symbol in discovery_symbols(evidence) if symbol in targets or not targets]
+        return self._prompt_builder.related_test_discovery_request(
+            messages,
+            changed_source_paths=source_paths or changed_source_paths(evidence),
+            symbols=symbols or discovery_symbols(evidence),
+            phase_block_reason=phase_block_reason or self.feedback(phase_gate, ()),
+        )
+
+    def maybe_related_test_discovery_messages(
+        self,
+        messages: list[Message],
+        evidence: CompletionEvidence,
+        *,
+        phase_gate,
+        last_phase_prompt: str,
+    ) -> tuple[list[Message], str]:
+        phase_prompt_key = f"{phase_gate.phase}:{','.join(phase_gate.required_target_paths)}"
+        if phase_gate.phase != "related_test_discovery_required" or last_phase_prompt == phase_prompt_key:
+            return messages, last_phase_prompt
+        return (
+            self.related_test_discovery_messages(messages, evidence, phase_gate=phase_gate),
+            phase_prompt_key,
         )
 
     @staticmethod

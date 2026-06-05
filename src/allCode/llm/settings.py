@@ -15,6 +15,7 @@ class ModelSettings(CoreModel):
     timeout_seconds: int = 120
     max_output_tokens: int = 8192
     temperature: float = 0.0
+    extra_body: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
     def from_config(cls, config: AppConfig) -> "ModelSettings":
@@ -24,6 +25,7 @@ class ModelSettings(CoreModel):
             api_key_env=config.model.api_key_env,
             timeout_seconds=config.model.timeout_seconds,
             max_output_tokens=config.model.max_output_tokens,
+            extra_body=dict(config.model.extra_body),
         )
 
 

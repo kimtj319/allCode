@@ -29,3 +29,4 @@ class RoundRuntime:
     final_answer_after_change_requested: bool = False
     inspect_final_answer_requested: bool = False
     last_inspect_stage: str = ""
+    last_phase_prompt: str = ""

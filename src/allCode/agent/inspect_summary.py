@@ -6,8 +6,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from allCode.agent.finalization_helpers import last_tool_results
+from allCode.agent.inspect_targets import explicit_target_paths, target_observed
 from allCode.agent.language import ResponseLanguage, normalize_response_language
-from allCode.agent.source_answer_synthesis import probe_evidence_lines
+from allCode.agent.source_answer_synthesis import (
+    build_source_analysis_brief,
+    probe_evidence_lines,
+    render_source_analysis_brief,
+)
 from allCode.agent.source_structure import CodeStructureSummary, read_file_code_summaries
 from allCode.core.models import Message
 from allCode.core.result import CompletionEvidence
@@ -36,6 +41,23 @@ def grounded_inspect_summary(
     suggested_reads = _suggested_reads(evidence, tool_results)
     truncated = evidence.source_overview_truncated or any(bool(result.metadata.get("truncated")) for result in tool_results)
 
+    user_prompt = ""
+    for msg in messages:
+        if msg.role == "user" and msg.content:
+            user_prompt = msg.content
+            break
+    explicit_targets = explicit_target_paths(user_prompt) if user_prompt else []
+    observed_targets = set(
+        [
+            *evidence.source_overview_targets,
+            *evidence.source_overview_paths,
+            *evidence.inspected_paths,
+            *evidence.representative_read_paths,
+        ]
+    )
+    unobserved_targets = [target for target in explicit_targets if not target_observed(target, observed_targets)]
+    brief = build_source_analysis_brief(tool_results, evidence=evidence, user_prompt=user_prompt)
+
     if language == "en":
         lines = [
             "Here is a grounded source-structure summary from the evidence collected so far.",
@@ -43,6 +65,9 @@ def grounded_inspect_summary(
             "Checked scope:",
         ]
         lines.extend(f"- {path}" for path in observed_paths[:12])
+        if unobserved_targets:
+            lines.extend(["", "Unobserved target areas (not read):"])
+            lines.extend(f"- {target}" for target in unobserved_targets)
         if overview_lines:
             lines.extend(["", "Structure summary:", *[f"- {line}" for line in overview_lines]])
         if role_lines:
@@ -53,6 +78,8 @@ def grounded_inspect_summary(
             lines.extend(["", "Main classes/functions:", *[f"- {line}" for line in symbol_lines]])
         if wiring_lines:
             lines.extend(["", "Dependency/wiring clues:", *[f"- {line}" for line in wiring_lines]])
+        if brief.inferred_flows or brief.cross_module_edges or brief.representative_files:
+            lines.extend(["", render_source_analysis_brief(brief, language=language)])
         if suggested_reads:
             lines.extend(["", "Suggested follow-up files:", *[f"- {path}" for path in suggested_reads[:6]]])
         lines.extend(
@@ -72,6 +99,9 @@ def grounded_inspect_summary(
         "확인한 범위:",
     ]
     lines.extend(f"- `{path}`" for path in observed_paths[:12])
+    if unobserved_targets:
+        lines.extend(["", "미관찰 대상 범위 (예산/라운드 제한으로 읽지 않음):"])
+        lines.extend(f"- `{target}`" for target in unobserved_targets)
     if overview_lines:
         lines.extend(["", "구조 요약:", *[f"- {line}" for line in overview_lines]])
     if role_lines:
@@ -82,6 +112,8 @@ def grounded_inspect_summary(
         lines.extend(["", "주요 클래스/함수:", *[f"- {line}" for line in symbol_lines]])
     if wiring_lines:
         lines.extend(["", "의존성/연결 흐름:", *[f"- {line}" for line in wiring_lines]])
+    if brief.inferred_flows or brief.cross_module_edges or brief.representative_files:
+        lines.extend(["", render_source_analysis_brief(brief, language=language)])
     if suggested_reads:
         lines.extend(["", "추가로 확인하면 좋은 파일:", *[f"- `{path}`" for path in suggested_reads[:6]]])
     lines.extend(
@@ -109,6 +141,7 @@ def has_inspect_summary_evidence(evidence: CompletionEvidence) -> bool:
 def _observed_paths(evidence: CompletionEvidence, tool_results) -> list[str]:
     paths: list[str] = []
     for path in [
+        *evidence.source_overview_targets,
         *evidence.source_overview_paths,
         *evidence.inspected_paths,
         *evidence.search_candidate_paths,

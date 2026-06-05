@@ -64,6 +64,8 @@ def build_completion_evidence(
     document_manifest = base_evidence.document_manifest if base_evidence is not None else None
     requested_artifacts = list(base_evidence.requested_artifacts if base_evidence is not None else [])
     feature_objectives = list(base_evidence.feature_objectives if base_evidence is not None else [])
+    related_test_candidates = list(base_evidence.related_test_candidates if base_evidence is not None else [])
+    related_test_discovery_count = int(base_evidence.related_test_discovery_count if base_evidence is not None else 0)
     file_change_present = bool(changed_files or created_files or deleted_files or safe_noop)
     final_answer_ready = outcome_status == "success" and bool(outcome_answer.strip())
     if requires_change and not file_change_present:
@@ -109,6 +111,8 @@ def build_completion_evidence(
         document_manifest=document_manifest,
         requested_artifacts=requested_artifacts,
         feature_objectives=feature_objectives,
+        related_test_candidates=related_test_candidates,
+        related_test_discovery_count=related_test_discovery_count,
     )
     ensure_requested_artifacts(
         turn_input.user_prompt,

@@ -5,21 +5,23 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from allCode.agent.finalization_helpers import blocked_summary
+from allCode.agent.context_condensation import condense_messages_for_model
+from allCode.agent.final_answer_context import final_answer_call_messages
 from allCode.agent.grounding import grounding_required
 from allCode.agent.inspect_staging import decide_inspect_stage
-from allCode.agent.language import ResponseLanguage, detect_response_language
 from allCode.agent.phase_block import PhaseBlockHelper
 from allCode.agent.phase_gate import build_phase_tool_gate, mutation_artifact_required
 from allCode.agent.prompt_builder import PromptBuilder
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
-from allCode.agent.revalidation import RevalidationOrchestrator, evidence_final_answer, mutation_change_complete, validated_change_complete
+from allCode.agent.revalidation import RevalidationOrchestrator
 from allCode.agent.round_events import publish_model_request, publish_parsed_response
-from allCode.agent.round_context import record_repair_context_reads
 from allCode.agent.round_response_handler import RoundResponseHandler
 from allCode.agent.round_runtime import RoundRuntime
 from allCode.agent.round_state import RoundStateSnapshot
 from allCode.agent.round_tool_handler import RoundToolHandler
+from allCode.agent.round_runner_helpers import evidence_answer, mutation_complete, response_language, validated_complete
 from allCode.agent.stream_collector import ModelStreamCollector
+from allCode.agent.task_loop_digest import build_task_loop_digest, task_loop_digest_messages
 from allCode.agent.tool_call_processor import ToolCallProcessor
 from allCode.agent.turn_completion import LoopOutcome
 from allCode.agent.validation_controller import ValidationRepairController
@@ -121,6 +123,12 @@ class RoundRunner:
                 repair_context_read_paths=runtime.repair_context_read_paths,
                 test_authoring_inspection_rounds=runtime.inspection_rounds,
             )
+            runtime.messages, runtime.last_phase_prompt = self._phase_block.maybe_related_test_discovery_messages(
+                runtime.messages,
+                completion_evidence,
+                phase_gate=phase_gate,
+                last_phase_prompt=runtime.last_phase_prompt,
+            )
             inspect_stage = decide_inspect_stage(
                 prompt=turn_input.user_prompt,
                 routing=routing,
@@ -171,9 +179,9 @@ class RoundRunner:
                         },
                     )
                 )
-                runtime.messages = self._prompt_builder.final_answer_request(
+                runtime.messages = self._prompt_builder.source_analysis_final_answer_request(
                     runtime.messages,
-                    response_language=self._response_language(turn_input.user_prompt),
+                    response_language=response_language(turn_input.user_prompt),
                 )
             injected = await self._maybe_inject_validation(
                 turn_input,
@@ -197,7 +205,7 @@ class RoundRunner:
                 runtime.inspect_final_answer_requested
                 or (
                     runtime.final_answer_after_change_requested
-                    and self._mutation_change_complete(routing, completion_evidence)
+                    and mutation_complete(routing, completion_evidence)
                 )
             )
             allowed_only = None
@@ -256,9 +264,27 @@ class RoundRunner:
                     data={"round": round_index + 1, "retry": stream_phase == "retry", "stream_phase": stream_phase},
                 )
             )
+            model_messages = runtime.messages
+            if getattr(routing, "requires_mutation", False) or getattr(routing, "kind", "") == "modify":
+                digest = build_task_loop_digest(
+                    turn_input=turn_input,
+                    routing=routing,
+                    evidence=completion_evidence,
+                    recovery_states=recovery.states,
+                    current_step=phase_gate.phase,
+                    next_required_action=phase_gate.required_next_action,
+                )
+                model_messages = task_loop_digest_messages(model_messages, digest)
+            if suppress_tools_for_final_answer:
+                model_messages = final_answer_call_messages(
+                    model_messages,
+                    response_language=response_language(turn_input.user_prompt),
+                )
+            else:
+                model_messages = condense_messages_for_model(model_messages)
             events, stream_timed_out = await self._stream_collector.collect(
                 state=state,
-                messages=runtime.messages,
+                messages=model_messages,
                 recovery=recovery,
                 tool_schemas=tool_schemas,
                 stream_text=not (routing.requires_external_knowledge and not has_tool_results),
@@ -282,10 +308,10 @@ class RoundRunner:
                 state.token_usage = parsed.usage
 
             if parsed.status == "ok_tool_calls":
-                if runtime.final_answer_after_change_requested and self._mutation_change_complete(routing, completion_evidence):
+                if runtime.final_answer_after_change_requested and mutation_complete(routing, completion_evidence):
                     return LoopOutcome(
                         status="success",
-                        answer=self._evidence_final_answer(turn_input.user_prompt, completion_evidence, turn_input.workspace.root),
+                        answer=evidence_answer(turn_input.user_prompt, completion_evidence, turn_input.workspace.root),
                     )
                 outcome = await self._tool_handler.handle(
                     parsed=parsed,
@@ -451,20 +477,10 @@ class RoundRunner:
             runtime.mutation_action_pending = True
             runtime.mutation_attempted_after_failed_validation = False
             runtime.mutation_succeeded_after_failed_validation = False
-        if self._validated_change_complete(routing, evidence):
-            return LoopOutcome(status="success", answer=self._evidence_final_answer(turn_input.user_prompt, evidence, turn_input.workspace.root))
+        if validated_complete(routing, evidence):
+            return LoopOutcome(status="success", answer=evidence_answer(turn_input.user_prompt, evidence, turn_input.workspace.root))
         return None
 
-    def _test_authoring_messages(self, messages: list[Message], evidence: CompletionEvidence, *, phase_gate, phase_block_reason: str = "") -> list[Message]:
-        return self._phase_block.test_authoring_messages(messages, evidence, phase_gate=phase_gate, phase_block_reason=phase_block_reason)
-    def _validation_repair_messages(self, messages: list[Message], evidence: CompletionEvidence, *, phase_gate, phase_block_reason: str = "") -> list[Message]:
-        return self._phase_block.validation_repair_messages(messages, evidence, phase_gate=phase_gate, phase_block_reason=phase_block_reason)
-    def _can_retry_phase_block(self, counts: dict[tuple[str, str], int], *, phase_gate, reason: str, max_attempts: int = 2) -> bool:
-        return PhaseBlockHelper.can_retry(counts, phase_gate=phase_gate, reason=reason, max_attempts=max_attempts)
-    def _phase_block_feedback(self, phase_gate, results: Sequence[ToolResult]) -> str:
-        return PhaseBlockHelper.feedback(phase_gate, results)
-    def _record_repair_context_reads(self, results: Sequence[ToolResult], repair_context_read_paths: set[str], *, workspace_root: str) -> None:
-        record_repair_context_reads(results, repair_context_read_paths, workspace_root=workspace_root)
     async def _record_recovery(self, state: TurnState, recovery: RecoveryTracker, reason, *, attempts: int = 0, last_error: str | None = None, blocked: bool = False) -> None:
         recovery.add_state(reason, attempts=attempts, last_error=last_error, blocked=blocked)
         latest = recovery.states[-1]
@@ -473,20 +489,9 @@ class RoundRunner:
         await self._event_bus.publish(event)
     def _inspection_budget_available(self, inspection_actions: int, inspection_rounds: int) -> bool:
         return inspection_actions < self._inspect_action_budget and inspection_rounds < self._inspect_round_budget
+    def _can_retry_phase_block(self, counts: dict[tuple[str, str], int], *, phase_gate, reason: str, max_attempts: int = 2) -> bool:
+        return PhaseBlockHelper.can_retry(counts, phase_gate=phase_gate, reason=reason, max_attempts=max_attempts)
     def _should_inject_validation_action(self, round_index: int, routing, evidence: CompletionEvidence, recovery: RecoveryTracker, *, validation_action_pending: bool, awaiting_revalidation_after_mutation: bool) -> bool:
         return self._revalidation.should_inject(round_index, routing, evidence, recovery, validation_action_pending=validation_action_pending, awaiting_revalidation_after_mutation=awaiting_revalidation_after_mutation)
     async def _execute_validation_fallback(self, turn_input: TurnInput, state: TurnState, loop_guard: ToolLoopGuard, recovery: RecoveryTracker, completion_evidence: CompletionEvidence, routing, *, phase_gate) -> list[ToolResult]:
         return await self._revalidation.execute(turn_input, state, loop_guard, recovery, completion_evidence, routing, phase_gate=phase_gate)
-    @staticmethod
-    def _validated_change_complete(routing, evidence: CompletionEvidence) -> bool:
-        return validated_change_complete(routing, evidence)
-    @staticmethod
-    def _mutation_change_complete(routing, evidence: CompletionEvidence) -> bool:
-        return mutation_change_complete(routing, evidence)
-    @staticmethod
-    def _evidence_final_answer(prompt: str, evidence: CompletionEvidence, workspace_root: str) -> str:
-        return evidence_final_answer(prompt, evidence, workspace_root)
-
-    @staticmethod
-    def _response_language(prompt: str) -> ResponseLanguage:
-        return detect_response_language(prompt)

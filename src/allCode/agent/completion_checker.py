@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import Field
 
+from allCode.agent.api_obligation_checker import api_obligation_errors
 from allCode.agent.task_plan import ProjectPlan
 from allCode.agent.validation_runner import ValidationResult
 from allCode.core.models import CoreModel
@@ -63,6 +64,13 @@ class CompletionChecker:
                 errors.append("validation evidence did not succeed")
         if completion_evidence.validation_commands and not validation_results:
             errors.append("validation result details are missing")
+        errors.extend(
+            api_obligation_errors(
+                workspace_root=workspace_root,
+                plan=plan,
+                completion_evidence=completion_evidence,
+            )
+        )
         if final_report is not None:
             report_errors = self._check_final_report(final_report, plan, completion_evidence, validation_results)
             errors.extend(report_errors)
@@ -97,8 +105,8 @@ class CompletionChecker:
             if command not in final_report:
                 errors.append("final report omits validation command from evidence")
                 break
-        expected_result = "succeeded" if completion_evidence.validation_passed is True else "failed"
-        if completion_evidence.validation_passed is not None and expected_result not in lowered:
+        expected_results = {"succeeded", "success", "passed", "성공", "통과"} if completion_evidence.validation_passed is True else {"failed", "failure", "실패"}
+        if completion_evidence.validation_passed is not None and not any(result in lowered for result in expected_results):
             errors.append("final report omits validation result from evidence")
         if "core functionality" not in lowered and "핵심 기능" not in lowered:
             errors.append("final report omits core functionality")

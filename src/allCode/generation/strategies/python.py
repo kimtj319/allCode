@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from allCode.agent.task_plan import PlannedFile, ProjectPlan, TaskItem
-from allCode.generation.strategy import GenerationRequest, infer_target_root, safe_name, validation_command
+from pathlib import PurePosixPath
+
+from allCode.generation.strategy import GenerationRequest, infer_target_root, safe_name, safe_target_root, validation_command
 
 
 class PythonProjectStrategy:
@@ -11,8 +13,10 @@ class PythonProjectStrategy:
     aliases = ("python", "pytest", ".py", "파이썬")
 
     def create_plan(self, request: GenerationRequest) -> ProjectPlan:
-        target = safe_name(request.target_root or infer_target_root(request.prompt))
-        package = safe_name(target)
+        target = safe_target_root(request.target_root or infer_target_root(request.prompt))
+        package = safe_name(PurePosixPath(target).name)
+        if self._looks_like_kebab_cli(request.prompt):
+            return self._kebab_cli_plan(target, package)
         if self._looks_like_standard_library_api(request.prompt):
             return self._api_plan(target, package)
         return ProjectPlan(
@@ -70,6 +74,36 @@ class PythonProjectStrategy:
             ],
         )
 
+    def _kebab_cli_plan(self, target: str, package: str) -> ProjectPlan:
+        return ProjectPlan(
+            target_root=target,
+            language=self.language,
+            constraints=["Use only the Python standard library.", "Expose an argparse CLI.", "Validate with pytest."],
+            files=[
+                PlannedFile(path="pyproject.toml", purpose="package metadata", stage="skeleton", content=self._pyproject(target)),
+                PlannedFile(path=f"src/{package}/__init__.py", purpose="package exports", stage="skeleton", content=self._kebab_init()),
+                PlannedFile(path=f"src/{package}/main.py", purpose="kebab-case conversion CLI", stage="implementation", content=self._kebab_main()),
+                PlannedFile(path="tests/test_main.py", purpose="pytest coverage for kebab-case conversion and CLI", stage="tests", content=self._kebab_tests(package)),
+            ],
+            validation_commands=[validation_command("python -m pytest", cwd=target, environment={"PYTHONPATH": "src"})],
+            tasks=[
+                TaskItem(description="Create package metadata and public exports.", step="skeleton"),
+                TaskItem(description="Implement kebab-case conversion and argparse CLI.", step="implementation"),
+                TaskItem(description="Add validation tests for conversion and CLI output.", step="tests"),
+                TaskItem(description="Run pytest validation.", step="validation"),
+            ],
+        )
+
+    @staticmethod
+    def _looks_like_kebab_cli(prompt: str) -> bool:
+        lowered = prompt.lower()
+        compact = prompt.replace(" ", "").lower()
+        transform_signal = "kebab-case" in lowered or "kebab case" in lowered or "케밥" in compact
+        cli_signal = any(marker in lowered for marker in ("cli", "argparse", "command")) or any(
+            marker in compact for marker in ("명령어", "커맨드")
+        )
+        return transform_signal and cli_signal
+
     @staticmethod
     def _looks_like_standard_library_api(prompt: str) -> bool:
         lowered = prompt.lower()
@@ -83,17 +117,87 @@ class PythonProjectStrategy:
         return api_signal and component_signal
 
     def _pyproject(self, name: str) -> str:
+        distribution = safe_name(PurePosixPath(name).name).replace("_", "-")
         return "\n".join(
             [
                 "[project]",
-                f'name = "{name}"',
+                f'name = "{distribution}"',
                 'version = "0.1.0"',
-                f'description = "Generated Python project {name}."',
+                f'description = "Generated Python project {distribution}."',
                 'requires-python = ">=3.11"',
                 "",
                 "[build-system]",
                 'requires = ["hatchling"]',
                 'build-backend = "hatchling.build"',
+                "",
+            ]
+        )
+
+    def _kebab_init(self) -> str:
+        return "\n".join(
+            [
+                '"""Kebab-case conversion CLI package."""',
+                "",
+                "from .main import build_parser, main, to_kebab_case",
+                "",
+                '__all__ = ["build_parser", "main", "to_kebab_case"]',
+                "",
+            ]
+        )
+
+    def _kebab_main(self) -> str:
+        return "\n".join(
+            [
+                '"""Command-line helpers for converting text to kebab-case."""',
+                "",
+                "from __future__ import annotations",
+                "",
+                "import argparse",
+                "import re",
+                "from collections.abc import Sequence",
+                "",
+                "",
+                "def to_kebab_case(text: str) -> str:",
+                "    \"\"\"Convert an arbitrary string to kebab-case.\"\"\"",
+                "    words = re.findall(r\"[A-Za-z0-9]+\", text.replace(\"_\", \" \"))",
+                "    return \"-\".join(word.lower() for word in words)",
+                "",
+                "",
+                "def build_parser() -> argparse.ArgumentParser:",
+                "    parser = argparse.ArgumentParser(description=\"Convert text to kebab-case.\")",
+                "    parser.add_argument(\"text\", help=\"Text to convert.\")",
+                "    return parser",
+                "",
+                "",
+                "def main(argv: Sequence[str] | None = None) -> int:",
+                "    args = build_parser().parse_args(argv)",
+                "    print(to_kebab_case(args.text))",
+                "    return 0",
+                "",
+                "",
+                "if __name__ == \"__main__\":",
+                "    raise SystemExit(main())",
+                "",
+            ]
+        )
+
+    def _kebab_tests(self, package: str) -> str:
+        return "\n".join(
+            [
+                f"from {package}.main import main, to_kebab_case",
+                "",
+                "",
+                "def test_to_kebab_case_normalizes_spaces_symbols_and_case() -> None:",
+                "    assert to_kebab_case(\"Hello, Wise LLOA Max!\") == \"hello-wise-lloa-max\"",
+                "",
+                "",
+                "def test_to_kebab_case_handles_underscores() -> None:",
+                "    assert to_kebab_case(\"already_mixed Case\") == \"already-mixed-case\"",
+                "",
+                "",
+                "def test_main_prints_converted_text(capsys) -> None:",
+                "    assert main([\"Hello CLI World\"]) == 0",
+                "    assert capsys.readouterr().out.strip() == \"hello-cli-world\"",
                 "",
             ]
         )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from allCode.agent.related_tests import record_related_test_discovery
 from allCode.core.models import ToolResult
 from allCode.core.result import CompletionEvidence, RepairTarget, RequestedArtifact
 
@@ -21,6 +22,7 @@ class ToolEvidenceRecorder:
     ) -> None:
         self._record_source_overview(result, evidence, workspace_root=workspace_root)
         self._record_validation_failure(result, evidence, workspace_root=workspace_root)
+        record_related_test_discovery(result, evidence, workspace_root=workspace_root)
         self._record_patch_strategy(result, evidence, workspace_root=workspace_root)
         self._record_public_symbols(result, evidence, workspace_root=workspace_root)
         self._clear_repair_after_success(result, evidence, workspace_root=workspace_root)
@@ -45,6 +47,12 @@ class ToolEvidenceRecorder:
             return
         if not isinstance(observation, dict) or observation.get("kind") != "source_overview":
             return
+        overview_target = normalize_evidence_path(
+            str(observation.get("target") or result.metadata.get("target") or ""),
+            workspace_root=workspace_root,
+        )
+        if overview_target and overview_target not in evidence.source_overview_targets:
+            evidence.source_overview_targets.append(overview_target)
         for path in result.metadata.get("source_overview_paths", result.metadata.get("overview_paths", [])):
             if not isinstance(path, str):
                 continue

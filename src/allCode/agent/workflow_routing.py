@@ -63,8 +63,12 @@ def should_use_generation_workflow(
 
 
 def workflow_target_root_from_routing(prompt: str, routing: RoutingDecision) -> str | None:
-    if routing.target_hint and not Path(routing.target_hint).suffix:
-        return routing.target_hint
+    if routing.target_hint:
+        target = Path(routing.target_hint)
+        if not target.suffix:
+            return routing.target_hint
+        if routing.workflow_hint == "multi_file_generation" and str(target.parent) not in {"", "."}:
+            return str(target.parent).replace("\\", "/")
     return infer_generation_target_root(prompt)
 
 
@@ -80,6 +84,7 @@ def infer_generation_target_root(prompt: str) -> str | None:
     if not compact:
         return None
     for pattern in (
+        r"(?P<path>\.?/?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+)\s*(?:경로에|경로|아래에|하위에|내부에)",
         r"[`'\"](?P<path>[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)/[`'\"]",
         r"\b(?:in|under|inside|at)\s+[`'\"]?(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)/?[`'\"]?\b",
         r"[`'\"](?P<path>[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)[`'\"]?\s*(?:아래|하위|내부)",
@@ -151,6 +156,8 @@ def _is_placeholder_source(path: Path) -> bool:
 
 def _safe_directory_root(value: str) -> str | None:
     normalized = value.strip().strip("/").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
     if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
         return None
     if Path(normalized).suffix:

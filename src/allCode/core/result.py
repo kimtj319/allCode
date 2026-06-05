@@ -25,6 +25,7 @@ RecoveryReason = Literal[
     "slow_stream",
     "stream_timeout",
     "validation_failed",
+    "completion_check_failed",
     "external_tool_failed",
     "no_progress",
 ]
@@ -106,6 +107,7 @@ class CompletionEvidence(CoreModel):
     grounding_required: bool = False
     search_candidate_paths: list[str] = Field(default_factory=list)
     inspected_paths: list[str] = Field(default_factory=list)
+    source_overview_targets: list[str] = Field(default_factory=list)
     source_overview_paths: list[str] = Field(default_factory=list)
     source_overview_summaries: list[str] = Field(default_factory=list)
     source_overview_truncated: bool = False
@@ -124,6 +126,8 @@ class CompletionEvidence(CoreModel):
     validation_failure_excerpt: str = ""
     validation_failure_counts: dict[str, int] = Field(default_factory=dict)
     public_api_expectations: list[str] = Field(default_factory=list)
+    related_test_candidates: list[str] = Field(default_factory=list)
+    related_test_discovery_count: int = 0
     feature_objectives: list[str] = Field(default_factory=list)
     patch_ambiguous_files: list[str] = Field(default_factory=list)
     policy_denied_tools: list[str] = Field(default_factory=list)

@@ -42,7 +42,7 @@ class ModelProjectPlanner:
             plan = ProjectPlan.model_validate(payload)
         except Exception:
             return None
-        return _sanitize_plan(plan)
+        return _sanitize_plan(plan, target_hint=target_hint)
 
     def _messages(self, prompt: str, *, target_hint: str | None) -> Sequence[Message]:
         target_line = f"Explicit target hint: {target_hint}" if target_hint else "Explicit target hint: none"
@@ -95,30 +95,44 @@ def _extract_json_object(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def _sanitize_plan(plan: ProjectPlan) -> ProjectPlan | None:
-    target_root = _safe_root(plan.target_root)
-    if target_root is None:
+def _sanitize_plan(plan: ProjectPlan, *, target_hint: str | None = None) -> ProjectPlan | None:
+    original_root = _safe_root(plan.target_root)
+    forced_root = _safe_root(target_hint) if target_hint else None
+    if original_root is None or (target_hint and forced_root is None):
         return None
+    target_root = forced_root or original_root
     files: list[PlannedFile] = []
     for planned_file in plan.files:
         path = _safe_relative_path(planned_file.path)
         if path is None:
             return None
-        if target_root != "." and path.startswith(f"{target_root}/"):
-            path = path[len(target_root) + 1 :]
+        for root in (target_root, original_root):
+            if root != "." and path.startswith(f"{root}/"):
+                path = path[len(root) + 1 :]
+                break
         files.append(planned_file.model_copy(update={"path": path}))
     if not files:
         return None
     commands: list[ValidationCommand] = []
     for command in plan.validation_commands:
+        command = _normalize_validation_cwd(command, original_root=original_root, target_root=target_root)
         sanitized = _sanitize_validation_command(command, target_root=target_root)
         if sanitized is not None:
             commands.append(sanitized)
     return plan.model_copy(update={"target_root": target_root, "files": files, "validation_commands": commands})
 
 
+def _normalize_validation_cwd(command: ValidationCommand, *, original_root: str, target_root: str) -> ValidationCommand:
+    cwd = command.cwd.strip() or "."
+    if original_root != target_root and cwd == original_root:
+        return command.model_copy(update={"cwd": target_root})
+    return command
+
+
 def _safe_root(value: str) -> str | None:
     normalized = value.strip().strip("/").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
     if normalized == ".":
         return "."
     if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):

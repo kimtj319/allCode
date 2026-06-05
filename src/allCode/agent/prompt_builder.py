@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from allCode.agent.answer_prompt import answer_route_instruction
 from allCode.agent.context import ContextBundle
 from allCode.agent.language import (
     ResponseLanguage,
     blocked_summary_labels,
+    detect_response_language,
     final_answer_request_text,
+    language_instruction,
     normalize_response_language,
     response_language_from_messages,
 )
@@ -18,6 +21,7 @@ from allCode.agent.prompt_builder_helpers import (
     tool_results_from_messages,
 )
 from allCode.agent.router import RoutingDecision
+from allCode.agent.source_answer_synthesis import source_analysis_final_answer_instruction
 from allCode.core.models import Message, ToolResult, TurnInput
 from allCode.core.result import RepairTarget
 from allCode.memory.project_obligations import feature_objectives_from_prompt
@@ -35,9 +39,14 @@ class PromptBuilder:
         context_bundle: ContextBundle | None = None,
     ) -> list[Message]:
         content = SYSTEM_PROMPT
+        content = f"{content}\n\n{language_instruction(detect_response_language(turn_input.user_prompt))}"
         if routing is not None:
             content = f"{content}\n\n{self._routing_instruction(routing)}"
-        objectives = feature_objectives_from_prompt(turn_input.user_prompt)
+        objectives = (
+            feature_objectives_from_prompt(turn_input.user_prompt)
+            if routing is not None and routing.requires_mutation
+            else []
+        )
         if objectives:
             content = f"{content}\n\n{self._feature_objective_instruction(objectives)}"
         messages = [Message(role="system", content=content)]
@@ -86,6 +95,21 @@ class PromptBuilder:
             ),
         ]
 
+    def source_analysis_final_answer_request(
+        self,
+        messages: Sequence[Message],
+        *,
+        response_language: ResponseLanguage | None = None,
+    ) -> list[Message]:
+        language = response_language or response_language_from_messages(messages)
+        return [
+            *messages,
+            Message(
+                role="user",
+                content=source_analysis_final_answer_instruction(language),
+            ),
+        ]
+
     def inspect_stage_request(
         self,
         messages: Sequence[Message],
@@ -97,7 +121,7 @@ class PromptBuilder:
         targets = [path for path in target_paths if path][:6]
         details: list[str] = []
         if targets:
-            details.append("Representative targets: " + ", ".join(targets))
+            details.append("Target paths: " + ", ".join(targets))
         if reason:
             details.append("Stage reason: " + reason)
         if stage == "targeted_read":
@@ -106,12 +130,14 @@ class PromptBuilder:
                 "Prefer source_probe on the listed targets in priority order within the remaining budget; use read_file only when a precise line range or missing symbol detail is still needed. "
                 "Avoid repeating files that were already probed or read. "
                 "For each file, collect only bounded evidence: public classes/functions, import or runtime wiring, and entrypoint clues. "
+                "Pay close attention to cross-module interactions, delegation sequence, and instantiation flow across packages. "
                 "Keep this turn strictly read-only; do not create README, SUMMARY, report, or other document files. "
-                "After representative evidence is observed, provide the analysis in the final answer and separate observed facts from inferred roles."
+                "After representative evidence is observed, provide the analysis in the final answer, explaining the relationships and execution flow between components, and separate observed facts from inferred roles."
             )
         else:
             instruction = (
                 "Continue the read-only source analysis with bounded evidence gathering. "
+                "If target paths are listed, call source_overview on those paths before narrowing to files. "
                 "Do not mutate files."
             )
         return [
@@ -261,6 +287,37 @@ class PromptBuilder:
             ),
         ]
 
+    def related_test_discovery_request(
+        self,
+        messages: Sequence[Message],
+        *,
+        changed_source_paths: Sequence[str] = (),
+        symbols: Sequence[str] = (),
+        phase_block_reason: str = "",
+    ) -> list[Message]:
+        details: list[str] = []
+        sources = [path for path in changed_source_paths if path][:6]
+        if sources:
+            details.append("Changed source files: " + ", ".join(sources))
+        symbol_list = [symbol for symbol in symbols if symbol][:8]
+        if symbol_list:
+            details.append("Public symbols or API hints: " + ", ".join(symbol_list))
+        if phase_block_reason:
+            details.append(f"Blocked phase feedback: {phase_block_reason}")
+        return [
+            *messages,
+            Message(
+                role="user",
+                content=self._join_prompt_parts(
+                    "Before validation, discover tests related to the changed source. "
+                    "Use exactly one read-only discovery tool call: search_files, source_overview, glob_files, or list_tree. "
+                    "Prefer search_files for changed symbol names or file stems, and source_overview with focus=tests for broad test inventory. "
+                    "Do not call run_tests yet, and do not mutate files in this phase.",
+                    "\n".join(details),
+                ),
+            ),
+        ]
+
     def native_tool_call_retry(self, messages: Sequence[Message], *, parser_error: str | None = None) -> list[Message]:
         detail = f" Parser note: {parser_error}" if parser_error else ""
         return [
@@ -339,6 +396,9 @@ class PromptBuilder:
         ]
         if routing.target_hint:
             lines.append(f"Target hint: {routing.target_hint}.")
+        answer_instruction = answer_route_instruction(routing)
+        if answer_instruction:
+            lines.append(answer_instruction)
         if routing.read_only_requested:
             lines.extend(
                 [
@@ -349,17 +409,6 @@ class PromptBuilder:
                     "파일 생성, 수정, 삭제, 포맷팅, 커밋, 테스트 실행 도구를 호출하지 마십시오.",
                 ]
             )
-        if routing.kind == "answer" and not routing.requires_external_knowledge and not routing.allows_tool_use:
-            lines.extend(
-                [
-                    "This route is direct-answer only.",
-                    "Do not call tools for this turn; answer from the prompt and supplied context.",
-                ]
-            )
-            if "refused" in routing.reason.lower() or "disallowed" in routing.reason.lower():
-                lines.append(
-                    "For safety refusals, explicitly mention that the request is 위험 and cannot proceed without proper 승인."
-                )
         if routing.kind == "inspect":
             lines.extend(
                 [
@@ -395,17 +444,6 @@ class PromptBuilder:
                 [
                     "Validation is required before reporting success.",
                     "Use run_tests for pytest, unittest, npm test, cargo test, gradle test, or mvn test commands; do not use run_command for validation commands.",
-                ]
-            )
-        if routing.requires_external_knowledge:
-            lines.extend(
-                [
-                    "Only use web_search or web_fetch for external evidence; do not call file, shell, mutation, or validation tools.",
-                    "Use the registered native web_search or web_fetch tool only to collect external evidence.",
-                    "If web_search reports web_search_unavailable or backend disabled, state that the web backend is not configured and cite the setting to configure.",
-                    "When explaining unavailable web evidence in Korean, include the term 검색 so the user can recognize the web-search failure.",
-                    "Never print tool-call plans, action JSON, or raw search results as the final answer.",
-                    "After web evidence is observed, write a natural-language answer grounded in that evidence.",
                 ]
             )
         return "\n".join(lines)

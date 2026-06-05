@@ -9,8 +9,10 @@ from typing import Any
 
 from pydantic import Field, ValidationError
 
+from allCode.agent.answer_policy import apply_answer_policy
 from allCode.agent.context import ContextBundle
 from allCode.agent.prompt_constraints import PromptConstraintExtractor, PromptConstraints
+from allCode.agent.model_router_signals import answer_followup_request, local_workspace_request as detect_local_workspace_request
 from allCode.agent.router import (
     RouteKind,
     RoutingDecision,
@@ -18,6 +20,7 @@ from allCode.agent.router import (
     ToolCapability,
     WorkflowHint,
 )
+from allCode.agent.route_validator import validate_route
 from allCode.core.models import CoreModel, Message
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings
@@ -134,7 +137,7 @@ class ModelRouter:
         if constraints.no_external_network:
             flags.add("no_external_network")
             capabilities.discard("web_search")
-        answer_followup = _answer_followup_request(constraints, prompt)
+        answer_followup = answer_followup_request(constraints, prompt)
         if constraints.validation_requested_hint and not answer_followup and not read_only_requested:
             flags.add("requires_validation")
             if not constraints.no_shell_requested:
@@ -160,7 +163,7 @@ class ModelRouter:
         if confidence < 0.45:
             kind = "inspect"
             capabilities = {"read_file", "search_workspace"}
-        local_workspace_request = _local_workspace_request(constraints)
+        local_workspace_request = detect_local_workspace_request(constraints)
         if constraints.external_knowledge_hint and not constraints.no_external_network and not local_workspace_request:
             kind = "inspect"
         if constraints.mutation_requested_hint and not read_only_requested and not answer_followup:
@@ -224,21 +227,22 @@ class ModelRouter:
             and "run_validation" in capabilities,
             requires_external_knowledge=requires_external,
         )
-        return _sanitize_read_only_route(
+        return self._validate_route(
             route,
             constraints=constraints,
             local_workspace_request=local_workspace_request,
+            answer_followup=answer_followup,
         )
 
     def _safe_fallback(self, prompt: str, constraints: PromptConstraints) -> RoutingDecision:
         decision = self._fallback_router.classify(prompt)
         capabilities = set(decision.tool_capabilities)
         kind = decision.kind
-        answer_followup = _answer_followup_request(constraints, prompt)
+        answer_followup = answer_followup_request(constraints, prompt)
         if constraints.followup_requested or constraints.workspace_evidence_requested or constraints.path_hints:
             kind = "inspect"
             capabilities.update({"read_file", "search_workspace"})
-        local_workspace_request = _local_workspace_request(constraints)
+        local_workspace_request = detect_local_workspace_request(constraints)
         if constraints.external_knowledge_hint and not constraints.no_external_network and not local_workspace_request:
             kind = "inspect"
             capabilities.add("web_search")
@@ -251,7 +255,7 @@ class ModelRouter:
             kind = "answer"
             capabilities.clear()
         if constraints.read_only_requested:
-            local_workspace_request = _local_workspace_request(constraints)
+            local_workspace_request = detect_local_workspace_request(constraints)
             capabilities.difference_update({"mutate_file", "delete_file", "run_shell", "run_validation"})
             kind = "inspect" if _read_only_needs_workspace_tools(constraints, local_workspace_request, capabilities) else "answer"
             if kind == "inspect":
@@ -287,6 +291,32 @@ class ModelRouter:
         )
         return _sanitize_read_only_route(
             route,
+            constraints=constraints,
+            local_workspace_request=local_workspace_request,
+        )
+
+    @staticmethod
+    def _validate_route(
+        route: RoutingDecision,
+        *,
+        constraints: PromptConstraints,
+        local_workspace_request: bool,
+        answer_followup: bool,
+    ) -> RoutingDecision:
+        validated, report = validate_route(
+            route,
+            constraints=constraints,
+            local_workspace_request=local_workspace_request,
+            answer_followup=answer_followup,
+        )
+        if not report.repaired:
+            return apply_answer_policy(validated, constraints=constraints, local_workspace_request=local_workspace_request)
+        reason = validated.reason
+        suffix = "; route validation repaired: " + ", ".join(report.repairs[:4])
+        if suffix not in reason:
+            reason = f"{reason}{suffix}"
+        return apply_answer_policy(
+            validated.model_copy(update={"reason": reason}),
             constraints=constraints,
             local_workspace_request=local_workspace_request,
         )
@@ -361,113 +391,3 @@ def _first_json_object(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
-
-
-def _answer_followup_request(constraints: PromptConstraints, prompt: str) -> bool:
-    """Detect follow-ups that ask to revise the prior answer, not the workspace."""
-
-    if not constraints.followup_requested or constraints.path_hints:
-        return False
-    if _artifact_mutation_followup(prompt):
-        return False
-    if constraints.answer_followup_hint:
-        return True
-    lowered = " ".join(prompt.lower().split())
-    compact = lowered.replace(" ", "")
-    answer_markers = (
-        "previous answer",
-        "previous response",
-        "last answer",
-        "last response",
-        "your answer",
-        "이전 답변",
-        "앞선 답변",
-        "방금 답변",
-        "이전답변",
-        "앞선답변",
-        "방금답변",
-    )
-    summary_markers = (
-        "do not summarize again",
-        "without re-summarizing",
-        "don't re-summarize",
-        "재요약하지",
-        "다시전체재요약하지",
-        "전체재요약하지",
-    )
-    return any(marker in lowered or marker in compact for marker in answer_markers + summary_markers)
-
-
-def _artifact_mutation_followup(prompt: str) -> bool:
-    lowered = " ".join(prompt.lower().split())
-    compact = lowered.replace(" ", "")
-    artifact_markers = (
-        "that file",
-        "same file",
-        "document",
-        "report",
-        "readme",
-        "spec",
-        "그파일",
-        "해당파일",
-        "문서",
-        "보고서",
-        "기획서",
-        "시리즈바이블",
-        "파일",
-    )
-    mutation_markers = (
-        "add",
-        "update",
-        "modify",
-        "edit",
-        "fix",
-        "append",
-        "추가",
-        "수정",
-        "변경",
-        "반영",
-        "보강",
-        "고쳐",
-    )
-    answer_context_markers = (
-        "대화",
-        "답변",
-        "논리",
-        "주장",
-        "반박",
-        "재반박",
-        "argument",
-        "answer",
-        "conversation",
-    )
-    has_artifact = any(marker in lowered or marker in compact for marker in artifact_markers)
-    has_mutation = any(marker in lowered or marker in compact for marker in mutation_markers)
-    answer_context = any(marker in lowered or marker in compact for marker in answer_context_markers)
-    return has_artifact and has_mutation and not answer_context
-
-
-def _local_workspace_request(constraints: PromptConstraints) -> bool:
-    if constraints.no_external_network or constraints.path_hints:
-        return True
-    markers = {
-        "directory structure",
-        "file layout",
-        "file list",
-        "repo",
-        "repository",
-        "workspace",
-        "디렉터리",
-        "디렉토리",
-        "파일 구조",
-        "파일 목록",
-        "현재 디렉터리",
-        "현재 디렉토리",
-        "워크스페이스",
-        "저장소",
-    }
-    return any(
-        marker in matched or matched in marker
-        for matched in constraints.matched_constraints
-        for marker in markers
-    )

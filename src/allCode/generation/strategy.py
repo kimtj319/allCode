@@ -72,6 +72,16 @@ def safe_name(value: str) -> str:
     return cleaned
 
 
+def safe_target_root(value: str) -> str:
+    normalized = value.strip().strip("/").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(part in {".", "..", ".git", ".venv", "node_modules"} for part in parts):
+        return "generated_project"
+    return "/".join(safe_name(part) for part in parts)
+
+
 def validation_command(command: str, *, cwd: str = ".", timeout_seconds: int = 180, environment: dict[str, str] | None = None) -> ValidationCommand:
     return ValidationCommand(
         command=command,

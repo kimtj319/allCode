@@ -8,6 +8,17 @@ from allCode.agent.finalization_helpers import blocked_summary, has_blocking_too
 from allCode.agent.grounding import next_candidate_read_call
 from allCode.agent.phase_gate import mutation_artifact_required
 from allCode.agent.round_runtime import INSPECTION_TOOL_NAMES, MUTATION_TOOL_NAMES, RoundRuntime
+from allCode.agent.round_runner_helpers import (
+    can_retry_phase_block,
+    evidence_answer,
+    mutation_complete,
+    phase_block_feedback,
+    record_context_reads,
+    response_language,
+    test_authoring_messages,
+    validation_repair_messages,
+    validated_complete,
+)
 from allCode.agent.turn_completion import LoopOutcome
 from allCode.core.models import Message, ToolCall, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence
@@ -50,7 +61,7 @@ class RoundToolHandler:
         )
         runtime.messages.append(Message(role="assistant", content=parsed.text, tool_calls=parsed.tool_calls))
         runtime.messages = self._runner._prompt_builder.append_tool_results(runtime.messages, results)
-        self._runner._record_repair_context_reads(
+        record_context_reads(
             results,
             runtime.repair_context_read_paths,
             workspace_root=turn_input.workspace.root,
@@ -70,21 +81,21 @@ class RoundToolHandler:
             results,
             round_index,
         )
-        if self._runner._validated_change_complete(routing, evidence):
+        if validated_complete(routing, evidence):
             return LoopOutcome(
                 status="success",
-                answer=self._runner._evidence_final_answer(turn_input.user_prompt, evidence, turn_input.workspace.root),
+                answer=evidence_answer(turn_input.user_prompt, evidence, turn_input.workspace.root),
             )
-        if self._runner._mutation_change_complete(routing, evidence):
+        if mutation_complete(routing, evidence):
             if runtime.final_answer_after_change_requested:
                 return LoopOutcome(
                     status="success",
-                    answer=self._runner._evidence_final_answer(turn_input.user_prompt, evidence, turn_input.workspace.root),
+                    answer=evidence_answer(turn_input.user_prompt, evidence, turn_input.workspace.root),
                 )
             runtime.final_answer_after_change_requested = True
             runtime.messages = self._runner._prompt_builder.final_answer_request(
                 runtime.messages,
-                response_language=self._runner._response_language(turn_input.user_prompt),
+                response_language=response_language(turn_input.user_prompt),
             )
             return None
         phase_block = await self._handle_phase_block(runtime, recovery, state, evidence, phase_gate, results)
@@ -209,11 +220,17 @@ class RoundToolHandler:
             runtime.mutation_succeeded_after_failed_validation = False
 
     async def _handle_phase_block(self, runtime, recovery, state, evidence, phase_gate, results) -> LoopOutcome | None:
-        blocked_phases = {"mutation_required", "test_authoring_required", "repair_mutation_required", "validation_failed"}
+        blocked_phases = {
+            "mutation_required",
+            "test_authoring_required",
+            "related_test_discovery_required",
+            "repair_mutation_required",
+            "validation_failed",
+        }
         if not (results and all(result.error_type == "schema_denied" for result in results) and phase_gate.phase in blocked_phases):
             return None
-        block_reason = self._runner._phase_block_feedback(phase_gate, results)
-        if not self._runner._can_retry_phase_block(runtime.phase_block_counts, phase_gate=phase_gate, reason="schema_denied"):
+        block_reason = phase_block_feedback(phase_gate, results)
+        if not can_retry_phase_block(runtime.phase_block_counts, phase_gate=phase_gate, reason="schema_denied"):
             return LoopOutcome(
                 status="partial",
                 answer=blocked_summary(self._runner._prompt_builder, runtime.messages, block_reason),
@@ -222,12 +239,14 @@ class RoundToolHandler:
         state.phase = "recovery"
         await self._runner._record_recovery(state, recovery, "no_progress", attempts=recovery.mutation_action_requests, last_error=block_reason)
         if phase_gate.phase == "test_authoring_required":
-            runtime.messages = self._runner._test_authoring_messages(runtime.messages, evidence, phase_gate=phase_gate, phase_block_reason=block_reason)
+            runtime.messages = test_authoring_messages(self._runner._phase_block, runtime.messages, evidence, phase_gate=phase_gate, phase_block_reason=block_reason)
+        elif phase_gate.phase == "related_test_discovery_required":
+            runtime.messages = self._runner._phase_block.related_test_discovery_messages(runtime.messages, evidence, phase_gate=phase_gate, phase_block_reason=block_reason)
         elif phase_gate.phase in {"validation_failed", "repair_mutation_required"}:
-            runtime.messages = self._runner._validation_repair_messages(runtime.messages, evidence, phase_gate=phase_gate, phase_block_reason=block_reason)
+            runtime.messages = validation_repair_messages(self._runner._phase_block, runtime.messages, evidence, phase_gate=phase_gate, phase_block_reason=block_reason)
             runtime.validation_repair_pending = True
         elif recovery.can_request_mutation_action(max_attempts=6):
-            runtime.messages = self._runner._test_authoring_messages(runtime.messages, evidence, phase_gate=phase_gate)
+            runtime.messages = test_authoring_messages(self._runner._phase_block, runtime.messages, evidence, phase_gate=phase_gate)
         else:
             return LoopOutcome(
                 status="partial",
@@ -240,8 +259,8 @@ class RoundToolHandler:
     async def _handle_patch_strategy(self, runtime, recovery, state, evidence, phase_gate, results) -> LoopOutcome | None:
         if not any(result.error_type == "patch_strategy_required" for result in results):
             return None
-        block_reason = self._runner._phase_block_feedback(phase_gate, results)
-        if not self._runner._can_retry_phase_block(runtime.phase_block_counts, phase_gate=phase_gate, reason="patch_strategy_required"):
+        block_reason = phase_block_feedback(phase_gate, results)
+        if not can_retry_phase_block(runtime.phase_block_counts, phase_gate=phase_gate, reason="patch_strategy_required"):
             return LoopOutcome(
                 status="partial",
                 answer=blocked_summary(self._runner._prompt_builder, runtime.messages, block_reason),
@@ -255,7 +274,7 @@ class RoundToolHandler:
             attempts=runtime.phase_block_counts.get((phase_gate.phase, "patch_strategy_required"), 1),
             last_error=block_reason,
         )
-        runtime.messages = self._runner._validation_repair_messages(runtime.messages, evidence, phase_gate=phase_gate, phase_block_reason=block_reason)
+        runtime.messages = validation_repair_messages(self._runner._phase_block, runtime.messages, evidence, phase_gate=phase_gate, phase_block_reason=block_reason)
         runtime.validation_repair_pending = True
         runtime.mutation_action_pending = True
         return None
