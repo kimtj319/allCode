@@ -5,6 +5,8 @@ from __future__ import annotations
 from allCode.core.models import ToolCall
 from allCode.llm.settings import ToolSchema
 
+READ_ONLY_BLOCKED_TOOL_NAMES = {"write_file", "patch_file", "delete_path", "run_command", "run_tests"}
+
 
 class ToolSchemaFilter:
     def __init__(self, *, registry, policy) -> None:
@@ -23,6 +25,8 @@ class ToolSchemaFilter:
     ) -> list[ToolSchema]:
         definitions = self._registry.definitions()
         allowed_names = self._policy.allowed_registered_tool_names(routing, definitions)
+        if getattr(routing, "read_only_requested", False):
+            allowed_names = {name for name in allowed_names if name not in READ_ONLY_BLOCKED_TOOL_NAMES}
         if suppress_validation:
             allowed_names = {name for name in allowed_names if name != "run_tests"}
         if only_mutation:

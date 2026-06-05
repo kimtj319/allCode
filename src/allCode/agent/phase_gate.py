@@ -15,7 +15,6 @@ from allCode.agent.artifact_detection import (
 from allCode.core.models import CoreModel
 from allCode.core.path_patterns import extract_prompt_paths
 from allCode.core.result import CompletionEvidence, RepairTarget, RequestedArtifact
-from allCode.agent.validation_repair import rank_repair_targets
 
 PhaseName = Literal[
     "normal",
@@ -60,6 +59,12 @@ def ensure_requested_artifacts(
 ) -> None:
     """Populate prompt-derived artifact obligations without benchmark-specific rules."""
 
+    if routing is not None and (
+        getattr(routing, "read_only_requested", False)
+        or getattr(routing, "kind", "") in {"answer", "inspect"}
+    ):
+        satisfy_requested_artifacts(evidence, workspace_root=workspace_root)
+        return
     mutation_route = routing is not None and getattr(routing, "requires_mutation", False)
     if mutation_route:
         for path in extract_prompt_paths(prompt):
@@ -186,13 +191,35 @@ def unsatisfied_artifact_labels(evidence: CompletionEvidence, *kinds: str) -> li
     return labels
 
 
-def mutation_artifact_required(prompt: str, evidence: CompletionEvidence, *, workspace_root: str) -> bool:
-    ensure_requested_artifacts(prompt, evidence, workspace_root=workspace_root)
+def mutation_artifact_required(
+    prompt: str,
+    evidence: CompletionEvidence,
+    *,
+    workspace_root: str,
+    routing=None,
+) -> bool:
+    if routing is not None and (
+        getattr(routing, "read_only_requested", False)
+        or getattr(routing, "kind", "") in {"answer", "inspect"}
+    ):
+        return False
+    ensure_requested_artifacts(prompt, evidence, workspace_root=workspace_root, routing=routing)
     return evidence.has_unsatisfied_artifacts("source", "document", "test")
 
 
-def test_artifact_required(prompt: str, evidence: CompletionEvidence, *, workspace_root: str) -> bool:
-    ensure_requested_artifacts(prompt, evidence, workspace_root=workspace_root)
+def test_artifact_required(
+    prompt: str,
+    evidence: CompletionEvidence,
+    *,
+    workspace_root: str,
+    routing=None,
+) -> bool:
+    if routing is not None and (
+        getattr(routing, "read_only_requested", False)
+        or getattr(routing, "kind", "") in {"answer", "inspect"}
+    ):
+        return False
+    ensure_requested_artifacts(prompt, evidence, workspace_root=workspace_root, routing=routing)
     if evidence.has_unsatisfied_artifacts("test"):
         return True
     if not _prompt_requests_tests(prompt):
@@ -217,6 +244,8 @@ def build_phase_tool_gate(
     test_authoring_inspection_rounds: int = 0,
 ) -> PhaseToolGate:
     ensure_requested_artifacts(prompt, evidence, workspace_root=workspace_root, routing=routing)
+    if getattr(routing, "read_only_requested", False) or getattr(routing, "kind", "") in {"answer", "inspect"}:
+        return PhaseToolGate()
     if repair_exhausted:
         return PhaseToolGate(
             phase="repair_exhausted",
@@ -224,9 +253,14 @@ def build_phase_tool_gate(
             required_next_action="Summarize the failed validation and repair attempts.",
             reason="repair attempts are exhausted",
         )
-    if getattr(routing, "read_only_requested", False) or getattr(routing, "requires_external_knowledge", False):
+    if getattr(routing, "requires_external_knowledge", False):
         return PhaseToolGate()
-    if getattr(routing, "requires_mutation", False) and mutation_artifact_required(prompt, evidence, workspace_root=workspace_root):
+    if getattr(routing, "requires_mutation", False) and mutation_artifact_required(
+        prompt,
+        evidence,
+        workspace_root=workspace_root,
+        routing=routing,
+    ):
         missing_artifacts = unsatisfied_artifact_labels(evidence, "source", "document", "test")
         missing_kinds = unsatisfied_artifact_kinds(evidence, "source", "document", "test")
         missing_targets = [artifact.target for artifact in evidence.unsatisfied_artifacts("source", "document", "test") if artifact.target]
@@ -265,7 +299,9 @@ def build_phase_tool_gate(
             reason="validation is required after file mutation",
         )
     if validation_repair_pending:
-        return _validation_repair_gate(
+        from allCode.agent.phase_gate_repair import validation_repair_gate
+
+        return validation_repair_gate(
             phase="validation_failed",
             evidence=evidence,
             workspace_root=workspace_root,
@@ -303,7 +339,9 @@ def validation_repair_phase_gate(
 ) -> PhaseToolGate:
     """Build the repair gate used by validation control tests and round runner."""
 
-    return _validation_repair_gate(
+    from allCode.agent.phase_gate_repair import validation_repair_gate
+
+    return validation_repair_gate(
         phase="repair_mutation_required",
         evidence=evidence,
         workspace_root=workspace_root,
@@ -381,156 +419,6 @@ def _existing_targets(paths: Sequence[str], *, workspace_root: str) -> list[str]
     return existing
 
 
-def _validation_repair_gate(
-    *,
-    phase: PhaseName,
-    evidence: CompletionEvidence,
-    workspace_root: str,
-    reason: str,
-    repair_context_read_paths: set[str] | None = None,
-) -> PhaseToolGate:
-    repair_targets = rank_repair_targets(
-        evidence.validation_failure_targets,
-        evidence=evidence,
-        workspace_root=workspace_root,
-    )[:3]
-    source_fallback_targets = _changed_source_repair_targets(evidence, workspace_root=workspace_root)
-    if source_fallback_targets and (not repair_targets or all(_is_test_target(target, workspace_root=workspace_root) for target in repair_targets)):
-        repair_targets = _merge_repair_targets(source_fallback_targets, repair_targets)[:3]
-    if not repair_targets:
-        repair_targets = source_fallback_targets
-    ambiguous_files = list(dict.fromkeys(evidence.patch_ambiguous_files))[:3]
-    missing_module_targets = [target for target in repair_targets if target.reason == "missing_module"]
-    unstable_targets = _unstable_repair_targets(repair_targets, evidence, workspace_root=workspace_root)
-    read_paths = repair_context_read_paths or set()
-    syntax_target_pending_read = _has_syntax_repair_target(repair_targets, evidence) and not _has_current_repair_read(
-        repair_targets,
-        ambiguous_files,
-        workspace_root=workspace_root,
-        repair_context_read_paths=read_paths,
-    )
-    ambiguous_active = _has_ambiguous_repair_target(
-        repair_targets,
-        ambiguous_files,
-        workspace_root=workspace_root,
-    ) or bool(ambiguous_files and not repair_targets)
-    if missing_module_targets:
-        allowed = {"write_file", "read_file"}
-        preferred = ["write_file", "read_file"]
-        action = "Create the missing import module source file with write_file."
-    elif unstable_targets:
-        has_current_read = _has_current_repair_read(
-            unstable_targets,
-            ambiguous_files,
-            workspace_root=workspace_root,
-            repair_context_read_paths=read_paths,
-        )
-        if has_current_read:
-            allowed = {"write_file"}
-            preferred = ["write_file"]
-            action = "Rewrite the repeatedly failing target with write_file using the inspected file context."
-        else:
-            allowed = {"read_file"}
-            preferred = ["read_file"]
-            action = "Read the repeatedly failing validation target before full-file repair."
-    elif syntax_target_pending_read:
-        allowed = {"read_file"}
-        preferred = ["read_file"]
-        action = "Read the exact validation failure target before repair mutation."
-    elif _has_syntax_repair_target(repair_targets, evidence):
-        allowed = set(MUTATION_TOOLS)
-        preferred = ["write_file", "patch_file"]
-        action = "Repair the syntax failure target with write_file or a sufficiently contextual patch_file."
-    elif ambiguous_active:
-        has_current_read = _has_current_repair_read(
-            repair_targets,
-            ambiguous_files,
-            workspace_root=workspace_root,
-            repair_context_read_paths=read_paths,
-        )
-        if has_current_read:
-            allowed = {"read_file", "write_file"}
-            preferred = ["write_file", "read_file"]
-            action = "Rewrite the file with write_file, or read a narrower range if more context is needed."
-        else:
-            allowed = {"read_file"}
-            preferred = ["read_file"]
-            action = "Read the ambiguous repair target range before using write_file."
-    elif repair_targets:
-        has_current_read = _has_current_repair_read(
-            repair_targets,
-            ambiguous_files,
-            workspace_root=workspace_root,
-            repair_context_read_paths=read_paths,
-        )
-        fallback_source_targets = repair_targets[0].reason == "changed_source_after_validation_failure"
-        if fallback_source_targets and not has_current_read:
-            allowed = {"read_file", *MUTATION_TOOLS}
-            preferred = ["write_file", "patch_file", "read_file"]
-            action = "Repair the changed source file, or read it first if more context is needed."
-        elif has_current_read:
-            allowed = set(MUTATION_TOOLS)
-            preferred = ["write_file", "patch_file"]
-            action = "Repair the already inspected validation target with write_file or patch_file."
-        else:
-            allowed = {"read_file"}
-            preferred = ["read_file"]
-            action = "Read the ranked validation target before repair mutation."
-    else:
-        allowed = {*INSPECTION_TOOLS, *MUTATION_TOOLS}
-        preferred = ["read_file", "patch_file", "write_file"] if repair_targets else ["search_files", "read_file", "patch_file"]
-        action = "Inspect the failure if needed, then repair with patch_file or write_file."
-    return PhaseToolGate(
-        phase=phase,
-        allowed_tool_names=allowed,
-        required_next_action=action,
-        reason=reason,
-        repair_targets=repair_targets,
-        patch_ambiguous_files=ambiguous_files,
-        preferred_next_tools=preferred,
-    )
-
-
-def _has_ambiguous_repair_target(
-    repair_targets: list[RepairTarget],
-    ambiguous_files: list[str],
-    *,
-    workspace_root: str,
-) -> bool:
-    normalized_ambiguous = {
-        _normalize_target(path, workspace_root=workspace_root)
-        for path in ambiguous_files
-        if path
-    }
-    for target in repair_targets:
-        normalized = _normalize_target(target.file_path, workspace_root=workspace_root)
-        if normalized in normalized_ambiguous:
-            return True
-    return False
-
-
-def _has_syntax_repair_target(repair_targets: list[RepairTarget], evidence: CompletionEvidence) -> bool:
-    return bool(repair_targets) and any(
-        symbol in {"SyntaxError", "IndentationError"}
-        for symbol in evidence.validation_failure_symbols
-    )
-
-
-def _unstable_repair_targets(
-    repair_targets: list[RepairTarget],
-    evidence: CompletionEvidence,
-    *,
-    workspace_root: str,
-) -> list[RepairTarget]:
-    unstable: list[RepairTarget] = []
-    for target in repair_targets:
-        normalized = _normalize_target(target.file_path, workspace_root=workspace_root)
-        count = evidence.validation_failure_counts.get(normalized) or evidence.validation_failure_counts.get(target.file_path) or 0
-        if count >= 2:
-            unstable.append(target.model_copy(update={"file_path": normalized}))
-    return unstable[:3]
-
-
 def _recent_source_paths(evidence: CompletionEvidence) -> list[str]:
     paths: list[str] = []
     for path in [*evidence.created_files, *evidence.changed_files]:
@@ -540,56 +428,6 @@ def _recent_source_paths(evidence: CompletionEvidence) -> list[str]:
         if path not in paths:
             paths.append(path)
     return paths[:5]
-
-
-def _changed_source_repair_targets(evidence: CompletionEvidence, *, workspace_root: str) -> list[RepairTarget]:
-    targets: list[RepairTarget] = []
-    for path in [*evidence.changed_files, *evidence.created_files]:
-        normalized = _normalize_target(path, workspace_root=workspace_root)
-        lowered = normalized.lower()
-        if not normalized or looks_like_test_artifact(normalized, workspace_root=workspace_root):
-            continue
-        if "/tests/" in lowered or Path(lowered).name.startswith("test_"):
-            continue
-        if Path(normalized).suffix.lower() not in {".py", ".js", ".ts", ".tsx", ".java", ".go", ".rs"}:
-            continue
-        if not any(target.file_path == normalized for target in targets):
-            targets.append(RepairTarget(file_path=normalized, reason="changed_source_after_validation_failure"))
-    return targets[:3]
-
-
-def _is_test_target(target: RepairTarget, *, workspace_root: str) -> bool:
-    normalized = _normalize_target(target.file_path, workspace_root=workspace_root)
-    lowered = normalized.lower()
-    return looks_like_test_artifact(normalized, workspace_root=workspace_root) or "/tests/" in lowered or Path(lowered).name.startswith("test_")
-
-
-def _merge_repair_targets(left: list[RepairTarget], right: list[RepairTarget]) -> list[RepairTarget]:
-    merged: list[RepairTarget] = []
-    for target in [*left, *right]:
-        key = (target.file_path, target.line_number, target.symbol)
-        if not any((item.file_path, item.line_number, item.symbol) == key for item in merged):
-            merged.append(target)
-    return merged
-
-
-def _has_current_repair_read(
-    repair_targets: list[RepairTarget],
-    ambiguous_files: list[str],
-    *,
-    workspace_root: str,
-    repair_context_read_paths: set[str],
-) -> bool:
-    normalized_reads = {
-        _normalize_target(path, workspace_root=workspace_root)
-        for path in repair_context_read_paths
-        if path
-    }
-    if not normalized_reads:
-        return False
-    targets = [target.file_path for target in repair_targets] or ambiguous_files
-    return any(_normalize_target(path, workspace_root=workspace_root) in normalized_reads for path in targets)
-
 
 def _has_inspected_patch_ambiguous(evidence: CompletionEvidence, *, workspace_root: str) -> bool:
     normalized_reads = {

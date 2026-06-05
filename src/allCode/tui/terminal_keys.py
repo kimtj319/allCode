@@ -8,6 +8,8 @@ import tty
 from contextlib import contextmanager
 from typing import Iterator, TextIO
 
+from allCode.tui.terminal_paste_sanitizer import normalize_pasted_text
+
 
 class TerminalKeyReader:
     """Translate raw terminal bytes into editor actions."""
@@ -104,10 +106,10 @@ class TerminalKeyReader:
         while True:
             char = self.stdin.read(1)
             if char == "":
-                return buffer
+                return normalize_pasted_text(buffer)
             buffer += char
             if buffer.endswith(end):
-                return buffer[: -len(end)]
+                return normalize_pasted_text(buffer[: -len(end)])
 
     def _input_ready(self, timeout: float) -> bool:
         try:

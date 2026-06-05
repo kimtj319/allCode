@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Awaitable, Callable
 from typing import Literal
 
-from allCode.core.models import CoreModel
+from allCode.core.models import CoreModel, ToolCall
 
 ApprovalMode = Literal["ask", "auto", "rules"]
+ApprovalAction = Literal["approve_once", "deny", "allow_session"]
 
 
 class ApprovalDecision(CoreModel):
@@ -17,6 +19,17 @@ class ApprovalDecision(CoreModel):
     reason: str = ""
     preview: str = ""
     risk: str = "low"
+
+
+class ApprovalRequest(CoreModel):
+    tool_name: str
+    decision: ApprovalDecision
+    preview: str = ""
+    risk: str = "low"
+    call: ToolCall
+
+
+ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalAction]]
 
 
 class ApprovalManager:
@@ -87,6 +100,11 @@ class ApprovalManager:
         except ValueError:
             parts = command.split()
         return " ".join(parts[:12])
+
+    def allow_for_session(self, value: str) -> None:
+        normalized = value.strip()
+        if normalized and normalized not in self.session_allow:
+            self.session_allow.append(normalized)
 
     def _session_allows(self, value: str) -> bool:
         normalized = value.strip()

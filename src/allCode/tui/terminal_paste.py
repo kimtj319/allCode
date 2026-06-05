@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from collections.abc import Iterable
 
 from allCode.tui.terminal_text_area import TerminalTextArea
+from allCode.tui.terminal_paste_sanitizer import normalize_pasted_text
 
 LARGE_PASTE_CHAR_THRESHOLD = 1000
 
@@ -33,7 +34,7 @@ class PasteManager:
         self._issued_counts.clear()
 
     def insert_paste(self, area: TerminalTextArea, pasted: str) -> None:
-        normalized = pasted.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = normalize_pasted_text(pasted)
         if len(normalized) > self.threshold:
             placeholder = self._next_placeholder(len(normalized))
             self._pending.append(PendingPaste(placeholder=placeholder, text=normalized))

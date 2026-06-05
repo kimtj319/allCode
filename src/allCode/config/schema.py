@@ -83,8 +83,23 @@ class WebConfig(StrictConfigModel):
         return value
 
 
+class SourceIntelligenceConfig(StrictConfigModel):
+    mode: Literal["off", "ast", "ast_lsp", "auto"] = "auto"
+    lsp_enabled: bool = False
+    lsp_timeout_ms: int = 1000
+    servers: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("lsp_timeout_ms")
+    @classmethod
+    def require_positive_lsp_timeout(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("value must be greater than zero")
+        return value
+
+
 class AppConfig(StrictConfigModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    source_intelligence: SourceIntelligenceConfig = Field(default_factory=SourceIntelligenceConfig)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from allCode.agent.language import ResponseLanguage, response_language_from_messages
 from allCode.agent.prompt_builder import PromptBuilder
 from allCode.core.models import Message, ToolResult
 
@@ -16,23 +17,39 @@ def final_answer_for_result(
     outcome_answer: str,
     error_message: str | None,
     messages: Sequence[Message],
+    response_language: ResponseLanguage | None = None,
 ) -> str:
+    language = response_language or response_language_from_messages(messages)
     if evidence_ready or finalized_status == "partial":
         return outcome_answer
     if finalized_status == "failed":
         if outcome_answer.strip():
             if error_message:
+                if language == "en":
+                    return f"Not reported as complete: {error_message}\n\n{outcome_answer}"
                 return f"완료로 처리하지 않았습니다: {error_message}\n\n{outcome_answer}"
             return outcome_answer
-        return blocked_summary(prompt_builder, messages, error_message or "turn_failed_without_completion_evidence")
+        return blocked_summary(
+            prompt_builder,
+            messages,
+            error_message or "turn_failed_without_completion_evidence",
+            response_language=language,
+        )
     return ""
 
 
-def blocked_summary(prompt_builder: PromptBuilder, messages: Sequence[Message], reason: str) -> str:
+def blocked_summary(
+    prompt_builder: PromptBuilder,
+    messages: Sequence[Message],
+    reason: str,
+    *,
+    response_language: ResponseLanguage | None = None,
+) -> str:
     return prompt_builder.summarize_blocked_turn(
         messages,
         reason=reason,
         last_tool_results=last_tool_results(messages),
+        response_language=response_language,
     )
 
 
@@ -50,6 +67,7 @@ def last_tool_results(messages: Sequence[Message]) -> list[ToolResult]:
                 content=message.content if ok else "",
                 error=None if ok else message.content,
                 error_type=str(message.metadata.get("error_type") or "") or None,
+                metadata=dict(message.metadata),
             )
         )
     return results

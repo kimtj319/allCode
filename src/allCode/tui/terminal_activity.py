@@ -48,7 +48,7 @@ def _label_for_status(status: str) -> str:
     if normalized == messages.REPAIR_STATUS:
         return "Repairing"
     if normalized == messages.RECOVERY_STATUS:
-        return "Requesting answer again"
+        return messages.RECOVERY_STATUS
     if normalized == messages.APPROVAL_STATUS:
         return "Waiting for approval"
     if normalized.startswith("도구 실행 중:"):

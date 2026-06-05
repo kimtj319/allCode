@@ -36,6 +36,7 @@ from allCode.core.events import (
     FinalAnswerReady,
     RoutingDecided,
     TurnFailed,
+    TurnFinalized,
     TurnResultReady,
     TurnStarted,
 )
@@ -44,7 +45,7 @@ from allCode.core.result import CompletionEvidence, TurnResult
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings
 from allCode.memory.project_obligations import feature_objectives_from_prompt
-from allCode.tools.approval import ApprovalManager
+from allCode.tools.approval import ApprovalHandler, ApprovalManager
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.executor import ToolExecutor
 from allCode.tools.registry import ToolRegistry
@@ -69,6 +70,7 @@ class AgentLoop:
         model_router: ModelRouter | None = None,
         tool_policy: ToolPolicy | None = None,
         approval: ApprovalManager | None = None,
+        approval_handler: ApprovalHandler | None = None,
         tool_executor: ToolExecutor | None = None,
         generation_workflow: GenerationWorkflow | None = None,
         context_builder: ContextBuilder | None = None,
@@ -89,6 +91,7 @@ class AgentLoop:
             registry=self._tools,
             policy=self._tool_policy,
             approval=self._approval,
+            approval_handler=approval_handler,
         )
         self._generation_workflow = generation_workflow or GenerationWorkflow(
             event_bus=self._event_bus,
@@ -213,7 +216,7 @@ class AgentLoop:
         recovery = RecoveryTracker()
         loop_guard = ToolLoopGuard()
         completion_evidence = CompletionEvidence()
-        self._seed_session_artifact_obligations(turn_input, completion_evidence)
+        self._seed_session_artifact_obligations(turn_input, completion_evidence, routing)
         force_mutation_action = False
 
         try:
@@ -276,6 +279,7 @@ class AgentLoop:
                 outcome_error=outcome.error,
                 base_evidence=completion_evidence,
             )
+            final_answer_published = False
             if finalized.status == "success" and finalized.evidence.final_answer_ready:
                 state.phase = "final"
                 await self._publish(
@@ -285,6 +289,7 @@ class AgentLoop:
                         final_answer=outcome.answer,
                     )
                 )
+                final_answer_published = True
             final_answer = final_answer_for_result(
                 self._prompt_builder,
                 finalized_status=finalized.status,
@@ -326,6 +331,15 @@ class AgentLoop:
                     result.completion_evidence,
                     status=result.status,
                     workspace_root=turn_input.workspace.root,
+                )
+            if not final_answer_published and result.final_answer.strip():
+                await self._publish(
+                    TurnFinalized(
+                        turn_id=state.turn_id,
+                        message=f"Turn finalized: {result.status}.",
+                        status=result.status,
+                        final_answer=result.final_answer,
+                    )
                 )
             await self._publish(
                 TurnResultReady(
@@ -386,7 +400,9 @@ class AgentLoop:
     async def _publish(self, event) -> None:
         await self._event_bus.publish(event)
 
-    def _seed_session_artifact_obligations(self, turn_input: TurnInput, evidence: CompletionEvidence) -> None:
+    def _seed_session_artifact_obligations(self, turn_input: TurnInput, evidence: CompletionEvidence, routing) -> None:
+        if getattr(routing, "read_only_requested", False) or getattr(routing, "kind", "") in {"answer", "inspect"}:
+            return
         for objective in feature_objectives_from_prompt(turn_input.user_prompt):
             if objective not in evidence.feature_objectives:
                 evidence.feature_objectives.append(objective)

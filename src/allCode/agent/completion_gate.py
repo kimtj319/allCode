@@ -38,6 +38,22 @@ def build_completion_evidence(
     noop_reason = base_evidence.noop_reason if base_evidence is not None else None
     search_candidate_paths = list(base_evidence.search_candidate_paths if base_evidence is not None else [])
     inspected_paths = list(base_evidence.inspected_paths if base_evidence is not None else [])
+    source_overview_paths = list(base_evidence.source_overview_paths if base_evidence is not None else [])
+    source_overview_summaries = list(base_evidence.source_overview_summaries if base_evidence is not None else [])
+    source_overview_truncated = bool(base_evidence.source_overview_truncated if base_evidence is not None else False)
+    source_package_roles = list(base_evidence.source_package_roles if base_evidence is not None else [])
+    source_representative_candidates = list(
+        base_evidence.source_representative_candidates if base_evidence is not None else []
+    )
+    source_representative_reasons = list(
+        base_evidence.source_representative_reasons if base_evidence is not None else []
+    )
+    source_representative_scores = dict(
+        base_evidence.source_representative_scores if base_evidence is not None else {}
+    )
+    representative_read_paths = list(base_evidence.representative_read_paths if base_evidence is not None else [])
+    source_analysis_coverage = dict(base_evidence.source_analysis_coverage if base_evidence is not None else {})
+    inspect_observation_count = int(base_evidence.inspect_observation_count if base_evidence is not None else 0)
     zero_result_queries = list(base_evidence.zero_result_queries if base_evidence is not None else [])
     not_found_targets = list(base_evidence.not_found_targets if base_evidence is not None else [])
     validation_failure_symbols = list(base_evidence.validation_failure_symbols if base_evidence is not None else [])
@@ -74,6 +90,16 @@ def build_completion_evidence(
         grounding_required=grounding_required,
         search_candidate_paths=search_candidate_paths,
         inspected_paths=inspected_paths,
+        source_overview_paths=source_overview_paths,
+        source_overview_summaries=source_overview_summaries,
+        source_overview_truncated=source_overview_truncated,
+        source_package_roles=source_package_roles,
+        source_representative_candidates=source_representative_candidates,
+        source_representative_reasons=source_representative_reasons,
+        source_representative_scores=source_representative_scores,
+        representative_read_paths=representative_read_paths,
+        source_analysis_coverage=source_analysis_coverage,
+        inspect_observation_count=inspect_observation_count,
         zero_result_queries=zero_result_queries,
         not_found_targets=not_found_targets,
         validation_failure_symbols=validation_failure_symbols,
@@ -100,6 +126,8 @@ def build_completion_evidence(
 
 def requires_change_evidence(prompt: str, *, routing: RoutingDecision | None = None) -> bool:
     if routing is not None:
+        if routing.kind in {"answer", "inspect"} or routing.read_only_requested:
+            return False
         return routing.kind == "modify" and routing.requires_mutation and not routing.read_only_requested
     signals = _INTENT_EXTRACTOR.extract(prompt)
     if signals.read_only_requested:

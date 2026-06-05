@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 
 from pydantic import Field
 
 from allCode.core.models import CoreModel
 from allCode.core.path_patterns import PATH_PATTERN, extract_prompt_path, is_followup_reference
+from allCode.agent.prompt_safety import (
+    append_marker_if_matched,
+    has_any_term,
+    read_only_clause_matched,
+    read_only_pattern_matched,
+)
 
 
 class PromptConstraints(CoreModel):
@@ -123,6 +128,11 @@ class PromptConstraintExtractor:
         "파일 목록",
         "저장소 구조",
         "워크스페이스 구조",
+        "현재 디렉터리",
+        "현재 디렉토리",
+        "현재 폴더",
+        "src 내",
+        "src 안",
     )
     MUTATION_TERMS = (
         "implement",
@@ -205,31 +215,51 @@ class PromptConstraintExtractor:
         "앞서 제시",
         "방금 설명",
     )
+    COMMON_WORKSPACE_DIRS = (
+        "src",
+        "lib",
+        "app",
+        "apps",
+        "packages",
+        "tests",
+        "test",
+        "docs",
+        "examples",
+    )
 
     def extract(self, prompt: str) -> PromptConstraints:
         lowered = prompt.lower()
         compact = re.sub(r"\s+", "", prompt)
         matched: list[str] = []
 
-        def has_any(terms: Sequence[str], *, compact_match: bool = False) -> bool:
-            haystack = compact.lower() if compact_match else lowered
-            found = [
-                term for term in terms if (term.lower().replace(" ", "") if compact_match else term.lower()) in haystack
-            ]
-            matched.extend(found)
-            return bool(found)
+        def has_any(terms, *, compact_match: bool = False) -> bool:
+            return has_any_term(
+                terms,
+                prompt=prompt,
+                lowered=lowered,
+                compact=compact,
+                compact_match=compact_match,
+                matched=matched,
+            )
 
         paths = self._path_hints(prompt)
+        read_only_pattern = read_only_pattern_matched(prompt)
+        read_only_clause = read_only_clause_matched(prompt)
+        read_only_requested = has_any(self.READ_ONLY_TERMS) or read_only_pattern
+        append_marker_if_matched(matched, "read_only_pattern", condition=read_only_pattern)
+        append_marker_if_matched(matched, "read_only_clause", condition=read_only_clause)
         argumentation_followup = has_any(self.ARGUMENTATION_FOLLOWUP_TERMS, compact_match=True)
         format_followup = has_any(self.FORMAT_FOLLOWUP_TERMS, compact_match=True)
         answer_reference = has_any(self.ANSWER_REFERENCE_TERMS, compact_match=True)
         followup_requested = is_followup_reference(prompt)
+        mutation_requested = has_any(self.MUTATION_TERMS, compact_match=True)
+        project_generation = has_any(self.PROJECT_GENERATION_TERMS, compact_match=True)
         return PromptConstraints(
-            read_only_requested=has_any(self.READ_ONLY_TERMS),
+            read_only_requested=read_only_requested,
             no_shell_requested=has_any(self.NO_SHELL_TERMS),
             no_external_network=has_any(self.NO_NETWORK_TERMS),
-            mutation_requested_hint=has_any(self.MUTATION_TERMS, compact_match=True),
-            project_generation_hint=has_any(self.PROJECT_GENERATION_TERMS, compact_match=True),
+            mutation_requested_hint=False if read_only_requested else mutation_requested,
+            project_generation_hint=False if read_only_requested else project_generation,
             validation_requested_hint=has_any(self.VALIDATION_TERMS, compact_match=True),
             external_knowledge_hint=has_any(self.EXTERNAL_TERMS),
             followup_requested=followup_requested,
@@ -250,4 +280,10 @@ class PromptConstraintExtractor:
         first = extract_prompt_path(prompt)
         if first and first not in paths:
             paths.insert(0, first)
+        lowered = prompt.lower()
+        for directory in self.COMMON_WORKSPACE_DIRS:
+            if directory in paths:
+                continue
+            if re.search(rf"(?<![A-Za-z0-9_.-]){re.escape(directory)}(?![A-Za-z0-9_.-])", lowered):
+                paths.append(directory)
         return paths

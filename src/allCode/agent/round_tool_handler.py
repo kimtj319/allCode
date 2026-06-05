@@ -31,6 +31,7 @@ class RoundToolHandler:
         evidence: CompletionEvidence,
         routing,
         phase_gate,
+        inspect_stage,
         allowed_tool_names: set[str],
         round_index: int,
     ) -> LoopOutcome | None:
@@ -45,6 +46,7 @@ class RoundToolHandler:
             routing,
             allowed_tool_names=allowed_tool_names,
             phase_gate=phase_gate,
+            inspect_stage=inspect_stage,
         )
         runtime.messages.append(Message(role="assistant", content=parsed.text, tool_calls=parsed.tool_calls))
         runtime.messages = self._runner._prompt_builder.append_tool_results(runtime.messages, results)
@@ -80,7 +82,10 @@ class RoundToolHandler:
                     answer=self._runner._evidence_final_answer(turn_input.user_prompt, evidence, turn_input.workspace.root),
                 )
             runtime.final_answer_after_change_requested = True
-            runtime.messages = self._runner._prompt_builder.final_answer_request(runtime.messages)
+            runtime.messages = self._runner._prompt_builder.final_answer_request(
+                runtime.messages,
+                response_language=self._runner._response_language(turn_input.user_prompt),
+            )
             return None
         phase_block = await self._handle_phase_block(runtime, recovery, state, evidence, phase_gate, results)
         if phase_block is not None:
@@ -144,7 +149,12 @@ class RoundToolHandler:
             runtime.mutation_attempted_after_failed_validation = True
             runtime.mutation_succeeded_after_failed_validation = any(result.ok for result in mutation_results)
         if any(result.ok and result.name in MUTATION_TOOL_NAMES for result in results):
-            more_mutation = mutation_artifact_required(turn_input.user_prompt, evidence, workspace_root=turn_input.workspace.root)
+            more_mutation = mutation_artifact_required(
+                turn_input.user_prompt,
+                evidence,
+                workspace_root=turn_input.workspace.root,
+                routing=routing,
+            )
             runtime.mutation_action_pending = more_mutation
             runtime.validation_repair_pending = False
             runtime.awaiting_revalidation_after_mutation = (
@@ -262,7 +272,7 @@ class RoundToolHandler:
             recovery,
             evidence,
             routing,
-            allowed_tool_names={"read_file"},
+            allowed_tool_names={grounding_call.name},
             phase_gate=phase_gate,
         )
         runtime.messages.append(Message(role="assistant", content="", tool_calls=[grounding_call]))

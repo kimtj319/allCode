@@ -20,12 +20,12 @@ from allCode.llm.settings import ModelSettings
 from allCode.memory.session_summary import SessionSummary
 from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
-from allCode.tools.approval import ApprovalManager
+from allCode.tools.approval import ApprovalHandler, ApprovalManager
 from allCode.tools.registry import ToolRegistry
 from allCode.tools.web_provider import provider_from_config
 
 EventHandler = Callable[[AgentEvent], Awaitable[None]]
-TurnRunner = Callable[[str, EventHandler], Awaitable[None]]
+TurnRunner = Callable[[str, EventHandler, ApprovalHandler | None], Awaitable[None]]
 
 
 async def run_agent_turn(
@@ -36,6 +36,7 @@ async def run_agent_turn(
     tools: ToolRegistry | None = None,
     context_builder: ContextBuilder | None = None,
     event_handler: EventHandler | None = None,
+    approval_handler: ApprovalHandler | None = None,
     session_logger: AgentSessionLogger | None = None,
 ) -> TurnResult:
     """Run a single agent turn with optional event forwarding."""
@@ -55,6 +56,7 @@ async def run_agent_turn(
         tools=tools or runtime_tool_registry(config),
         event_bus=event_bus,
         approval=ApprovalManager(mode=config.approval.mode, session_allow=config.approval.session_allow),
+        approval_handler=approval_handler,
         context_builder=effective_context_builder,
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
     )
@@ -110,7 +112,7 @@ def make_tui_turn_runner(
     context_builder = context_builder or build_runtime_context_builder(config)
     session_logger = session_logger or AgentSessionLogger.create(config=config)
 
-    async def run(prompt: str, event_handler: EventHandler) -> None:
+    async def run(prompt: str, event_handler: EventHandler, approval_handler: ApprovalHandler | None = None) -> None:
         await run_agent_turn(
             prompt,
             config=config,
@@ -118,6 +120,7 @@ def make_tui_turn_runner(
             tools=tools,
             context_builder=context_builder,
             event_handler=event_handler,
+            approval_handler=approval_handler,
             session_logger=session_logger,
         )
 

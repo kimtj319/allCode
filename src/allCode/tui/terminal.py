@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from pathlib import Path
 from typing import Any, TextIO
@@ -19,6 +20,7 @@ from allCode.tui.terminal_activity import ActivityProps
 from allCode.tui.terminal_answer_renderer import TerminalAnswerRenderer
 from allCode.tui.terminal_input import TerminalInputEditor
 from allCode.tui.terminal_screen import TerminalScreen, TerminalTheme
+from allCode.tools.approval import ApprovalAction, ApprovalRequest
 
 TurnRunner = Any
 
@@ -69,9 +71,11 @@ class TerminalSession:
         self._last_status = ""
         self._stream_started = False
         self._stream_buffer = ""
+        self._final_answer_rendered = False
         self._running_started_at: float | None = None
         self._spinner_index = 0
         self.answer_renderer = TerminalAnswerRenderer(self.console)
+        self._turn_runner_accepts_approval = self._accepts_approval_handler(turn_runner)
 
     def run(self) -> int:
         self.screen.enter()
@@ -99,6 +103,9 @@ class TerminalSession:
             self.screen.exit()
 
     async def handle_agent_event(self, event: AgentEvent) -> None:
+        if event.event_type == "approval_requested":
+            self._print_status(messages.APPROVAL_STATUS)
+            return
         rendered = self.renderer.render(event)
         if rendered.transcript_role == "allCode_stream":
             if rendered.status:
@@ -107,11 +114,12 @@ class TerminalSession:
             self._stream_buffer += rendered.transcript
             self._render_running_composer(rendered.status or messages.ANSWERING_STATUS)
             return
-        if event.event_type == "final_answer_ready":
+        if event.event_type in {"final_answer_ready", "turn_finalized"}:
             final_answer = getattr(event, "final_answer", event.message)
             answer = final_answer if final_answer.strip() else self._stream_buffer
-            if answer.strip():
+            if answer.strip() and not self._final_answer_rendered:
                 self._print_assistant_block(answer)
+                self._final_answer_rendered = True
             self._last_status = ""
             return
         if rendered.transcript and rendered.severity == "user_visible":
@@ -123,11 +131,12 @@ class TerminalSession:
         self._print_user_prompt(prompt)
         self._stream_started = False
         self._stream_buffer = ""
+        self._final_answer_rendered = False
         self._last_status = ""
         self._running_started_at = time.monotonic()
         self._render_running_composer(messages.MODEL_REQUEST_STATUS)
         try:
-            asyncio.run(self.turn_runner(prompt, self.handle_agent_event))
+            asyncio.run(self._run_turn(prompt))
         except KeyboardInterrupt:
             self.stderr.write("\nInterrupted.\n")
         except Exception as exc:
@@ -136,6 +145,34 @@ class TerminalSession:
             self._running_started_at = None
             self.stdout.write("\n")
             self.stdout.flush()
+
+    async def _run_turn(self, prompt: str) -> None:
+        if self._turn_runner_accepts_approval:
+            await self.turn_runner(prompt, self.handle_agent_event, self.handle_approval_request)
+            return
+        await self.turn_runner(prompt, self.handle_agent_event)
+
+    async def handle_approval_request(self, request: ApprovalRequest) -> ApprovalAction:
+        self._prepare_body_output()
+        self.console.print("[bold]승인이 필요합니다[/]")
+        self.console.print(f"[dim]{request.tool_name} · risk: {request.risk}[/]")
+        preview = self._approval_preview(request.preview)
+        if preview:
+            self.console.print(Markdown(f"```diff\n{preview}\n```"))
+        self.stdout.write("  y: once, a: session, n: deny > ")
+        self.stdout.flush()
+        line = self.stdin.readline()
+        choice = (line or "").strip().lower()
+        if choice in {"y", "yes"}:
+            action: ApprovalAction = "approve_once"
+        elif choice in {"a", "allow"}:
+            action = "allow_session"
+        else:
+            action = "deny"
+        self.stdout.write("\n")
+        self.stdout.flush()
+        self._render_running_composer(messages.WORKING_STATUS)
+        return action
 
     def _run_slash_command(self, command: str) -> int | None:
         self._print_user_prompt(command)
@@ -170,8 +207,7 @@ class TerminalSession:
             return
         if role == "tool":
             self._prepare_body_output()
-            self.console.print("[dim]tool[/]")
-            self.console.print(Markdown(f"```text\n{text}\n```"))
+            self.console.print(f"[dim]{text}[/]")
             self._render_running_composer()
             return
         self._print_assistant_block(text)
@@ -213,6 +249,33 @@ class TerminalSession:
     def _is_terminal(stream: TextIO) -> bool:
         isatty = getattr(stream, "isatty", None)
         return bool(isatty and isatty())
+
+    @staticmethod
+    def _accepts_approval_handler(turn_runner: TurnRunner) -> bool:
+        try:
+            signature = inspect.signature(turn_runner)
+        except (TypeError, ValueError):
+            return True
+        positional = [
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.kind in {parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD}
+        ]
+        if any(parameter.kind == parameter.VAR_POSITIONAL for parameter in signature.parameters.values()):
+            return True
+        return len(positional) >= 3 or "approval_handler" in signature.parameters
+
+    @staticmethod
+    def _approval_preview(preview: str, *, max_lines: int = 80, max_chars: int = 5000) -> str:
+        if not preview:
+            return ""
+        lines = preview.splitlines()
+        clipped = "\n".join(lines[:max_lines])
+        if len(lines) > max_lines:
+            clipped += "\n... diff truncated ..."
+        if len(clipped) > max_chars:
+            clipped = clipped[:max_chars].rstrip() + "\n... diff truncated ..."
+        return clipped
 
 def run_terminal_session(
     *,

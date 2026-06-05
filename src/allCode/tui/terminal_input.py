@@ -14,6 +14,7 @@ from allCode.tui.terminal_footer import FooterProps
 from allCode.tui.terminal_history import TerminalHistory
 from allCode.tui.terminal_keymap import EditorCommand, TerminalKeymap
 from allCode.tui.terminal_keys import TerminalKeyReader
+from allCode.tui.terminal_paste_sanitizer import normalize_pasted_text
 from allCode.tui.terminal_overlay import OverlayItem, OverlayView
 from allCode.tui.terminal_paste import PasteManager
 from allCode.tui.terminal_screen import TerminalScreen
@@ -68,7 +69,7 @@ class TerminalInputEditor:
         self.stdout.write("\n")
         if line == "":
             raise EOFError
-        return line.rstrip("\n")
+        return normalize_pasted_text(line.rstrip("\n"))
 
     def _read_interactive_line_mode(self) -> str:
         self.screen.render_input_panel(lines=[""], cursor_row=0, cursor_col=3, footer=self.footer)
@@ -76,7 +77,7 @@ class TerminalInputEditor:
         self.screen.clear_input_panel()
         if line == "":
             raise EOFError
-        return line.rstrip("\n")
+        return normalize_pasted_text(line.rstrip("\n"))
 
     def render_runtime_frame(self, *, activity: ActivityProps | None = None) -> None:
         """Render an empty composer frame while an agent turn is running."""

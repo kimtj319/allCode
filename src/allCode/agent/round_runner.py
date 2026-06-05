@@ -6,6 +6,8 @@ from collections.abc import Sequence
 
 from allCode.agent.finalization_helpers import blocked_summary
 from allCode.agent.grounding import grounding_required
+from allCode.agent.inspect_staging import decide_inspect_stage
+from allCode.agent.language import ResponseLanguage, detect_response_language
 from allCode.agent.phase_block import PhaseBlockHelper
 from allCode.agent.phase_gate import build_phase_tool_gate, mutation_artifact_required
 from allCode.agent.prompt_builder import PromptBuilder
@@ -24,6 +26,8 @@ from allCode.agent.validation_controller import ValidationRepairController
 from allCode.agent.validation_repair import validation_repair_needed
 from allCode.core.event_bus import EventBus
 from allCode.core.events import (
+    InspectFinalizationGateOpened,
+    InspectStageSelected,
     ModelStreamStarted,
     PhaseTransitioned,
     RecoveryStateUpdated,
@@ -117,6 +121,60 @@ class RoundRunner:
                 repair_context_read_paths=runtime.repair_context_read_paths,
                 test_authoring_inspection_rounds=runtime.inspection_rounds,
             )
+            inspect_stage = decide_inspect_stage(
+                prompt=turn_input.user_prompt,
+                routing=routing,
+                evidence=completion_evidence,
+                round_index=round_index,
+                inspect_round_budget=self._inspect_round_budget,
+                final_answer_requested=runtime.inspect_final_answer_requested,
+            )
+            if inspect_stage.active and runtime.last_inspect_stage != inspect_stage.stage:
+                runtime.last_inspect_stage = inspect_stage.stage
+                if inspect_stage.stage in {"source_discovery", "targeted_read"}:
+                    runtime.messages = self._prompt_builder.inspect_stage_request(
+                        runtime.messages,
+                        stage=inspect_stage.stage,
+                        target_paths=inspect_stage.target_paths,
+                        reason=inspect_stage.reason,
+                    )
+                await self._publish(
+                    InspectStageSelected(
+                        turn_id=state.turn_id,
+                        message=f"Inspect stage selected: {inspect_stage.stage}.",
+                        data={
+                            "round": round_index + 1,
+                            "stage": inspect_stage.stage,
+                            "reason": inspect_stage.reason,
+                            "allowed_tools": sorted(inspect_stage.allowed_tool_names),
+                            "target_paths": list(inspect_stage.target_paths),
+                            "evidence_complete": inspect_stage.evidence_complete,
+                        },
+                    )
+                )
+            if (
+                inspect_stage.stage == "finalize"
+                and not runtime.inspect_final_answer_requested
+                and completion_evidence.inspect_observation_count > 0
+            ):
+                runtime.inspect_final_answer_requested = True
+                await self._publish(
+                    InspectFinalizationGateOpened(
+                        turn_id=state.turn_id,
+                        message="Inspect finalization gate opened.",
+                        data={
+                            "round": round_index + 1,
+                            "reason": inspect_stage.reason,
+                            "source_overview_paths": list(completion_evidence.source_overview_paths),
+                            "inspected_paths": list(completion_evidence.inspected_paths),
+                            "search_candidate_paths": list(completion_evidence.search_candidate_paths[:5]),
+                        },
+                    )
+                )
+                runtime.messages = self._prompt_builder.final_answer_request(
+                    runtime.messages,
+                    response_language=self._response_language(turn_input.user_prompt),
+                )
             injected = await self._maybe_inject_validation(
                 turn_input,
                 state,
@@ -135,7 +193,20 @@ class RoundRunner:
             if control.should_inject_validation_action:
                 continue
 
-            suppress_tools_for_final_answer = runtime.final_answer_after_change_requested and self._mutation_change_complete(routing, completion_evidence)
+            suppress_tools_for_final_answer = (
+                runtime.inspect_final_answer_requested
+                or (
+                    runtime.final_answer_after_change_requested
+                    and self._mutation_change_complete(routing, completion_evidence)
+                )
+            )
+            allowed_only = None
+            if suppress_tools_for_final_answer:
+                allowed_only = set()
+            elif phase_gate.active:
+                allowed_only = phase_gate.allowed_tool_names
+            elif inspect_stage.active:
+                allowed_only = inspect_stage.allowed_tool_names
             tool_schemas = self._tool_call_processor.tool_schemas_for_routing(
                 routing,
                 suppress_validation=runtime.validation_repair_pending,
@@ -144,10 +215,27 @@ class RoundRunner:
                 include_validation_probe=(
                     lock_to_mutation and routing.requires_validation and not completion_evidence.validation_commands
                 ),
-                allowed_only=set()
-                if suppress_tools_for_final_answer
-                else phase_gate.allowed_tool_names if phase_gate.active else None,
+                allowed_only=allowed_only,
             )
+            if (
+                phase_gate.active
+                and not tool_schemas
+                and phase_gate.phase in {"validation_failed", "repair_mutation_required"}
+                and phase_gate.allowed_tool_names == {"read_file"}
+            ):
+                phase_gate = phase_gate.model_copy(
+                    update={
+                        "allowed_tool_names": {"patch_file", "write_file"},
+                        "required_next_action": "Apply the validation repair with patch_file or write_file.",
+                        "reason": f"{phase_gate.reason}; read_file is unavailable in the current registry",
+                        "preferred_next_tools": ["patch_file", "write_file"],
+                    }
+                )
+                tool_schemas = self._tool_call_processor.tool_schemas_for_routing(
+                    routing,
+                    suppress_validation=runtime.validation_repair_pending,
+                    allowed_only=phase_gate.allowed_tool_names,
+                )
             allowed_tool_names = {schema.name for schema in tool_schemas}
             await publish_model_request(
                 self._event_bus,
@@ -209,6 +297,7 @@ class RoundRunner:
                     evidence=completion_evidence,
                     routing=routing,
                     phase_gate=phase_gate,
+                    inspect_stage=inspect_stage,
                     allowed_tool_names=allowed_tool_names,
                     round_index=round_index,
                 )
@@ -244,7 +333,12 @@ class RoundRunner:
         evidence: CompletionEvidence,
         runtime: RoundRuntime,
     ) -> bool:
-        more_mutation = mutation_artifact_required(turn_input.user_prompt, evidence, workspace_root=turn_input.workspace.root)
+        more_mutation = mutation_artifact_required(
+            turn_input.user_prompt,
+            evidence,
+            workspace_root=turn_input.workspace.root,
+            routing=routing,
+        )
         if evidence.validation_passed is True:
             runtime.validation_action_pending = False
         if runtime.validation_action_pending or runtime.awaiting_revalidation_after_mutation:
@@ -392,3 +486,7 @@ class RoundRunner:
     @staticmethod
     def _evidence_final_answer(prompt: str, evidence: CompletionEvidence, workspace_root: str) -> str:
         return evidence_final_answer(prompt, evidence, workspace_root)
+
+    @staticmethod
+    def _response_language(prompt: str) -> ResponseLanguage:
+        return detect_response_language(prompt)

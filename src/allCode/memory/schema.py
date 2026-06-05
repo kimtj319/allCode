@@ -70,6 +70,11 @@ class RepoMapEntry(CoreModel):
     definitions: list[str] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
     imports: list[str] = Field(default_factory=list)
+    symbols: list[dict[str, object]] = Field(default_factory=list)
+    imports_detail: list[dict[str, object]] = Field(default_factory=list)
+    references_detail: list[dict[str, object]] = Field(default_factory=list)
+    analysis_backend: str = ""
+    analysis_quality: dict[str, object] = Field(default_factory=dict)
     summary: str = ""
     score: float = 0.0
     mtime: float | None = None

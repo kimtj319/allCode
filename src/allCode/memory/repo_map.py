@@ -23,6 +23,7 @@ class RepoMapBuilder:
             symbols = self.symbol_indexer.extract(record.path)
             definitions = [symbol.signature for symbol in symbols.definitions]
             summary = self._summary(record.relative_path, definitions, symbols.imports)
+            analysis = symbols.analysis
             entries.append(
                 RepoMapEntry(
                     path=record.relative_path,
@@ -30,6 +31,20 @@ class RepoMapBuilder:
                     definitions=definitions,
                     references=symbols.references,
                     imports=symbols.imports,
+                    symbols=[
+                        symbol.model_dump(mode="json")
+                        for symbol in (analysis.symbols if analysis is not None else [])
+                    ],
+                    imports_detail=[
+                        item.model_dump(mode="json")
+                        for item in (analysis.imports if analysis is not None else [])
+                    ],
+                    references_detail=[
+                        item.model_dump(mode="json")
+                        for item in (analysis.references if analysis is not None else [])
+                    ],
+                    analysis_backend=analysis.backend if analysis is not None else "",
+                    analysis_quality=dict(analysis.quality if analysis is not None else {}),
                     summary=summary,
                     mtime=record.mtime,
                 )

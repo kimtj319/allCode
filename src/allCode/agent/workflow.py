@@ -8,6 +8,7 @@ from pydantic import Field
 
 from allCode.agent.completion_checker import CompletionCheck, CompletionChecker
 from allCode.agent.final_reporter import FinalReporter
+from allCode.agent.language import detect_response_language
 from allCode.agent.project_planner import ModelProjectPlanner
 from allCode.agent.router import RoutingDecision, RuleBasedRouter
 from allCode.agent.task_plan import ProjectPlan
@@ -150,6 +151,7 @@ class GenerationWorkflow:
                     validation_results=validation_results,
                     recovery_states=recovery_states,
                     repair_attempts=repair_attempts,
+                    response_language=detect_response_language(turn_input.user_prompt),
                 )
                 final_check = self.completion_checker.check(
                     workspace_root=turn_input.workspace.root,

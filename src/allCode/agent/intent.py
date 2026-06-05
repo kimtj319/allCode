@@ -9,6 +9,7 @@ from pydantic import Field
 
 from allCode.core.models import CoreModel
 from allCode.core.path_patterns import FOLLOWUP_TERMS, extract_prompt_path
+from allCode.agent.prompt_safety import append_marker_if_matched, read_only_clause_matched, read_only_pattern_matched
 
 
 class IntentSignals(CoreModel):
@@ -214,15 +215,22 @@ class IntentExtractor:
         target_hint = self._extract_target_hint(prompt)
         modify_term_found = has_any(self.MODIFY_TERMS)
         conceptual_question = self._has_conceptual_question(lowered)
+        read_only_pattern = read_only_pattern_matched(prompt)
+        read_only_clause = read_only_clause_matched(prompt)
+        read_only_requested = has_any(self.READ_ONLY_TERMS) or read_only_pattern
+        append_marker_if_matched(matched, "read_only_pattern", condition=read_only_pattern)
+        append_marker_if_matched(matched, "read_only_clause", condition=read_only_clause)
         explicit_change_request = self._has_explicit_change_request(
             prompt=prompt,
             lowered=lowered,
             target_hint=target_hint,
             modify_term_found=modify_term_found,
         )
+        if read_only_requested:
+            explicit_change_request = False
         validation_requested = self._has_validation_request(prompt, lowered)
         return IntentSignals(
-            read_only_requested=has_any(self.READ_ONLY_TERMS),
+            read_only_requested=read_only_requested,
             no_shell_requested=has_any(self.NO_SHELL_TERMS),
             no_external_network=has_any(self.NO_NETWORK_TERMS),
             modify_action=explicit_change_request,

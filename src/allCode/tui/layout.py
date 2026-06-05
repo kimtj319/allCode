@@ -95,7 +95,7 @@ class TUIStateController:
                     full_text=rendered.fold_full_text or rendered.transcript,
                 )
             )
-        if event.event_type in {"final_answer_ready", "turn_failed", "turn_cancelled", "generation_workflow_finished"}:
+        if event.event_type in {"final_answer_ready", "turn_finalized", "turn_failed", "turn_cancelled", "generation_workflow_finished"}:
             self.recover_input()
 
     def append_message(self, role: str, content: str) -> None:

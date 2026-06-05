@@ -156,7 +156,7 @@ class AgentSessionLogger:
     def _record_kind_for_event(event_type: str, payload: dict) -> str:
         if event_type == "tool_call_requested":
             return "action"
-        if event_type == "tool_execution_finished":
+        if event_type in {"tool_execution_finished", "source_overview_collected"}:
             return "observation"
         if event_type in {"tool_policy_checked", "tool_approval_checked", "approval_requested", "approval_resolved"}:
             return "mediation"
@@ -195,6 +195,43 @@ class AgentSessionLogger:
             }
         if event.event_type == "model_metrics_recorded":
             return {"kind": "model_metrics", **dict(payload.get("data", {}))}
+        if event.event_type == "source_overview_collected":
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            return {
+                "kind": "source_overview",
+                "tool_name": "source_overview",
+                "target": data.get("target"),
+                "file_count": data.get("file_count"),
+                "symbol_count": data.get("symbol_count"),
+                "truncated": data.get("truncated"),
+                "representative_read_count": len(data.get("representative_reads") or []),
+                "coverage_ratio": (data.get("coverage") or {}).get("coverage_ratio")
+                if isinstance(data.get("coverage"), dict)
+                else None,
+            }
+        if event.event_type == "empty_search_denied":
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            return {
+                "kind": "search_invalid",
+                "tool_name": "search_files",
+                "target": data.get("target"),
+                "required_next_action": data.get("required_next_action"),
+            }
+        if event.event_type == "inspect_stage_selected":
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            return {
+                "kind": "inspect_stage",
+                "stage": data.get("stage"),
+                "allowed_tools": data.get("allowed_tools"),
+                "evidence_complete": data.get("evidence_complete"),
+            }
+        if event.event_type == "inspect_finalization_gate_opened":
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            return {
+                "kind": "inspect_finalization",
+                "target": data.get("source_overview_paths") or data.get("inspected_paths"),
+                "round": data.get("round"),
+            }
         if event.event_type == "recovery_state_updated":
             return {"kind": "recovery", **dict(payload.get("data", {}))}
         return {"kind": event.event_type}
@@ -205,6 +242,10 @@ class AgentSessionLogger:
             return "model"
         if event_type.startswith("tool_"):
             return "tool"
+        if event_type in {"source_overview_collected", "empty_search_denied"}:
+            return "tool"
+        if event_type.startswith("inspect_"):
+            return "routing"
         if event_type.startswith("approval_"):
             return "approval"
         if event_type.startswith("routing_"):

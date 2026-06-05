@@ -57,7 +57,13 @@ class PreflightPlanner:
                         )
                     ]
                 )
-        if explicit_target is None and not signals.followup_requested and routing.kind == "modify" and "search_workspace" in routing.tool_capabilities:
+        if (
+            explicit_target is None
+            and not signals.followup_requested
+            and routing.kind == "modify"
+            and not routing.read_only_requested
+            and "search_workspace" in routing.tool_capabilities
+        ):
             query = self._mutation_discovery_query(prompt)
             if query:
                 return PreflightPlan(
@@ -69,7 +75,7 @@ class PreflightPlanner:
                         )
                     ]
                 )
-        if target and routing.kind == "modify" and self._conditional_delete(prompt):
+        if target and routing.kind == "modify" and not routing.read_only_requested and self._conditional_delete(prompt):
             return PreflightPlan(
                 tool_calls=[
                     ToolCall(
@@ -79,7 +85,7 @@ class PreflightPlanner:
                     )
                 ]
             )
-        if target and self._should_read_target_first(routing) and not self._is_targeted_lookup(prompt):
+        if target and self._should_read_target_first(routing) and self._looks_file_target(target) and not self._is_targeted_lookup(prompt):
             return PreflightPlan(
                 tool_calls=[
                     ToolCall(
@@ -101,6 +107,8 @@ class PreflightPlanner:
     ) -> bool:
         if target:
             return False
+        if routing.read_only_requested:
+            return False
         if routing.kind == "modify" and routing.requires_mutation:
             return is_followup_reference(prompt)
         return False
@@ -116,6 +124,13 @@ class PreflightPlanner:
             and routing.kind in {"inspect", "modify", "operate"}
             and "read_file" in routing.tool_capabilities
         )
+
+    @staticmethod
+    def _looks_file_target(target: str) -> bool:
+        name = Path(target).name
+        if "." in name:
+            return True
+        return name in {"Makefile", "Dockerfile", "Procfile", "Gemfile", "Rakefile"}
 
     def _is_targeted_lookup(self, prompt: str) -> bool:
         normalized = " ".join(prompt.lower().split())
@@ -223,6 +238,8 @@ def should_force_mutation_after_inspection(
     routing: RoutingDecision,
     evidence: CompletionEvidence,
 ) -> bool:
+    if routing.read_only_requested:
+        return False
     if not routing.requires_mutation or evidence.has_resolution_evidence():
         return False
     return any(result.name == "read_file" and result.ok for result in results)

@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
+from allCode.agent.language import ResponseLanguage, detect_response_language, normalize_response_language
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
 from allCode.core.models import ToolCall, ToolResult, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence
@@ -82,27 +83,53 @@ def mutation_change_complete(routing, evidence: CompletionEvidence) -> bool:
     )
 
 
-def evidence_final_answer(prompt: str, evidence: CompletionEvidence, workspace_root: str) -> str:
+def evidence_final_answer(
+    prompt: str,
+    evidence: CompletionEvidence,
+    workspace_root: str,
+    *,
+    response_language: ResponseLanguage | None = None,
+) -> str:
+    language = normalize_response_language(response_language or detect_response_language(prompt))
     changed = _relative_unique_files(
         [*evidence.created_files, *evidence.changed_files, *evidence.deleted_files],
         workspace_root,
     )
     terms = _prompt_reference_terms(prompt)
-    lines = ["작업을 완료했습니다."]
+    if language == "en":
+        lines = ["The requested work is complete."]
+        files_label = "Created/modified files"
+        request_label = "Request reference"
+        validation_command_label = "Validation command"
+        validation_result_label = "Validation result"
+        passed = "passed"
+        failed = "failed"
+        not_requested = "not requested"
+        risk = "Remaining risk: runtime differences outside the current validation scope still need separate verification."
+    else:
+        lines = ["작업을 완료했습니다."]
+        files_label = "생성/수정 파일"
+        request_label = "요청 기준"
+        validation_command_label = "검증 명령"
+        validation_result_label = "검증 결과"
+        passed = "통과"
+        failed = "실패"
+        not_requested = "요청되지 않음"
+        risk = "남은 리스크: 현재 검증 범위 밖의 런타임 환경 차이는 추가 확인이 필요합니다."
     if changed:
-        lines.append("- 생성/수정 파일:")
+        lines.append(f"- {files_label}:")
         lines.extend(f"  - `{path}`" for path in changed[:12])
     if terms:
-        lines.append("- 요청 기준: " + ", ".join(f"`{term}`" for term in terms[:8]))
+        lines.append(f"- {request_label}: " + ", ".join(f"`{term}`" for term in terms[:8]))
     if evidence.validation_commands:
-        lines.append(f"- 검증 명령: `{evidence.validation_commands[-1]}`")
+        lines.append(f"- {validation_command_label}: `{evidence.validation_commands[-1]}`")
     if evidence.validation_passed is True:
-        lines.append("- 검증 결과: 통과")
+        lines.append(f"- {validation_result_label}: {passed}")
     elif evidence.validation_passed is False:
-        lines.append("- 검증 결과: 실패")
+        lines.append(f"- {validation_result_label}: {failed}")
     else:
-        lines.append("- 검증 결과: 요청되지 않음")
-    lines.append("- 남은 리스크: 현재 검증 범위 밖의 런타임 환경 차이는 추가 확인이 필요합니다.")
+        lines.append(f"- {validation_result_label}: {not_requested}")
+    lines.append(f"- {risk}")
     return "\n".join(lines)
 
 

@@ -31,6 +31,7 @@ class ModelRoutingDecision(CoreModel):
     target_hint: str | None = None
     requires_validation: bool = False
     requires_external_knowledge: bool = False
+    read_only_requested: bool = False
     reason: str = ""
 
 
@@ -108,6 +109,7 @@ class ModelRouter:
                 "target_hint": None,
                 "requires_validation": False,
                 "requires_external_knowledge": False,
+                "read_only_requested": False,
                 "reason": "short rationale",
             },
         }
@@ -122,9 +124,10 @@ class ModelRouter:
     ) -> RoutingDecision:
         capabilities = set(decision.tool_capabilities)
         flags: set[str] = set()
-        if constraints.read_only_requested:
+        read_only_requested = constraints.read_only_requested or decision.read_only_requested
+        if read_only_requested:
             flags.add("read_only_requested")
-            capabilities.difference_update({"mutate_file", "delete_file", "run_shell"})
+            capabilities.difference_update({"mutate_file", "delete_file", "run_shell", "run_validation"})
         if constraints.no_shell_requested:
             flags.add("no_shell")
             capabilities.difference_update({"run_shell", "run_validation"})
@@ -132,16 +135,16 @@ class ModelRouter:
             flags.add("no_external_network")
             capabilities.discard("web_search")
         answer_followup = _answer_followup_request(constraints, prompt)
-        if constraints.validation_requested_hint and not answer_followup:
+        if constraints.validation_requested_hint and not answer_followup and not read_only_requested:
             flags.add("requires_validation")
             if not constraints.no_shell_requested:
                 capabilities.add("run_validation")
-        if constraints.mutation_requested_hint and not constraints.read_only_requested and not answer_followup:
+        if constraints.mutation_requested_hint and not read_only_requested and not answer_followup:
             flags.add("explicit_change_request")
             capabilities.update({"read_file", "mutate_file"})
             if constraints.validation_requested_hint and not constraints.no_shell_requested:
                 capabilities.add("run_validation")
-        if constraints.project_generation_hint and not constraints.read_only_requested:
+        if constraints.project_generation_hint and not read_only_requested:
             flags.add("project_generation_requested")
         if constraints.external_knowledge_hint and not constraints.no_external_network:
             flags.add("requires_external_knowledge")
@@ -160,7 +163,7 @@ class ModelRouter:
         local_workspace_request = _local_workspace_request(constraints)
         if constraints.external_knowledge_hint and not constraints.no_external_network and not local_workspace_request:
             kind = "inspect"
-        if constraints.mutation_requested_hint and not constraints.read_only_requested and not answer_followup:
+        if constraints.mutation_requested_hint and not read_only_requested and not answer_followup:
             kind = "modify"
         if answer_followup:
             kind = "answer"
@@ -168,9 +171,11 @@ class ModelRouter:
             workflow_hint = "none"
             target_hint = None
             flags.add("answer_followup")
-        if constraints.read_only_requested and kind in {"modify", "operate"}:
-            kind = "inspect"
-        if not constraints.read_only_requested and capabilities.intersection({"mutate_file", "delete_file"}):
+        if read_only_requested:
+            kind = "inspect" if _read_only_needs_workspace_tools(constraints, local_workspace_request, capabilities) else "answer"
+            capabilities.difference_update({"mutate_file", "delete_file", "run_shell", "run_validation"})
+            workflow_hint = "none"
+        if not read_only_requested and capabilities.intersection({"mutate_file", "delete_file"}):
             kind = "modify"
         if constraints.workspace_evidence_requested and not capabilities and not answer_followup:
             capabilities.update({"read_file", "search_workspace"})
@@ -191,13 +196,18 @@ class ModelRouter:
             flags.discard("requires_external_knowledge")
             flags.add("workspace_evidence_requested")
             kind = "inspect" if kind == "answer" else kind
+        if read_only_requested:
+            capabilities.difference_update({"mutate_file", "delete_file", "run_shell", "run_validation"})
+            if kind == "answer" and (constraints.workspace_evidence_requested or local_workspace_request or constraints.path_hints):
+                capabilities.update({"read_file", "search_workspace"})
+                kind = "inspect"
         requires_external = (
             bool(decision.requires_external_knowledge or "web_search" in capabilities)
             and not constraints.no_external_network
             and not local_workspace_request
         )
         requires_tools = kind in {"inspect", "modify", "operate"} or bool(capabilities)
-        return RoutingDecision(
+        route = RoutingDecision(
             kind=kind,
             confidence=confidence,
             reason=decision.reason or "Model-routed decision.",
@@ -206,13 +216,18 @@ class ModelRouter:
             workflow_hint=workflow_hint,
             route_source="model",
             flags=flags,
-            read_only_requested=constraints.read_only_requested,
+            read_only_requested=read_only_requested,
             requires_tools=requires_tools,
             requires_mutation=requires_mutation,
             requires_shell=requires_shell,
             requires_validation=bool(decision.requires_validation or constraints.validation_requested_hint)
             and "run_validation" in capabilities,
             requires_external_knowledge=requires_external,
+        )
+        return _sanitize_read_only_route(
+            route,
+            constraints=constraints,
+            local_workspace_request=local_workspace_request,
         )
 
     def _safe_fallback(self, prompt: str, constraints: PromptConstraints) -> RoutingDecision:
@@ -236,8 +251,11 @@ class ModelRouter:
             kind = "answer"
             capabilities.clear()
         if constraints.read_only_requested:
-            kind = "inspect" if capabilities else "answer"
-            capabilities.difference_update({"mutate_file", "delete_file", "run_shell"})
+            local_workspace_request = _local_workspace_request(constraints)
+            capabilities.difference_update({"mutate_file", "delete_file", "run_shell", "run_validation"})
+            kind = "inspect" if _read_only_needs_workspace_tools(constraints, local_workspace_request, capabilities) else "answer"
+            if kind == "inspect":
+                capabilities.update({"read_file", "search_workspace"})
         if local_workspace_request and not answer_followup:
             kind = "inspect"
             capabilities.discard("web_search")
@@ -250,7 +268,7 @@ class ModelRouter:
             workflow_hint = "direct_file_edit"
         elif constraints.project_generation_hint and kind == "modify":
             workflow_hint = "multi_file_generation"
-        return decision.model_copy(
+        route = decision.model_copy(
             update={
                 "kind": kind,
                 "confidence": min(decision.confidence, 0.74),
@@ -260,13 +278,75 @@ class ModelRouter:
                 "workflow_hint": workflow_hint,
                 "route_source": "fallback",
                 "requires_tools": kind in {"inspect", "modify", "operate"} or bool(capabilities),
-                "requires_mutation": kind == "modify" and bool(capabilities.intersection({"mutate_file", "delete_file"})),
+                "requires_mutation": False if constraints.read_only_requested else kind == "modify" and bool(capabilities.intersection({"mutate_file", "delete_file"})),
                 "requires_shell": kind == "operate" and "run_shell" in capabilities,
                 "requires_validation": bool(decision.requires_validation or constraints.validation_requested_hint)
                 and "run_validation" in capabilities,
                 "requires_external_knowledge": bool(capabilities.intersection({"web_search"})) and not local_workspace_request,
             }
         )
+        return _sanitize_read_only_route(
+            route,
+            constraints=constraints,
+            local_workspace_request=local_workspace_request,
+        )
+
+
+def _read_only_needs_workspace_tools(
+    constraints: PromptConstraints,
+    local_workspace_request: bool,
+    capabilities: set[ToolCapability],
+) -> bool:
+    return bool(
+        constraints.workspace_evidence_requested
+        or constraints.path_hints
+        or local_workspace_request
+        or capabilities.intersection({"read_file", "search_workspace"})
+    )
+
+
+def _sanitize_read_only_route(
+    route: RoutingDecision,
+    *,
+    constraints: PromptConstraints,
+    local_workspace_request: bool,
+) -> RoutingDecision:
+    if not route.read_only_requested:
+        return route
+    capabilities = set(route.tool_capabilities)
+    capabilities.difference_update({"mutate_file", "delete_file", "run_shell", "run_validation"})
+    flags = set(route.flags)
+    flags.add("read_only_requested")
+    flags.discard("requires_validation")
+    if local_workspace_request:
+        capabilities.discard("web_search")
+    needs_workspace_tools = bool(
+        _read_only_needs_workspace_tools(constraints, local_workspace_request, capabilities)
+        or route.target_hint
+        or (route.kind in {"inspect", "modify", "operate"} and route.requires_tools and "web_search" not in capabilities)
+    )
+    if needs_workspace_tools:
+        kind: RouteKind = "inspect"
+        capabilities.update({"read_file", "search_workspace"})
+    elif "web_search" in capabilities and not local_workspace_request:
+        kind = "inspect"
+    else:
+        kind = "answer"
+        capabilities.clear()
+    return route.model_copy(
+        update={
+            "kind": kind,
+            "tool_capabilities": capabilities,
+            "workflow_hint": "none",
+            "flags": flags,
+            "read_only_requested": True,
+            "requires_tools": kind == "inspect" or bool(capabilities),
+            "requires_mutation": False,
+            "requires_shell": False,
+            "requires_validation": False,
+            "requires_external_knowledge": bool("web_search" in capabilities and not local_workspace_request),
+        }
+    )
 
 
 def _first_json_object(text: str) -> dict[str, Any] | None:

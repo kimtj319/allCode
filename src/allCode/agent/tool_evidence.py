@@ -19,10 +19,66 @@ class ToolEvidenceRecorder:
         *,
         workspace_root: str,
     ) -> None:
+        self._record_source_overview(result, evidence, workspace_root=workspace_root)
         self._record_validation_failure(result, evidence, workspace_root=workspace_root)
         self._record_patch_strategy(result, evidence, workspace_root=workspace_root)
         self._record_public_symbols(result, evidence, workspace_root=workspace_root)
         self._clear_repair_after_success(result, evidence, workspace_root=workspace_root)
+
+    @staticmethod
+    def _record_source_overview(
+        result: ToolResult,
+        evidence: CompletionEvidence,
+        *,
+        workspace_root: str,
+    ) -> None:
+        observation = result.metadata.get("observation")
+        if result.name in {"read_file", "search_files", "list_directory", "glob_files", "list_tree", "source_overview", "source_probe"}:
+            evidence.inspect_observation_count += 1
+        if isinstance(observation, dict) and observation.get("kind") == "source_probe":
+            raw_target = str(observation.get("target") or result.metadata.get("file_path") or "")
+            target = normalize_evidence_path(raw_target, workspace_root=workspace_root)
+            if target and target not in evidence.inspected_paths:
+                evidence.inspected_paths.append(target)
+            if target and target not in evidence.representative_read_paths:
+                evidence.representative_read_paths.append(target)
+            return
+        if not isinstance(observation, dict) or observation.get("kind") != "source_overview":
+            return
+        for path in result.metadata.get("source_overview_paths", result.metadata.get("overview_paths", [])):
+            if not isinstance(path, str):
+                continue
+            normalized = normalize_evidence_path(path, workspace_root=workspace_root)
+            if normalized and normalized not in evidence.source_overview_paths:
+                evidence.source_overview_paths.append(normalized)
+        for summary in result.metadata.get("source_overview_summaries", []):
+            if isinstance(summary, str) and summary and summary not in evidence.source_overview_summaries:
+                evidence.source_overview_summaries.append(summary[:500])
+        if bool(result.metadata.get("truncated")):
+            evidence.source_overview_truncated = True
+        coverage = result.metadata.get("coverage")
+        if isinstance(coverage, dict):
+            evidence.source_analysis_coverage = dict(coverage)
+            if bool(coverage.get("truncated")):
+                evidence.source_overview_truncated = True
+        for raw_path in result.metadata.get("representative_reads", []):
+            if not isinstance(raw_path, str):
+                continue
+            path = normalize_evidence_path(raw_path, workspace_root=workspace_root)
+            if path and path not in evidence.source_representative_candidates:
+                evidence.source_representative_candidates.append(path)
+        record_source_representative_metadata(result.metadata, evidence, workspace_root=workspace_root)
+        roles = result.metadata.get("package_roles")
+        if isinstance(roles, list):
+            for role in roles:
+                if not isinstance(role, dict):
+                    continue
+                normalized = dict(role)
+                path = normalize_evidence_path(str(normalized.get("path") or ""), workspace_root=workspace_root)
+                if path:
+                    normalized["path"] = path
+                if normalized and normalized not in evidence.source_package_roles:
+                    evidence.source_package_roles.append(normalized)
 
     @staticmethod
     def _record_validation_failure(
@@ -173,6 +229,37 @@ def normalize_evidence_path(path: str, *, workspace_root: str) -> str:
         return candidate.as_posix()
 
 
+def record_source_representative_metadata(
+    metadata: dict,
+    evidence: CompletionEvidence,
+    *,
+    workspace_root: str,
+) -> None:
+    reasons = metadata.get("representative_reasons")
+    if isinstance(reasons, list):
+        for item in reasons:
+            if not isinstance(item, dict):
+                continue
+            normalized = dict(item)
+            path = normalize_evidence_path(str(normalized.get("path") or ""), workspace_root=workspace_root)
+            if not path:
+                continue
+            normalized["path"] = path
+            raw_reasons = normalized.get("reasons")
+            if isinstance(raw_reasons, list):
+                normalized["reasons"] = [str(reason) for reason in raw_reasons if str(reason).strip()][:8]
+            if normalized and normalized not in evidence.source_representative_reasons:
+                evidence.source_representative_reasons.append(normalized)
+    scores = metadata.get("representative_scores")
+    if isinstance(scores, dict):
+        for raw_path, raw_score in scores.items():
+            path = normalize_evidence_path(str(raw_path), workspace_root=workspace_root)
+            if not path:
+                continue
+            try:
+                evidence.source_representative_scores[path] = float(raw_score)
+            except (TypeError, ValueError):
+                continue
 def _add_requested_source_artifact(evidence: CompletionEvidence, target: str) -> None:
     if not target:
         return

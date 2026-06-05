@@ -8,7 +8,7 @@ from allCode.core.models import Message
 
 
 MUTATION_TOOL_NAMES = {"patch_file", "write_file", "delete_path"}
-INSPECTION_TOOL_NAMES = {"read_file", "search_files", "list_directory"}
+INSPECTION_TOOL_NAMES = {"read_file", "search_files", "list_directory", "glob_files", "list_tree", "source_overview"}
 
 
 @dataclass
@@ -27,3 +27,5 @@ class RoundRuntime:
     inspection_actions: int = 0
     inspection_rounds: int = 0
     final_answer_after_change_requested: bool = False
+    inspect_final_answer_requested: bool = False
+    last_inspect_stage: str = ""

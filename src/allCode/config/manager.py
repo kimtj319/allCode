@@ -19,6 +19,9 @@ from allCode.config.defaults import (
     ENV_BASE_URL,
     ENV_CONFIG_PATH,
     ENV_MODEL,
+    ENV_LSP_ENABLED,
+    ENV_LSP_TIMEOUT_MS,
+    ENV_SOURCE_INTELLIGENCE,
     ENV_WEB_SEARCH_BACKEND,
     ENV_WEB_SEARCH_API_KEY_ENV,
     ENV_WEB_SEARCH_LANGUAGE,
@@ -167,6 +170,12 @@ class ConfigManager:
             data.setdefault("web", {})["timeout_seconds"] = env[ENV_WEB_SEARCH_TIMEOUT]
         if env.get(ENV_WEB_SEARCH_LANGUAGE):
             data.setdefault("web", {})["default_language"] = env[ENV_WEB_SEARCH_LANGUAGE]
+        if env.get(ENV_SOURCE_INTELLIGENCE):
+            data.setdefault("source_intelligence", {})["mode"] = env[ENV_SOURCE_INTELLIGENCE]
+        if env.get(ENV_LSP_ENABLED):
+            data.setdefault("source_intelligence", {})["lsp_enabled"] = _truthy(env[ENV_LSP_ENABLED])
+        if env.get(ENV_LSP_TIMEOUT_MS):
+            data.setdefault("source_intelligence", {})["lsp_timeout_ms"] = env[ENV_LSP_TIMEOUT_MS]
         return data
 
     @classmethod
@@ -176,3 +185,7 @@ class ConfigManager:
                 cls._deep_merge(target[key], value)
             else:
                 target[key] = deepcopy(value)
+
+
+def _truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}

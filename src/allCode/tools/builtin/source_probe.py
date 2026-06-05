@@ -1,0 +1,270 @@
+"""Bounded source probe tool for symbol/range-grounded inspection."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from allCode.core.event_bus import EventBus
+from allCode.core.models import ToolCall, ToolResult
+from allCode.memory.redaction import redact_data, redact_text
+from allCode.tools.base import ToolContext, ToolDefinition
+from allCode.tools.builtin.file_common import LARGE_FILE_BYTES, content_hash, read_text_if_exists, resolve_under_root
+from allCode.workspace.source_intelligence import SourceFileAnalysis, SourceIntelligenceService, SourceSymbol
+
+
+@dataclass(frozen=True)
+class ProbeRange:
+    start: int
+    end: int
+    reason: str
+    symbol: str = ""
+
+
+class SourceProbeTool:
+    definition = ToolDefinition(
+        name="source_probe",
+        description=(
+            "Inspect bounded source slices around imports and symbols without dumping whole file bodies. "
+            "Use this before read_file for broad source analysis."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "symbols": {"type": "array", "items": {"type": "string"}},
+                "max_ranges": {"type": "integer", "minimum": 1},
+                "context_lines": {"type": "integer", "minimum": 0},
+                "include_imports": {"type": "boolean"},
+                "include_edges": {"type": "boolean"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        read_only=True,
+        group="search",
+        aliases=["probe_source"],
+    )
+
+    async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
+        try:
+            workspace_root = Path(context.workspace.root).expanduser().resolve()
+            path = resolve_under_root(workspace_root, str(call.arguments["path"]))
+            if not path.exists() or not path.is_file():
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    ok=False,
+                    error=f"file does not exist: {path}",
+                    error_type="not_found",
+                    metadata={
+                        "file_path": str(path),
+                        "observation": {"kind": "source_probe", "target": str(path), "summary": "File not found", "risk": "low"},
+                    },
+                )
+            content = read_text_if_exists(path)
+            content_bytes = len(content.encode("utf-8"))
+            if content_bytes > LARGE_FILE_BYTES * 2:
+                return self._large_file_result(call, path, workspace_root, content, content_bytes)
+
+            analysis = SourceIntelligenceService().analyze_text(path=path, text=content)
+            symbols = [str(item) for item in call.arguments.get("symbols", []) if str(item).strip()]
+            max_ranges = min(max(1, int(call.arguments.get("max_ranges", 4))), 8)
+            context_lines = min(max(0, int(call.arguments.get("context_lines", 2))), 6)
+            include_imports = bool(call.arguments.get("include_imports", True))
+            include_edges = bool(call.arguments.get("include_edges", True))
+            ranges = _select_ranges(
+                analysis,
+                requested_symbols=symbols,
+                line_count=len(content.splitlines()),
+                max_ranges=max_ranges,
+                context_lines=context_lines,
+                include_imports=include_imports,
+            )
+            rendered = _render_ranges(path, workspace_root, content, ranges)
+            observation = _observation(
+                path=path,
+                workspace_root=workspace_root,
+                analysis=analysis,
+                ranges=ranges,
+                include_edges=include_edges,
+                truncated=len(ranges) >= max_ranges,
+            )
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                ok=True,
+                content=redact_text(rendered),
+                metadata=redact_data(
+                    {
+                        "file_path": str(path),
+                        "content_hash": content_hash(content),
+                        "line_count": len(content.splitlines()),
+                        "full_size_bytes": content_bytes,
+                        "returned_ranges": [range_item.__dict__ for range_item in ranges],
+                        "truncated": len(ranges) >= max_ranges,
+                        "backend": analysis.backend,
+                        "observation": observation,
+                    }
+                ),
+            )
+        except Exception as exc:
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
+
+    @staticmethod
+    def _large_file_result(call: ToolCall, path: Path, workspace_root: Path, content: str, content_bytes: int) -> ToolResult:
+        relative = _relative(path, workspace_root)
+        summary = (
+            f"Source probe for {relative}: file is too large for full AST probing "
+            f"({content_bytes} bytes). Use search_files and ranged read_file."
+        )
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            ok=True,
+            content=summary,
+            metadata={
+                "file_path": str(path),
+                "content_hash": content_hash(content),
+                "full_size_bytes": content_bytes,
+                "truncated": True,
+                "range_first_required": True,
+                "observation": {
+                    "kind": "source_probe",
+                    "target": relative,
+                    "summary": "Large source file; probe returned metadata only",
+                    "risk": "low",
+                    "truncated": True,
+                },
+            },
+        )
+
+
+def _select_ranges(
+    analysis: SourceFileAnalysis,
+    *,
+    requested_symbols: list[str],
+    line_count: int,
+    max_ranges: int,
+    context_lines: int,
+    include_imports: bool,
+) -> list[ProbeRange]:
+    ranges: list[ProbeRange] = []
+    if include_imports and analysis.imports:
+        lines = [item.line for item in analysis.imports if item.line > 0]
+        if lines:
+            ranges.append(_bounded_range(min(lines), max(lines), line_count, context_lines=0, reason="imports"))
+
+    matched_symbols = _matching_symbols(analysis.symbols, requested_symbols)
+    if not matched_symbols:
+        matched_symbols = [symbol for symbol in analysis.symbols if symbol.exported][:max_ranges]
+    for symbol in matched_symbols:
+        if len(ranges) >= max_ranges:
+            break
+        start = symbol.line or 1
+        end = symbol.end_line or symbol.line or start
+        ranges.append(
+            _bounded_range(
+                start,
+                end,
+                line_count,
+                context_lines=context_lines,
+                reason="symbol",
+                symbol=symbol.scope or symbol.name,
+            )
+        )
+    return _merge_ranges(ranges)[:max_ranges]
+
+
+def _matching_symbols(symbols: list[SourceSymbol], requested_symbols: list[str]) -> list[SourceSymbol]:
+    if not requested_symbols:
+        return []
+    needles = [symbol.lower() for symbol in requested_symbols if symbol.strip()]
+    matches: list[SourceSymbol] = []
+    for symbol in symbols:
+        haystack = " ".join([symbol.name, symbol.scope, symbol.signature]).lower()
+        if any(needle in haystack for needle in needles):
+            matches.append(symbol)
+    return matches
+
+
+def _bounded_range(
+    start: int,
+    end: int,
+    line_count: int,
+    *,
+    context_lines: int,
+    reason: str,
+    symbol: str = "",
+) -> ProbeRange:
+    return ProbeRange(
+        start=max(1, start - context_lines),
+        end=min(max(start, end + context_lines), max(1, line_count)),
+        reason=reason,
+        symbol=symbol,
+    )
+
+
+def _merge_ranges(ranges: list[ProbeRange]) -> list[ProbeRange]:
+    merged: list[ProbeRange] = []
+    for item in sorted(ranges, key=lambda range_item: (range_item.start, range_item.end)):
+        if merged and item.start <= merged[-1].end + 1:
+            previous = merged[-1]
+            reason = previous.reason if previous.reason == item.reason else f"{previous.reason}+{item.reason}"
+            symbol = previous.symbol or item.symbol
+            merged[-1] = ProbeRange(previous.start, max(previous.end, item.end), reason, symbol)
+            continue
+        merged.append(item)
+    return merged
+
+
+def _render_ranges(path: Path, workspace_root: Path, content: str, ranges: list[ProbeRange]) -> str:
+    relative = _relative(path, workspace_root)
+    lines = content.splitlines()
+    rendered = [f"Source probe for {relative}:"]
+    for item in ranges:
+        label = f"{item.reason} {item.symbol}".strip()
+        rendered.append(f"\n[{item.start}-{item.end}] {label}")
+        for line_number in range(item.start, item.end + 1):
+            if 1 <= line_number <= len(lines):
+                rendered.append(f"{line_number}: {lines[line_number - 1]}")
+    if len(rendered) == 1:
+        rendered.append("- no symbols or imports found")
+    return "\n".join(rendered)
+
+
+def _observation(
+    *,
+    path: Path,
+    workspace_root: Path,
+    analysis: SourceFileAnalysis,
+    ranges: list[ProbeRange],
+    include_edges: bool,
+    truncated: bool,
+) -> dict[str, object]:
+    symbols = [symbol.scope or symbol.name for symbol in analysis.symbols if symbol.exported][:12]
+    edges: list[dict[str, object]] = []
+    if include_edges:
+        for item in analysis.imports[:8]:
+            edges.append({"kind": "import", "target": item.module, "line": item.line})
+        for item in analysis.references[:12]:
+            if item.kind in {"call", "inheritance", "reference"}:
+                edges.append({"kind": item.kind, "symbol": item.symbol, "target": item.target_hint, "line": item.line})
+    return {
+        "kind": "source_probe",
+        "target": _relative(path, workspace_root),
+        "summary": f"Probed {Path(path).name} with {len(ranges)} bounded range(s)",
+        "risk": "low",
+        "observed_symbols": symbols,
+        "line_ranges": [range_item.__dict__ for range_item in ranges],
+        "outgoing_edges": edges[:16],
+        "truncated": truncated,
+        "backend": analysis.backend,
+    }
+
+
+def _relative(path: Path, root: Path) -> str:
+    try:
+        return path.expanduser().resolve().relative_to(root.expanduser().resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.as_posix()

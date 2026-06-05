@@ -45,12 +45,19 @@ def needs_candidate_read(evidence: CompletionEvidence) -> bool:
 
 def next_candidate_read_call(evidence: CompletionEvidence, *, workspace_root: str) -> ToolCall | None:
     inspected = {_normalize(path) for path in evidence.inspected_paths}
+    representative = {_normalize(path) for path in evidence.source_representative_candidates}
     for candidate in evidence.search_candidate_paths:
         normalized = _normalize(candidate)
         if normalized in inspected:
             continue
         file_path = _relative_candidate(candidate, workspace_root=workspace_root)
         if file_path:
+            if evidence.source_overview_paths and normalized in representative:
+                return ToolCall(
+                    id=f"grounding-{uuid4().hex}",
+                    name="source_probe",
+                    arguments={"path": file_path, "max_ranges": 4, "context_lines": 2, "include_imports": True},
+                )
             return ToolCall(
                 id=f"grounding-{uuid4().hex}",
                 name="read_file",

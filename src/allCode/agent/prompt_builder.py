@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from allCode.agent.context import ContextBundle
+from allCode.agent.language import (
+    ResponseLanguage,
+    blocked_summary_labels,
+    final_answer_request_text,
+    normalize_response_language,
+    response_language_from_messages,
+)
+from allCode.agent.prompt_builder_helpers import (
+    blocked_next_step,
+    blocked_reason_detail,
+    content_with_evidence_bundle,
+    tool_results_from_messages,
+)
 from allCode.agent.router import RoutingDecision
 from allCode.core.models import Message, ToolResult, TurnInput
 from allCode.core.result import RepairTarget
@@ -40,31 +53,70 @@ class PromptBuilder:
         updated = list(messages)
         for result in results:
             content = result.content or (result.error if not result.ok else "") or "Tool execution failed."
-            content = self._content_with_evidence_bundle(content, result)
+            content = content_with_evidence_bundle(content, result)
+            metadata = dict(result.metadata)
+            metadata.update(
+                {
+                    "tool_name": result.name,
+                    "ok": result.ok,
+                    "error_type": result.error_type,
+                }
+            )
             updated.append(
                 Message(
                     role="tool",
                     content=content,
                     tool_call_id=result.call_id,
-                    metadata={
-                        "tool_name": result.name,
-                        "ok": result.ok,
-                        "error_type": result.error_type,
-                    },
+                    metadata=metadata,
                 )
             )
         return updated
-    def final_answer_request(self, messages: Sequence[Message]) -> list[Message]:
+    def final_answer_request(
+        self,
+        messages: Sequence[Message],
+        *,
+        response_language: ResponseLanguage | None = None,
+    ) -> list[Message]:
+        language = response_language or response_language_from_messages(messages)
         return [
             *messages,
             Message(
                 role="user",
-                content=(
-                    "Provide the final answer only, grounded in the observed tool results. "
-                    "If the task cannot be completed, explicitly say what was checked, why it is blocked, "
-                    "and what safe next step is available."
-                ),
+                content=final_answer_request_text(language),
             ),
+        ]
+
+    def inspect_stage_request(
+        self,
+        messages: Sequence[Message],
+        *,
+        stage: str,
+        target_paths: Sequence[str] = (),
+        reason: str = "",
+    ) -> list[Message]:
+        targets = [path for path in target_paths if path][:6]
+        details: list[str] = []
+        if targets:
+            details.append("Representative targets: " + ", ".join(targets))
+        if reason:
+            details.append("Stage reason: " + reason)
+        if stage == "targeted_read":
+            instruction = (
+                "Before producing the final source analysis, inspect still-unread representative files from the latest overview. "
+                "Prefer source_probe on the listed targets in priority order within the remaining budget; use read_file only when a precise line range or missing symbol detail is still needed. "
+                "Avoid repeating files that were already probed or read. "
+                "For each file, collect only bounded evidence: public classes/functions, import or runtime wiring, and entrypoint clues. "
+                "Keep this turn strictly read-only; do not create README, SUMMARY, report, or other document files. "
+                "After representative evidence is observed, provide the analysis in the final answer and separate observed facts from inferred roles."
+            )
+        else:
+            instruction = (
+                "Continue the read-only source analysis with bounded evidence gathering. "
+                "Do not mutate files."
+            )
+        return [
+            *messages,
+            Message(role="user", content=self._join_prompt_parts(instruction, "\n".join(details))),
         ]
 
     def empty_response_retry(self, messages: Sequence[Message]) -> list[Message]:
@@ -241,26 +293,29 @@ class PromptBuilder:
         *,
         reason: str,
         last_tool_results: Sequence[ToolResult] = (),
+        response_language: ResponseLanguage | None = None,
     ) -> str:
+        language = normalize_response_language(response_language or response_language_from_messages(messages))
+        labels = blocked_summary_labels(language)
         lines = [
-            "요청을 완료하지 못했습니다.",
-            f"- 차단 사유: {reason}",
+            labels.title,
+            f"- {labels.reason}: {reason}",
         ]
-        tool_results = list(last_tool_results) or self._tool_results_from_messages(messages)
-        reason_detail = self._blocked_reason_detail(reason, tool_results)
+        tool_results = list(last_tool_results) or tool_results_from_messages(messages)
+        reason_detail = blocked_reason_detail(reason, tool_results, response_language=language)
         if reason_detail:
-            lines.append(f"- 세부 내용: {reason_detail}")
+            lines.append(f"- {labels.details}: {reason_detail}")
         if tool_results:
-            lines.append("- 확인한 근거:")
+            lines.append(f"- {labels.evidence}:")
             for result in tool_results[-3:]:
-                status = "성공" if result.ok else "실패"
+                status = labels.success if result.ok else labels.failure
                 detail = (result.content if result.ok else result.error or "").strip()
                 if len(detail) > 500:
                     detail = detail[:500].rstrip() + "..."
                 if not detail:
                     detail = result.error_type or "no output"
                 lines.append(f"  - {result.name}: {status} - {detail}")
-        lines.append(f"- 다음 단계: {self._blocked_next_step(reason, tool_results)}")
+        lines.append(f"- {labels.next_step}: {blocked_next_step(reason, tool_results, response_language=language)}")
         return "\n".join(lines)
 
     @staticmethod
@@ -285,7 +340,15 @@ class PromptBuilder:
         if routing.target_hint:
             lines.append(f"Target hint: {routing.target_hint}.")
         if routing.read_only_requested:
-            lines.append("Read-only constraint: do not call mutation or shell tools.")
+            lines.extend(
+                [
+                    "Read-only constraint: do not call mutation, shell, validation, or file deletion tools.",
+                    "Return summaries, reports, and analysis directly in the final answer; do not create README, SUMMARY, report, or other document files.",
+                    "Use only read/search/source overview evidence tools when workspace evidence is needed.",
+                    "파일로 생성하지 말고 최종 답변에 직접 작성하십시오.",
+                    "파일 생성, 수정, 삭제, 포맷팅, 커밋, 테스트 실행 도구를 호출하지 마십시오.",
+                ]
+            )
         if routing.kind == "answer" and not routing.requires_external_knowledge and not routing.allows_tool_use:
             lines.extend(
                 [
@@ -300,10 +363,14 @@ class PromptBuilder:
         if routing.kind == "inspect":
             lines.extend(
                 [
+                    "For source tree, directory structure, module inventory, or package-role inspection, start with source_overview, list_tree, or glob_files.",
+                    "Do not call search_files with an empty query; search_files is only for non-empty literal content search.",
                     "For file-grounded inspection, use search_files or read_file before answering when the user names a file, asks to actually read/verify evidence, or requests a source filename.",
                     "Do not answer from workspace context alone when the prompt asks for file evidence; create an observable tool result first.",
-                    "If the user asks for directory structure, file layout, module inventory, or file list, verify with list_directory or search_files before answering.",
-                    "For symbols, classes, functions, or project-name evidence, prefer search_files to locate candidates, then read_file the selected file once.",
+                    "If the user asks for directory structure, file layout, module inventory, or file list, verify with source_overview, list_tree, glob_files, or list_directory before answering.",
+                    "After source_overview suggests representative files, prefer source_probe before read_file so only symbol/range evidence is added.",
+                    "For symbols, classes, functions, or project-name evidence, prefer source_probe on known candidate files; use search_files only to locate missing candidates.",
+                    "After enough bounded source_overview/source_probe evidence is available, stop calling tools and provide the final answer.",
                     "Avoid repeated read_file calls for the same target; reuse the latest observation unless a new line range is needed.",
                 ]
             )
@@ -356,24 +423,6 @@ class PromptBuilder:
             ]
         )
 
-    def _content_with_evidence_bundle(self, content: str, result: ToolResult) -> str:
-        bundle = result.metadata.get("evidence_bundle")
-        if not isinstance(bundle, list) or not bundle:
-            return content
-        lines = [content, "Evidence bundle:"]
-        for item in bundle[:10]:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title", "")).strip()
-            url = str(item.get("url", "")).strip()
-            snippet = str(item.get("snippet", "")).strip()
-            lines.append(f"- title: {title}")
-            if url:
-                lines.append(f"  url: {url}")
-            if snippet:
-                lines.append(f"  snippet: {snippet}")
-        return "\n".join(line for line in lines if line)
-
     @staticmethod
     def _format_repair_targets(repair_targets: Sequence[RepairTarget]) -> list[str]:
         lines: list[str] = []
@@ -397,50 +446,3 @@ class PromptBuilder:
         if not detail:
             return instruction
         return f"{instruction}\n\n{detail}"
-
-    def _tool_results_from_messages(self, messages: Sequence[Message]) -> list[ToolResult]:
-        results: list[ToolResult] = []
-        for message in messages:
-            if message.role != "tool":
-                continue
-            results.append(
-                ToolResult(
-                    call_id=message.tool_call_id or "unknown",
-                    name=str(message.metadata.get("tool_name") or "tool"),
-                    ok=bool(message.metadata.get("ok")),
-                    content=message.content,
-                    error=None if message.metadata.get("ok") else message.content,
-                    error_type=str(message.metadata.get("error_type") or "") or None,
-                )
-            )
-        return results
-
-    def _blocked_reason_detail(self, reason: str, tool_results: Sequence[ToolResult]) -> str | None:
-        if reason == "target_clarification_required" or "clarification" in reason:
-            return "수정 대상이 되는 어떤 파일인지 확정되지 않았습니다."
-        if any(result.error_type == "not_found" for result in tool_results):
-            return "요청한 파일이나 경로를 찾지 못했습니다."
-        if any(result.error_type in {"approval_required", "policy_denied"} for result in tool_results):
-            return "위험하거나 권한이 필요한 작업이라 승인 없이 실행하지 않았습니다."
-        if any(result.error_type in {"tool_loop_detected", "no_progress_detected"} for result in tool_results):
-            return "같은 도구 호출이 반복되어 더 진행해도 새 근거가 나오지 않는 상태입니다."
-        if any(result.error_type in {"patch_ambiguous", "patch_not_found", "patch_invalid_request", "patch_strategy_required"} for result in tool_results):
-            return "patch_file 검색 블록이 현재 파일 내용과 정확히 일치하지 않아 수리 전에 파일을 다시 확인해야 합니다."
-        return None
-
-    def _blocked_next_step(self, reason: str, tool_results: Sequence[ToolResult]) -> str:
-        if reason == "target_clarification_required" or "clarification" in reason:
-            return "어떤 파일을 수정할지 파일명이나 경로를 지정해 주세요."
-        if any(result.error_type == "not_found" for result in tool_results):
-            return "찾지 못한 경로를 확인하거나 올바른 파일명을 지정해 주세요."
-        if any(result.error_type in {"approval_required", "policy_denied"} for result in tool_results):
-            return "승인이 필요한 작업이면 approval mode를 조정하거나 더 안전한 명령으로 다시 요청해 주세요."
-        if any(result.error_type in {"tool_loop_detected", "no_progress_detected"} for result in tool_results):
-            return "이미 확인한 결과와 다른 파일, 검색어, 또는 검증 조건을 지정해 주세요."
-        if any(result.error_type == "patch_ambiguous" for result in tool_results):
-            return "해당 파일의 관련 범위를 다시 읽은 뒤 더 구체적인 patch_file 또는 write_file로 수리해야 합니다."
-        if any(result.error_type == "patch_strategy_required" for result in tool_results):
-            return "같은 patch를 반복하지 말고 관련 범위를 read_file로 다시 확인한 뒤 더 구체적인 patch_file 또는 write_file로 전환해야 합니다."
-        if any(result.error_type in {"patch_not_found", "patch_invalid_request"} for result in tool_results):
-            return "현재 파일 내용을 다시 읽은 뒤 실제 존재하는 텍스트를 기준으로 patch_file을 재시도해야 합니다."
-        return "필요한 파일명, 승인, 또는 검색/검증 조건을 명확히 지정해 다시 요청해 주세요."

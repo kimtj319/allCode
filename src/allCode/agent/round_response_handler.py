@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from allCode.agent.finalization_helpers import blocked_summary
+from allCode.agent.inspect_summary import grounded_inspect_summary, has_inspect_summary_evidence
 from allCode.agent.recovery import needs_validation_repair
 from allCode.agent.round_runtime import RoundRuntime
 from allCode.agent.turn_completion import LoopOutcome
@@ -38,6 +39,7 @@ class RoundResponseHandler:
             return await self._empty_response(state, runtime, recovery)
         if parsed.status == "reasoning_only":
             return await self._reasoning_only(
+                turn_input,
                 state,
                 runtime,
                 recovery,
@@ -96,6 +98,7 @@ class RoundResponseHandler:
 
     async def _reasoning_only(
         self,
+        turn_input: TurnInput,
         state,
         runtime: RoundRuntime,
         recovery,
@@ -168,9 +171,23 @@ class RoundResponseHandler:
         if recovery.can_request_final_answer():
             state.phase = "recovery"
             await self._runner._record_recovery(state, recovery, "reasoning_only", attempts=1)
-            runtime.messages = self._runner._prompt_builder.final_answer_request(runtime.messages)
+            runtime.messages = self._runner._prompt_builder.final_answer_request(
+                runtime.messages,
+                response_language=self._runner._response_language(turn_input.user_prompt),
+            )
             return None
         await self._runner._record_recovery(state, recovery, "reasoning_only", attempts=2, blocked=True)
+        if getattr(routing, "kind", "") == "inspect" and has_inspect_summary_evidence(evidence):
+            return LoopOutcome(
+                status="partial",
+                answer=grounded_inspect_summary(
+                    messages=runtime.messages,
+                    evidence=evidence,
+                    reason="model_returned_reasoning_only_after_retry",
+                    response_language=self._runner._response_language(turn_input.user_prompt),
+                ),
+                error="Model returned reasoning-only content after retry.",
+            )
         return LoopOutcome(
             status="partial",
             answer=blocked_summary(self._runner._prompt_builder, runtime.messages, "model_returned_reasoning_only_after_retry"),
@@ -182,7 +199,9 @@ class RoundResponseHandler:
             runtime.pseudo_tool_retry_used = True
             if parsed.text.strip():
                 runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))
-            if routing.allows_tool_use:
+            if getattr(routing, "read_only_requested", False):
+                runtime.messages = self._runner._prompt_builder.natural_language_retry(runtime.messages)
+            elif routing.allows_tool_use:
                 runtime.messages = self._runner._prompt_builder.native_tool_call_retry(runtime.messages, parser_error=parsed.error)
             else:
                 runtime.messages = self._runner._prompt_builder.natural_language_retry(runtime.messages)
@@ -214,7 +233,7 @@ class RoundResponseHandler:
                 recovery,
                 "no_progress",
                 attempts=recovery.mutation_action_requests,
-                last_error="malformed tool call occurred before required test artifact mutation",
+                last_error="malformed native tool call occurred before required artifact mutation",
             )
             if parsed.text.strip():
                 runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))

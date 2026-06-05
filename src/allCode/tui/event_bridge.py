@@ -46,7 +46,7 @@ class TUIEventBridge:
                 status=rendered.status,
                 spinner=rendered.spinner,
             )
-        if event.event_type == "final_answer_ready":
+        if event.event_type in {"final_answer_ready", "turn_finalized"}:
             return UIEvent(
                 kind="assistant_finalized",
                 content=rendered.transcript,

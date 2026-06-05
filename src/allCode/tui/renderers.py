@@ -92,30 +92,59 @@ class EventRenderer:
         result = getattr(event, "result", None)
         if result is None:
             return RenderedEvent(status="도구 실행 완료", severity=event.severity)
-        body = result.content or result.error or ""
-        title = f"{result.name}: {'ok' if result.ok else 'error'}"
-        transcript = f"[tool] {title}"
-        if body:
-            if len(body) > 1200:
-                preview = body[:400] + "\n[folded output: open tool panel for full content]"
-                return RenderedEvent(
-                    transcript=f"{transcript}\n{preview}",
-                    transcript_role="tool",
-                    status="도구 실행 완료",
-                    foldable=True,
-                    fold_title=title,
-                    fold_full_text=body,
-                    severity="user_visible",
-                )
-            transcript = f"{transcript}\n{body}"
+        if result.name == "source_overview":
+            return self._render_source_overview_result(result, event.severity)
+        quiet_status = _quiet_readonly_tool_status(result)
+        if quiet_status:
+            return RenderedEvent(status=quiet_status, severity="status_only")
+        status = "ok" if result.ok else result.error_type or "error"
+        target = _tool_target(result)
+        summary = _tool_summary(result)
+        target_suffix = f" {target}" if target else ""
+        summary_suffix = f" · {summary}" if summary else ""
+        transcript = f"• {result.name}{target_suffix} -> {status}{summary_suffix}"
+        full_text = result.content or result.error or ""
         return RenderedEvent(
             transcript=transcript,
             transcript_role="tool",
             status="도구 실행 완료",
-            foldable=False,
-            fold_title=title,
+            foldable=bool(full_text),
+            fold_title=f"{result.name}: {status}",
+            fold_full_text=full_text,
             severity="user_visible",
         )
+
+    def _render_source_overview_collected(self, event: AgentEvent) -> RenderedEvent:
+        target = str(event.data.get("target") or "workspace")
+        file_count = _compact_count(event.data.get("file_count"), "files")
+        symbol_count = _compact_count(event.data.get("symbol_count"), "symbols")
+        truncated = " · truncated" if event.data.get("truncated") else ""
+        metrics = " · ".join(part for part in (file_count, symbol_count) if part)
+        suffix = f" · {metrics}" if metrics else ""
+        return RenderedEvent(
+            transcript="",
+            transcript_role="status",
+            status=messages.ORGANIZING_STATUS,
+            severity="status_only",
+        )
+
+    def _render_empty_search_denied(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status="구조 탐색 도구로 전환 중", severity=event.severity)
+
+    def _render_inspect_stage_selected(self, event: AgentEvent) -> RenderedEvent:
+        stage = str(event.data.get("stage") or "")
+        if stage == "source_discovery":
+            status = "코드 구조 확인 중"
+        elif stage == "targeted_read":
+            status = "대표 파일 확인 중"
+        elif stage == "finalize":
+            status = messages.ORGANIZING_STATUS
+        else:
+            status = messages.WORKING_STATUS
+        return RenderedEvent(status=status, spinner=stage != "finalize", severity=event.severity)
+
+    def _render_inspect_finalization_gate_opened(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status=messages.ORGANIZING_STATUS, spinner=True, severity=event.severity)
 
     def _render_validation_started(self, event: AgentEvent) -> RenderedEvent:
         command = event.data.get("command", "")
@@ -183,6 +212,19 @@ class EventRenderer:
             severity=event.severity,
         )
 
+    def _render_turn_finalized(self, event: AgentEvent) -> RenderedEvent:
+        final_answer = getattr(event, "final_answer", event.message)
+        status = getattr(event, "status", event.data.get("status", ""))
+        prefix = ""
+        if status in {"partial", "failed"}:
+            prefix = f"{status}: "
+        return RenderedEvent(
+            transcript=f"{prefix}{final_answer}" if final_answer else event.message,
+            transcript_role="allCode",
+            status=messages.READY_STATUS,
+            severity=event.severity,
+        )
+
     def _render_turn_failed(self, event: AgentEvent) -> RenderedEvent:
         if getattr(event, "cancelled", False):
             return RenderedEvent(
@@ -214,6 +256,28 @@ class EventRenderer:
             severity=event.severity,
         )
 
+    def _render_source_overview_result(self, result, severity: str) -> RenderedEvent:
+        status = "ok" if result.ok else result.error_type or "error"
+        target = _tool_target(result)
+        file_count = _compact_count(result.metadata.get("file_count"), "files")
+        symbol_count = _compact_count(result.metadata.get("symbol_count"), "symbols")
+        truncated = " · truncated" if result.metadata.get("truncated") else ""
+        metrics = " · ".join(part for part in (file_count, symbol_count) if part)
+        metric_suffix = f" · {metrics}" if metrics else ""
+        target_suffix = f" {target}" if target else ""
+        full_text = result.content or result.error or ""
+        if result.ok:
+            return RenderedEvent(status="코드 구조 확인 중", severity="status_only")
+        return RenderedEvent(
+            transcript=f"• inspect{target_suffix} -> {status}{metric_suffix}{truncated}",
+            transcript_role="tool",
+            status=messages.ORGANIZING_STATUS if result.ok else "도구 실행 완료",
+            foldable=bool(full_text),
+            fold_title=f"source_overview: {status}",
+            fold_full_text=full_text,
+            severity="user_visible",
+        )
+
 
 class FoldedToolOutput(CoreModel):
     title: str
@@ -223,3 +287,43 @@ class FoldedToolOutput(CoreModel):
 
     def toggle(self) -> "FoldedToolOutput":
         return self.model_copy(update={"expanded": not self.expanded})
+
+
+def _tool_target(result) -> str:
+    metadata = getattr(result, "metadata", {}) or {}
+    observation = metadata.get("observation")
+    if isinstance(observation, dict) and observation.get("target"):
+        return str(observation["target"])
+    for key in ("file_path", "path", "query", "command"):
+        value = metadata.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _tool_summary(result) -> str:
+    metadata = getattr(result, "metadata", {}) or {}
+    observation = metadata.get("observation")
+    if isinstance(observation, dict) and observation.get("summary"):
+        return str(observation["summary"])
+    if not result.ok and result.error:
+        return result.error.splitlines()[0][:120]
+    return ""
+
+
+def _quiet_readonly_tool_status(result) -> str:
+    if not result.ok:
+        return ""
+    if result.name == "read_file":
+        return "대표 파일 확인 중"
+    if result.name in {"list_tree", "glob_files", "list_directory", "search_files"}:
+        return "코드 구조 확인 중"
+    return ""
+
+
+def _compact_count(value, label: str) -> str:
+    if isinstance(value, int):
+        return f"{value} {label}"
+    if isinstance(value, str) and value.strip().isdigit():
+        return f"{value.strip()} {label}"
+    return ""

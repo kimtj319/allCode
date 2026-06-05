@@ -189,6 +189,13 @@ class FinalAnswerReady(AgentEvent):
     final_answer: str
 
 
+class TurnFinalized(AgentEvent):
+    event_type: Literal["turn_finalized"] = "turn_finalized"
+    severity: EventSeverity = "user_visible"
+    status: Literal["success", "partial", "failed", "cancelled"]
+    final_answer: str = ""
+
+
 class RecoveryStateUpdated(AgentEvent):
     event_type: Literal["recovery_state_updated"] = "recovery_state_updated"
     severity: EventSeverity = "status_only"
@@ -253,6 +260,26 @@ class ToolCallSchemaDenied(AgentEvent):
     event_type: Literal["tool_call_schema_denied"] = "tool_call_schema_denied"
     severity: EventSeverity = "status_only"
     tool_call: ToolCall
+
+
+class SourceOverviewCollected(AgentEvent):
+    event_type: Literal["source_overview_collected"] = "source_overview_collected"
+    severity: EventSeverity = "status_only"
+
+
+class EmptySearchDenied(AgentEvent):
+    event_type: Literal["empty_search_denied"] = "empty_search_denied"
+    severity: EventSeverity = "debug_only"
+
+
+class InspectStageSelected(AgentEvent):
+    event_type: Literal["inspect_stage_selected"] = "inspect_stage_selected"
+    severity: EventSeverity = "debug_only"
+
+
+class InspectFinalizationGateOpened(AgentEvent):
+    event_type: Literal["inspect_finalization_gate_opened"] = "inspect_finalization_gate_opened"
+    severity: EventSeverity = "status_only"
 
 
 class ModelToolCallDelta(CoreModel):

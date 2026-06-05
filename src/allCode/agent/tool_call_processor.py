@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from allCode.agent.policy import ToolPolicy
 from allCode.agent.phase_gate import PhaseToolGate, target_matches_any
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
+from allCode.agent.read_only_guard import read_only_tool_denial
+from allCode.agent.inspect_tool_normalization import normalize_inspect_stage_call
 from allCode.agent.tool_action_ledger import ToolActionLedger
 from allCode.agent.tool_evidence import ToolEvidenceRecorder
 from allCode.agent.tool_schema_denial import deny_tool_schema
@@ -79,6 +81,7 @@ class ToolCallProcessor:
         *,
         allowed_tool_names: set[str] | None = None,
         phase_gate: PhaseToolGate | None = None,
+        inspect_stage=None,
     ) -> list[ToolResult]:
         results: list[ToolResult] = []
         self._tool_budget.reset_for_turn(state.turn_id)
@@ -91,10 +94,23 @@ class ToolCallProcessor:
         )
         for tool_call in tool_calls:
             tool_call = normalize_tool_call_for_routing(tool_call, routing)
+            tool_call = normalize_inspect_stage_call(tool_call, inspect_stage)
             self._action_ledger.record(tool_call, "requested")
             tool = self._tools.get(tool_call.name)
             if tool is not None:
                 tool_call = strip_harmless_extra_arguments(tool_call, tool.definition)
+            read_only_denial = read_only_tool_denial(
+                routing=routing,
+                tool_call=tool_call,
+                policy=self._tool_policy,
+                definition=tool.definition if tool is not None else None,
+            )
+            if read_only_denial is not None:
+                self._action_ledger.record(tool_call, "policy_denied")
+                if tool_call.name not in completion_evidence.policy_denied_tools:
+                    completion_evidence.policy_denied_tools.append(tool_call.name)
+                results.append(read_only_denial)
+                continue
             if allowed_tool_names is not None and tool_call.name not in allowed_tool_names:
                 self._action_ledger.record(tool_call, "schema_denied")
                 reason = f"Tool {tool_call.name} is not in the allowed schema for this round."

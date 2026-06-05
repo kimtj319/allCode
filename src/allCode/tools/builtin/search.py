@@ -41,6 +41,28 @@ class SearchFilesTool:
             query = str(call.arguments["query"])
             max_results = int(call.arguments.get("max_results", 50))
             root = resolve_under_root(context.workspace.root, str(call.arguments.get("path", ".")))
+            if not query.strip():
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    ok=False,
+                    error="search_files requires a non-empty query.",
+                    error_type="invalid_query",
+                    metadata={
+                        "invalid_query": True,
+                        "query": query,
+                        "required_next_action": (
+                            "Use glob_files, list_tree, or source_overview for file inventory, "
+                            "or provide a non-empty literal search query."
+                        ),
+                        "observation": {
+                            "kind": "search_invalid",
+                            "target": str(root),
+                            "summary": "search_files requires a non-empty query",
+                            "risk": "low",
+                        },
+                    },
+                )
             if root.is_file():
                 rg_result = None
             else:

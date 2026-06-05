@@ -106,6 +106,16 @@ class CompletionEvidence(CoreModel):
     grounding_required: bool = False
     search_candidate_paths: list[str] = Field(default_factory=list)
     inspected_paths: list[str] = Field(default_factory=list)
+    source_overview_paths: list[str] = Field(default_factory=list)
+    source_overview_summaries: list[str] = Field(default_factory=list)
+    source_overview_truncated: bool = False
+    source_package_roles: list[dict[str, object]] = Field(default_factory=list)
+    source_representative_candidates: list[str] = Field(default_factory=list)
+    source_representative_reasons: list[dict[str, object]] = Field(default_factory=list)
+    source_representative_scores: dict[str, float] = Field(default_factory=dict)
+    representative_read_paths: list[str] = Field(default_factory=list)
+    source_analysis_coverage: dict[str, object] = Field(default_factory=dict)
+    inspect_observation_count: int = 0
     zero_result_queries: list[str] = Field(default_factory=list)
     not_found_targets: list[str] = Field(default_factory=list)
     validation_failure_symbols: list[str] = Field(default_factory=list)

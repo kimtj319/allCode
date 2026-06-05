@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from allCode.agent.language import detect_response_language
 from allCode.core.models import Message
 from allCode.core.result import CompletionEvidence
 
@@ -55,6 +56,8 @@ def _apply_workspace_boundary_wording(final_answer: str, routing, prompt: str, *
 
 
 def _apply_safety_refusal_wording(final_answer: str, routing, prompt: str, *, language: str) -> str:
+    if getattr(routing, "read_only_requested", False):
+        return final_answer
     reason = str(getattr(routing, "reason", "")).lower()
     lowered_prompt = prompt.lower()
     destructive_prompt = any(marker in lowered_prompt for marker in ("rm -rf", "sudo", "delete repository", "삭제", "제거"))
@@ -228,6 +231,14 @@ def _apply_schema_denied_wording(
     )
     if not schema_denied or "허용되지 않은 도구" in final_answer:
         return final_answer
+    if getattr(routing, "read_only_requested", False):
+        if language == "en":
+            if "read-only" in final_answer.lower():
+                return final_answer
+            return final_answer.rstrip() + "\n\nA hidden write, shell, or validation tool call was ignored because this turn is read-only."
+        if "읽기 전용 조건" in final_answer:
+            return final_answer
+        return final_answer.rstrip() + "\n\n읽기 전용 조건 때문에 파일 변경, 실행, 검증 도구 호출은 무시하고 수집된 읽기 근거만으로 답했습니다."
     if language == "en":
         return final_answer.rstrip() + "\n\nA tool call that is not allowed in the current phase was blocked; the next step should use the phase-appropriate tool."
     return final_answer.rstrip() + "\n\n현재 단계에서 허용되지 않은 도구 호출은 차단했고, 필요한 단계의 도구로 다시 진행합니다."
@@ -269,9 +280,7 @@ def _apply_feature_objective_wording(
 
 
 def _prompt_language(prompt: str) -> str:
-    hangul = sum(1 for char in prompt if "\uac00" <= char <= "\ud7a3")
-    latin = sum(1 for char in prompt if char.isascii() and char.isalpha())
-    return "ko" if hangul >= max(1, latin // 3) else "en"
+    return detect_response_language(prompt)
 
 
 def _feature_objectives(
