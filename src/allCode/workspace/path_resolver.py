@@ -69,15 +69,22 @@ class PathResolver:
         explicit_target = self.extract_prompt_path(query)
         recent = recent_paths or []
         target = explicit_target or query
-        if explicit_target is None and is_followup_reference(query) and recent:
-            matched_recent = self._semantic_recent_match(query, recent)
-            target = matched_recent or recent[0]
-        recent_match = self._match_recent(target, recent)
-        if recent_match is not None and not Path(target).is_absolute():
-            target = recent_match
         roots = self.roots.writable_roots() if require_writable else self.roots.roots
         if not roots:
             return PathResolution(query=query, denied_reason="no workspace roots configured")
+        if explicit_target is None and is_followup_reference(query) and recent:
+            semantic_matches = self._semantic_recent_matches(query, recent)
+            if len(semantic_matches) == 1:
+                target = semantic_matches[0]
+            elif len(semantic_matches) > 1:
+                return self._ambiguous_recent(query, semantic_matches, roots)
+            else:
+                target = recent[0]
+        recent_matches = self._recent_matches(target, recent)
+        if len(recent_matches) == 1 and not Path(target).is_absolute():
+            target = recent_matches[0]
+        elif len(recent_matches) > 1 and not Path(target).is_absolute():
+            return self._ambiguous_recent(query, recent_matches, roots)
         direct = self._direct_candidates(target, roots)
         existing = [path for path in direct if path.exists()]
         if len(existing) == 1:
@@ -118,17 +125,19 @@ class PathResolver:
                     matches.append(resolved)
         return sorted(set(matches))
 
-    def _match_recent(self, target: str, recent_paths: list[str]) -> str | None:
+    def _recent_matches(self, target: str, recent_paths: list[str]) -> list[str]:
+        exact = [recent for recent in recent_paths if recent == target]
+        if exact:
+            return exact
+        if not _basename_only(target):
+            return []
         target_name = Path(target).name
-        for recent in recent_paths:
-            if recent == target or Path(recent).name == target_name:
-                return recent
-        return None
+        return [recent for recent in recent_paths if Path(recent).name == target_name]
 
-    def _semantic_recent_match(self, query: str, recent_paths: list[str]) -> str | None:
+    def _semantic_recent_matches(self, query: str, recent_paths: list[str]) -> list[str]:
         query_terms = _semantic_terms(query)
         if not query_terms:
-            return None
+            return []
         ranked: list[tuple[int, int, str]] = []
         for index, path in enumerate(recent_paths):
             path_terms = _path_terms(path)
@@ -141,9 +150,30 @@ class PathResolver:
             if score:
                 ranked.append((score, -index, path))
         if not ranked:
-            return None
+            return []
         ranked.sort(reverse=True)
-        return ranked[0][2]
+        top_score = ranked[0][0]
+        return [path for score, _index, path in ranked if score == top_score]
+
+    def _ambiguous_recent(self, query: str, matches: list[str], roots: list[WorkspaceRoot]) -> PathResolution:
+        candidates = self._resolve_recent_candidates(matches, roots)
+        return PathResolution(
+            query=query,
+            candidates=[str(path) for path in candidates] or matches,
+            ambiguous=True,
+        )
+
+    def _resolve_recent_candidates(self, matches: list[str], roots: list[WorkspaceRoot]) -> list[Path]:
+        candidates: list[Path] = []
+        for match in matches:
+            for root in roots:
+                try:
+                    resolved = safe_resolve_under_root(root.resolved, match)
+                except PathPolicyDeniedError:
+                    continue
+                if resolved.exists():
+                    candidates.append(resolved)
+        return sorted(set(candidates))
 
     def _resolved(self, query: str, path: Path) -> PathResolution:
         root = self.roots.find(path)
@@ -187,3 +217,8 @@ def _path_terms(path: str) -> set[str]:
             expanded.add(canonical)
             expanded.update(alias for alias in aliases if re.fullmatch(r"[0-9a-zA-Z_]+", alias))
     return expanded
+
+
+def _basename_only(path: str) -> bool:
+    cleaned = path.replace("\\", "/")
+    return "/" not in cleaned

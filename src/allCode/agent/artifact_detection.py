@@ -60,3 +60,33 @@ def prompt_requests_tests(prompt: str) -> bool:
     if any(marker in compact for marker in korean_patterns):
         return True
     return "테스트" in compact and any(marker in compact for marker in ("추가", "작성", "포함", "만들", "보강", "나눠", "분리"))
+
+
+def prompt_requests_documents(prompt: str) -> bool:
+    lowered = prompt.lower()
+    compact = prompt.replace(" ", "").lower()
+    english_patterns = (
+        r"\b(?:add|write|create|update|include)\s+(?:a\s+)?(?:readme|docs?|documentation|usage guide)\b",
+        r"\b(?:readme|docs?|documentation|usage guide)\s+(?:for|that|with|including)\b",
+    )
+    if any(re.search(pattern, lowered) for pattern in english_patterns):
+        return True
+    korean_markers = (
+        "readme포함",
+        "readme를포함",
+        "readme작성",
+        "readme를작성",
+        "문서포함",
+        "문서를포함",
+        "문서작성",
+        "문서를작성",
+        "사용법포함",
+        "사용법을포함",
+        "사용법작성",
+        "사용법을작성",
+    )
+    if any(marker in compact for marker in korean_markers):
+        return True
+    return any(term in compact for term in ("readme", "문서", "사용법")) and any(
+        marker in compact for marker in ("추가", "작성", "포함", "만들", "생성")
+    )

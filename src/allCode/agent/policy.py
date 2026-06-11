@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from allCode.agent.router import RoutingDecision
-from allCode.core.models import CoreModel, ToolCall
+from allCode.core.models import CoreModel, ToolCall, ToolResult
 from allCode.tools.base import ToolDefinition
 
 ToolCategory = Literal["read", "mutation", "shell", "validation", "web", "unknown"]
@@ -16,6 +16,27 @@ class ToolPolicyDecision(CoreModel):
     reason: str
     category: ToolCategory
     approval_required: bool = False
+
+
+def policy_denied_tool_result(tool_call: ToolCall, decision: ToolPolicyDecision) -> ToolResult:
+    """Build the standard observation returned when route policy blocks a tool."""
+
+    return ToolResult(
+        call_id=tool_call.id,
+        name=tool_call.name,
+        ok=False,
+        error=decision.reason,
+        error_type="policy_denied",
+        metadata={
+            "category": decision.category,
+            "observation": {
+                "kind": "policy_denied",
+                "target": tool_call.name,
+                "summary": decision.reason,
+                "risk": "medium",
+            },
+        },
+    )
 
 
 class ToolPolicy:

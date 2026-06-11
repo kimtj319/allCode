@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from allCode.agent.final_answer_format import apply_output_format_gate
 from allCode.agent.language import detect_response_language
 from allCode.core.models import Message
 from allCode.core.result import CompletionEvidence
@@ -18,15 +19,15 @@ def apply_final_answer_policy(
     messages: Sequence[Message],
 ) -> str:
     language = _prompt_language(prompt)
-    answer = final_answer
+    answer = apply_output_format_gate(final_answer, prompt=prompt, routing=routing, evidence=evidence)
     answer = _apply_workspace_boundary_wording(answer, routing, prompt, language=language)
     answer = _apply_safety_refusal_wording(answer, routing, prompt, language=language)
     answer = _apply_policy_denied_wording(answer, evidence, language=language)
     answer = _apply_safe_alternative_wording(answer, prompt, language=language)
     answer = _apply_validation_wording(answer, evidence, language=language)
     answer = _apply_missing_artifact_wording(answer, evidence, language=language)
-    answer = _apply_not_found_wording(answer, messages, evidence, language=language)
-    answer = _apply_no_search_results_wording(answer, messages, evidence, language=language)
+    answer = _apply_not_found_wording(answer, messages, evidence, routing=routing, prompt=prompt, language=language)
+    answer = _apply_no_search_results_wording(answer, messages, evidence, routing=routing, prompt=prompt, language=language)
     answer = _apply_config_wording(answer, prompt, messages, language=language)
     answer = _apply_budget_wording(answer, messages, language=language)
     answer = _apply_schema_denied_wording(answer, messages, evidence=evidence, routing=routing, language=language)
@@ -137,6 +138,8 @@ def _apply_not_found_wording(
     messages: Sequence[Message],
     evidence: CompletionEvidence,
     *,
+    routing,
+    prompt: str,
     language: str,
 ) -> str:
     changed_targets = set(evidence.changed_files + evidence.created_files + evidence.deleted_files)
@@ -149,6 +152,8 @@ def _apply_not_found_wording(
         has_not_found_message = False
     has_not_found = has_not_found_message or bool(unresolved_not_found)
     if not has_not_found:
+        return final_answer
+    if not _should_surface_lookup_failure(final_answer, routing=routing, prompt=prompt):
         return final_answer
     if language == "en":
         if "not found" in final_answer.lower() or "does not exist" in final_answer.lower():
@@ -164,6 +169,8 @@ def _apply_no_search_results_wording(
     messages: Sequence[Message],
     evidence: CompletionEvidence,
     *,
+    routing,
+    prompt: str,
     language: str,
 ) -> str:
     no_results = any(
@@ -176,6 +183,8 @@ def _apply_no_search_results_wording(
         no_results = False
     if not no_results:
         return final_answer
+    if not _should_surface_lookup_failure(final_answer, routing=routing, prompt=prompt):
+        return final_answer
     if language == "en":
         if "not found" in final_answer.lower() or "no " in final_answer.lower():
             return final_answer
@@ -183,6 +192,56 @@ def _apply_no_search_results_wording(
     if "찾지" in final_answer and "없" in final_answer:
         return final_answer
     return final_answer.rstrip() + "\n\n검색 결과에서 관련 근거를 찾지 못했습니다. 해당 내용은 현재 워크스페이스에 없습니다."
+
+
+def _should_surface_lookup_failure(final_answer: str, *, routing, prompt: str) -> bool:
+    if not final_answer.strip():
+        return True
+    if getattr(routing, "requires_mutation", False) or getattr(routing, "requires_validation", False):
+        return True
+    if _prompt_requests_lookup(prompt):
+        return True
+    kind = str(getattr(routing, "kind", "") or "").lower()
+    if kind in {"answer", "plan"}:
+        return False
+    if getattr(routing, "read_only_requested", False):
+        return False
+    return False
+
+
+def _prompt_requests_lookup(prompt: str) -> bool:
+    lowered = str(prompt or "").lower()
+    compact = "".join(lowered.split())
+    english_markers = (
+        "find file",
+        "find the file",
+        "locate file",
+        "locate the file",
+        "where is",
+        "does file exist",
+        "does the file exist",
+        "search for",
+        "look for",
+        "read file",
+        "open file",
+    )
+    korean_markers = (
+        "파일찾",
+        "파일을찾",
+        "경로찾",
+        "어디에",
+        "어디있",
+        "존재하",
+        "검색해",
+        "찾아줘",
+        "읽어줘",
+        "열어줘",
+    )
+    english_lookup = any(marker in lowered for marker in english_markers) or (
+        any(verb in lowered for verb in ("find", "locate", "search", "read", "open", "look for"))
+        and any(noun in lowered for noun in ("file", "path", "directory", "folder"))
+    )
+    return english_lookup or any(marker in compact for marker in korean_markers)
 
 
 def _apply_config_wording(final_answer: str, prompt: str, messages: Sequence[Message], *, language: str) -> str:
@@ -193,7 +252,7 @@ def _apply_config_wording(final_answer: str, prompt: str, messages: Sequence[Mes
     )
     tool_signal = any(
         message.role == "tool"
-        and any(marker in message.content.lower() for marker in ("config", "setting", "settings", ".env"))
+        and any(marker in str(message.metadata.get("tool_name") or "").lower() for marker in ("config", "settings"))
         for message in messages
     )
     if prompt_signal or tool_signal:
@@ -232,6 +291,8 @@ def _apply_schema_denied_wording(
     if not schema_denied or "허용되지 않은 도구" in final_answer:
         return final_answer
     if getattr(routing, "read_only_requested", False):
+        if _substantive_read_only_evidence_answer(final_answer, evidence):
+            return final_answer
         if language == "en":
             if "read-only" in final_answer.lower():
                 return final_answer
@@ -242,6 +303,35 @@ def _apply_schema_denied_wording(
     if language == "en":
         return final_answer.rstrip() + "\n\nA tool call that is not allowed in the current phase was blocked; the next step should use the phase-appropriate tool."
     return final_answer.rstrip() + "\n\n현재 단계에서 허용되지 않은 도구 호출은 차단했고, 필요한 단계의 도구로 다시 진행합니다."
+
+
+def _substantive_read_only_evidence_answer(final_answer: str, evidence: CompletionEvidence) -> bool:
+    if not _has_read_evidence(evidence):
+        return False
+    lines = [line.strip() for line in final_answer.splitlines() if line.strip()]
+    if len(lines) < 8:
+        return False
+    structured = sum(1 for line in lines if _is_structured_answer_line(line))
+    return structured >= 5
+
+
+def _has_read_evidence(evidence: CompletionEvidence) -> bool:
+    fields = (
+        "inspected_paths",
+        "representative_read_paths",
+        "source_overview_paths",
+        "search_candidate_paths",
+        "source_package_roles",
+    )
+    return any(bool(getattr(evidence, field, None)) for field in fields)
+
+
+def _is_structured_answer_line(line: str) -> bool:
+    stripped = line.lstrip()
+    if stripped.startswith(("#", "-", "*", "|", ">")):
+        return True
+    prefix = stripped.split(maxsplit=1)[0].rstrip(".")
+    return prefix.isdigit()
 
 
 def _apply_web_unavailable_wording(
@@ -255,11 +345,21 @@ def _apply_web_unavailable_wording(
         message.role == "tool" and message.metadata.get("error_type") == "web_search_unavailable"
         for message in messages
     )
-    if not unavailable or "backend" in final_answer.lower():
+    if not unavailable or _answer_already_mentions_web_unavailable(final_answer):
         return final_answer
     if language == "en":
         return final_answer.rstrip() + "\n\nThe web search backend is not configured."
     return final_answer.rstrip() + "\n\n현재 웹 검색 backend가 설정되어 있지 않습니다."
+
+
+def _answer_already_mentions_web_unavailable(final_answer: str) -> bool:
+    lowered = final_answer.lower()
+    compact = "".join(lowered.split())
+    if "backend" in lowered:
+        return True
+    english_web = "web search" in lowered and any(marker in lowered for marker in ("not configured", "disabled", "unavailable"))
+    korean_web = "웹검색" in compact and any(marker in compact for marker in ("비활성", "제공하지못", "설정되어있지", "사용할수없"))
+    return english_web or korean_web
 
 
 def _apply_feature_objective_wording(

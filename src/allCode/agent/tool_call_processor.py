@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from allCode.agent.policy import ToolPolicy
-from allCode.agent.phase_gate import PhaseToolGate, target_matches_any
+from allCode.agent.policy import ToolPolicy, policy_denied_tool_result
+from allCode.agent.phase_gate import PhaseToolGate
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
 from allCode.agent.read_only_guard import read_only_tool_denial
 from allCode.agent.inspect_tool_normalization import normalize_inspect_stage_call
@@ -14,6 +14,7 @@ from allCode.agent.tool_evidence import ToolEvidenceRecorder
 from allCode.agent.tool_schema_denial import deny_tool_schema
 from allCode.agent.tool_schema_filter import ToolSchemaFilter, normalize_tool_call_for_routing
 from allCode.agent.tool_schema_validation import strip_harmless_extra_arguments, validate_tool_arguments
+from allCode.agent.tool_phase_target import phase_target_denial
 from allCode.agent.tool_targets import ToolTargetRecorder
 from allCode.core.event_bus import EventBus
 from allCode.agent.tool_orchestrator import (
@@ -91,6 +92,7 @@ class ToolCallProcessor:
             session_id=turn_input.session_id,
             turn_id=state.turn_id,
             approval_mode=self._approval.mode,
+            user_prompt=turn_input.user_prompt,
         )
         for tool_call in tool_calls:
             tool_call = normalize_tool_call_for_routing(tool_call, routing)
@@ -126,9 +128,10 @@ class ToolCallProcessor:
                     )
                 )
                 continue
-            target_denial = self._phase_target_denial(
+            target_denial = phase_target_denial(
                 tool_call,
                 phase_gate=phase_gate,
+                inspect_stage=inspect_stage,
                 workspace_root=turn_input.workspace.root,
             )
             if target_denial is not None:
@@ -183,24 +186,7 @@ class ToolCallProcessor:
                 self._action_ledger.record(tool_call, "policy_denied")
                 if tool_call.name not in completion_evidence.policy_denied_tools:
                     completion_evidence.policy_denied_tools.append(tool_call.name)
-                results.append(
-                    ToolResult(
-                        call_id=tool_call.id,
-                        name=tool_call.name,
-                        ok=False,
-                        error=policy_decision.reason,
-                        error_type="policy_denied",
-                        metadata={
-                            "category": policy_decision.category,
-                            "observation": {
-                                "kind": "policy_denied",
-                                "target": tool_call.name,
-                                "summary": policy_decision.reason,
-                                "risk": "medium",
-                            },
-                        },
-                    )
-                )
+                results.append(policy_denied_tool_result(tool_call, policy_decision))
                 continue
             cached_result = self._observation_cache.get(tool_call, workspace_root=turn_input.workspace.root)
             if cached_result is not None:
@@ -406,35 +392,3 @@ class ToolCallProcessor:
                 data=latest.model_dump(mode="json"),
             )
         )
-
-    @staticmethod
-    def _phase_target_denial(
-        tool_call: ToolCall,
-        *,
-        phase_gate: PhaseToolGate | None,
-        workspace_root: str,
-    ) -> str | None:
-        if phase_gate is None or phase_gate.phase != "test_authoring_required":
-            return None
-        if tool_call.name not in {"patch_file", "write_file"}:
-            return None
-        required_targets = list(phase_gate.required_target_paths)
-        if not required_targets:
-            return None
-        target = _tool_file_target(tool_call)
-        if not target:
-            return "This phase requires updating the missing test artifact target, but the tool call did not include a file path."
-        if target_matches_any(target, required_targets, workspace_root=workspace_root):
-            return None
-        return (
-            "This phase requires updating the missing test artifact target. "
-            f"Use one of these target paths: {', '.join(required_targets[:3])}."
-        )
-
-
-def _tool_file_target(tool_call: ToolCall) -> str:
-    for key in ("file_path", "path", "target_path"):
-        value = tool_call.arguments.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""

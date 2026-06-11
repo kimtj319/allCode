@@ -18,6 +18,7 @@ from allCode.llm.client import LLMClient
 from allCode.llm.factory import create_llm_client
 from allCode.llm.settings import ModelSettings
 from allCode.memory.session_summary import SessionSummary
+from allCode.memory.session_state_store import SessionStateStore
 from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.approval import ApprovalHandler, ApprovalManager
@@ -50,6 +51,7 @@ async def run_agent_turn(
     effective_llm = llm_client or create_llm_client(config)
     settings = ModelSettings.from_config(config)
     effective_context_builder = context_builder or build_runtime_context_builder(config)
+    await _load_persisted_session_state(config, logger.session_id, effective_context_builder)
     loop = AgentLoop(
         llm_client=effective_llm,
         settings=settings,
@@ -80,6 +82,7 @@ async def run_agent_turn(
             },
         )
         result = await loop.run_turn(turn_input)
+        await _save_persisted_session_state(config, turn_input.session_id, effective_context_builder)
         _remember_result_targets(effective_context_builder, result)
         effective_context_builder.remember_user_note(turn_input.session_id, prompt)
         effective_context_builder.remember_assistant_summary(turn_input.session_id, result.final_answer)
@@ -144,6 +147,19 @@ async def _persist_user_note_summary(config: AppConfig, session_id: str, note: s
         return
     updated = f"{existing.rstrip()}\n- {note}\n".lstrip()
     await summary_store.save(session_id, updated)
+
+
+async def _load_persisted_session_state(config: AppConfig, session_id: str, context_builder: ContextBuilder) -> None:
+    store = SessionStateStore(Path(config.workspace.root))
+    snapshot = await store.load_snapshot(session_id, workspace_root=config.workspace.root)
+    if snapshot is not None:
+        context_builder.session_state.load_snapshot(snapshot)
+
+
+async def _save_persisted_session_state(config: AppConfig, session_id: str, context_builder: ContextBuilder) -> None:
+    store = SessionStateStore(Path(config.workspace.root))
+    snapshot = context_builder.session_state.to_snapshot(session_id=session_id, workspace_root=config.workspace.root)
+    await store.save_snapshot(snapshot)
 
 
 def _remember_result_targets(context_builder: ContextBuilder, result: TurnResult) -> None:

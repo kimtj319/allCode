@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Awaitable, Callable
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import Field
 
 from allCode.core.models import CoreModel, ToolCall
 
@@ -19,6 +21,7 @@ class ApprovalDecision(CoreModel):
     reason: str = ""
     preview: str = ""
     risk: str = "low"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalRequest(CoreModel):

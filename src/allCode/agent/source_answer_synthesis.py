@@ -7,57 +7,35 @@ from pathlib import Path
 
 from allCode.agent.language import ResponseLanguage
 from allCode.agent.inspect_targets import explicit_target_paths, target_observed
-from allCode.core.models import CoreModel
+from allCode.agent.source_analysis_rendering import (
+    render_compact_source_analysis_brief,
+    render_source_analysis_brief,
+    source_answer_needs_compact_brief,
+    source_analysis_final_answer_instruction,
+)
+from allCode.agent.source_analysis_types import (
+    PackageRole,
+    RepresentativeFile,
+    SourceAnalysisBrief,
+    SourceEdge,
+)
+from allCode.agent.source_responsibility_graph import build_source_responsibility_graph
+from allCode.agent.source_inspection_budget import required_representative_probe_count
 from allCode.core.models import ToolResult
 from allCode.core.result import CompletionEvidence
-from pydantic import Field
 
-
-class RepresentativeFile(CoreModel):
-    path: str
-    evidence: str = ""
-    symbols: list[str] = Field(default_factory=list)
-    ranges: list[str] = Field(default_factory=list)
-    wiring: list[str] = Field(default_factory=list)
-
-
-class PackageRole(CoreModel):
-    path: str
-    role: str
-    evidence: str = ""
-
-
-class SourceEdge(CoreModel):
-    source: str
-    target: str
-    kind: str = "reference"
-
-
-class SourceAnalysisBrief(CoreModel):
-    requested_scope: str = ""
-    observed_paths: list[str] = Field(default_factory=list)
-    representative_files: list[RepresentativeFile] = Field(default_factory=list)
-    package_roles: list[PackageRole] = Field(default_factory=list)
-    entrypoints: list[str] = Field(default_factory=list)
-    cross_module_edges: list[SourceEdge] = Field(default_factory=list)
-    inferred_flows: list[str] = Field(default_factory=list)
-    unobserved_scopes: list[str] = Field(default_factory=list)
-    confidence_notes: list[str] = Field(default_factory=list)
-
-
-def source_analysis_final_answer_instruction(language: ResponseLanguage) -> str:
-    if language == "en":
-        return (
-            "Write the final source-analysis answer now. Use only observed tool evidence and supplied context. "
-            "Do not mutate files. Do not output raw tool JSON. Structure the answer with: checked scope, "
-            "package/directory roles, key execution flow, module interactions, representative file evidence, "
-            "and remaining limitations. Separate observed facts from inferred roles."
-        )
-    return (
-        "이제 최종 소스 분석 답변을 작성하십시오. 관찰된 도구 근거와 제공된 컨텍스트만 사용하고 파일은 수정하지 마십시오. "
-        "raw tool JSON을 출력하지 마십시오. 답변에는 확인한 범위, 디렉터리/패키지별 역할, 핵심 실행 흐름, "
-        "모듈 간 연결, 대표 파일 근거, 남은 한계를 포함하십시오. 관찰한 사실과 추론한 역할을 분리하십시오."
-    )
+__all__ = [
+    "PackageRole",
+    "RepresentativeFile",
+    "SourceAnalysisBrief",
+    "SourceEdge",
+    "build_source_analysis_brief",
+    "probe_evidence_lines",
+    "render_compact_source_analysis_brief",
+    "render_source_analysis_brief",
+    "source_answer_needs_compact_brief",
+    "source_analysis_final_answer_instruction",
+]
 
 
 def build_source_analysis_brief(
@@ -70,11 +48,17 @@ def build_source_analysis_brief(
     representative_files = _representative_files(tool_results)
     package_roles = _package_roles(tool_results, evidence=evidence)
     edges = _source_edges(tool_results)
+    responsibility_graph = build_source_responsibility_graph(
+        tool_results,
+        representative_files=representative_files,
+        edges=edges,
+    )
     entrypoints = _entrypoints(representative_files)
     inferred_flows = _inferred_flows(edges, representative_files)
     explicit_targets = explicit_target_paths(user_prompt) if user_prompt else []
     observed_target_paths = set([*observed_paths, *evidence.source_overview_targets])
     unobserved = [target for target in explicit_targets if not target_observed(target, observed_target_paths)]
+    unobserved.extend(_unobserved_representative_candidates(evidence))
     confidence_notes: list[str] = []
     if evidence.source_overview_truncated:
         confidence_notes.append("source overview was truncated")
@@ -89,54 +73,45 @@ def build_source_analysis_brief(
         entrypoints=entrypoints[:8],
         cross_module_edges=edges[:20],
         inferred_flows=inferred_flows[:12],
+        responsibility_graph=responsibility_graph.model_dump(mode="json"),
         unobserved_scopes=unobserved[:12],
         confidence_notes=confidence_notes[:6],
     )
 
 
-def render_source_analysis_brief(brief: SourceAnalysisBrief, *, language: ResponseLanguage) -> str:
-    if language == "en":
-        lines = ["Source analysis evidence brief:"]
-        if brief.observed_paths:
-            lines.extend(["", "Checked scope:", *[f"- `{path}`" for path in brief.observed_paths[:12]]])
-        if brief.package_roles:
-            lines.extend(["", "Package/directory roles:"])
-            lines.extend(f"- `{role.path}`: {role.role} ({role.evidence or 'observed/inferred evidence'})" for role in brief.package_roles[:10])
-        if brief.inferred_flows:
-            lines.extend(["", "Key execution flow:", *[f"- {flow}" for flow in brief.inferred_flows[:8]]])
-        if brief.cross_module_edges:
-            lines.extend(["", "Module interactions:"])
-            lines.extend(f"- `{edge.source}` --{edge.kind}--> `{edge.target}`" for edge in brief.cross_module_edges[:10])
-        if brief.representative_files:
-            lines.extend(["", "Representative file evidence:"])
-            lines.extend(_representative_file_lines(brief.representative_files[:8]))
-        if brief.unobserved_scopes or brief.confidence_notes:
-            lines.append("")
-            lines.append("Limitations:")
-            lines.extend(f"- `{target}` was not observed." for target in brief.unobserved_scopes[:8])
-            lines.extend(f"- {note}" for note in brief.confidence_notes[:6])
-        return "\n".join(lines)
+def _unobserved_representative_candidates(evidence: CompletionEvidence) -> list[str]:
+    observed = {_clean_path(path) for path in [*evidence.inspected_paths, *evidence.representative_read_paths]}
+    candidates = [_clean_path(path) for path in evidence.source_representative_candidates if _clean_path(path)]
+    required_missing = _required_unobserved_representative_count(
+        evidence,
+        candidate_count=len(candidates),
+        observed_count=sum(1 for path in candidates if path in observed),
+    )
+    if required_missing <= 0:
+        return []
+    ranked = sorted(
+        candidates,
+        key=lambda path: evidence.source_representative_scores.get(path, 0.0),
+        reverse=True,
+    )
+    missing: list[str] = []
+    for path in ranked:
+        cleaned = _clean_path(path)
+        if cleaned and cleaned not in observed and cleaned not in missing:
+            missing.append(cleaned)
+            if len(missing) >= required_missing:
+                break
+    return missing[:8]
 
-    lines = ["소스 분석 근거 brief:"]
-    if brief.observed_paths:
-        lines.extend(["", "확인한 범위:", *[f"- `{path}`" for path in brief.observed_paths[:12]]])
-    if brief.package_roles:
-        lines.extend(["", "디렉터리/패키지별 역할:"])
-        lines.extend(f"- `{role.path}`: {role.role} ({role.evidence or '관찰/추론 근거'})" for role in brief.package_roles[:10])
-    if brief.inferred_flows:
-        lines.extend(["", "핵심 실행 흐름:", *[f"- {flow}" for flow in brief.inferred_flows[:8]]])
-    if brief.cross_module_edges:
-        lines.extend(["", "모듈 간 연결:"])
-        lines.extend(f"- `{edge.source}` --{edge.kind}--> `{edge.target}`" for edge in brief.cross_module_edges[:10])
-    if brief.representative_files:
-        lines.extend(["", "대표 파일 근거:"])
-        lines.extend(_representative_file_lines(brief.representative_files[:8]))
-    if brief.unobserved_scopes or brief.confidence_notes:
-        lines.append("")
-        lines.append("남은 한계:")
-        lines.extend(f"- `{target}`는 직접 관찰하지 못했습니다." for target in brief.unobserved_scopes[:8])
-        lines.extend(f"- {note}" for note in brief.confidence_notes[:6])
-    return "\n".join(lines)
+
+def _required_unobserved_representative_count(
+    evidence: CompletionEvidence,
+    *,
+    candidate_count: int,
+    observed_count: int,
+) -> int:
+    required = required_representative_probe_count(evidence, candidate_count=candidate_count)
+    return max(0, required - observed_count)
 
 
 def probe_evidence_lines(
@@ -211,8 +186,9 @@ def _representative_files(tool_results: Sequence[ToolResult]) -> list[Representa
                         path=path,
                         evidence="source_probe",
                         symbols=[str(item) for item in observation.get("observed_symbols", []) if str(item).strip()][:10],
-                        ranges=_range_labels(observation.get("line_ranges"))[:6],
+                        ranges=_prioritized_range_labels(_range_labels(observation.get("line_ranges")))[:6],
                         wiring=_edge_labels(observation.get("outgoing_edges"))[:8],
+                        wide_symbols=_wide_symbol_labels(observation.get("wide_symbols"))[:6],
                     )
                 )
             continue
@@ -220,7 +196,13 @@ def _representative_files(tool_results: Sequence[ToolResult]) -> list[Representa
             path = _clean_path(str(result.metadata.get("file_path") or ""))
             if path and path not in seen:
                 seen.add(path)
-                files.append(RepresentativeFile(path=path, evidence="read_file"))
+                files.append(
+                    RepresentativeFile(
+                        path=path,
+                        evidence="read_file",
+                        ranges=_read_file_range_labels(result.metadata.get("returned_range"))[:2],
+                    )
+                )
     return files
 
 
@@ -269,13 +251,30 @@ def _source_edges(tool_results: Sequence[ToolResult]) -> list[SourceEdge]:
         for item in observation.get("outgoing_edges", []):
             if not isinstance(item, dict):
                 continue
-            target = str(item.get("target") or item.get("symbol") or "").strip()
+            raw_target = str(item.get("target") or item.get("symbol") or "").strip()
+            target = str(item.get("resolved_target") or raw_target).strip()
             kind = str(item.get("kind") or "reference").strip() or "reference"
+            line = item.get("line")
+            if isinstance(line, int) and line > 0:
+                kind = f"{kind}@L{line}"
             key = f"{source}:{kind}:{target}"
             if source and target and key not in seen:
                 seen.add(key)
                 edges.append(SourceEdge(source=source, target=target, kind=kind))
-    return edges
+    return sorted(edges, key=_source_edge_priority)
+
+
+def _source_edge_priority(edge: SourceEdge) -> tuple[int, str, str]:
+    target = str(edge.target or "")
+    if target.startswith("src/"):
+        return (0, edge.source, target)
+    if "/" in target and target.endswith((".py", ".js", ".ts", ".go", ".rs", ".java")):
+        return (1, edge.source, target)
+    if "." in target and "/" not in target:
+        return (2, edge.source, target)
+    if ":" in target:
+        return (4, edge.source, target)
+    return (3, edge.source, target)
 
 
 def _entrypoints(files: Sequence[RepresentativeFile]) -> list[str]:
@@ -299,20 +298,6 @@ def _inferred_flows(edges: Sequence[SourceEdge], files: Sequence[RepresentativeF
     return flows
 
 
-def _representative_file_lines(files: Sequence[RepresentativeFile]) -> list[str]:
-    lines: list[str] = []
-    for file in files:
-        details: list[str] = [file.evidence] if file.evidence else []
-        if file.symbols:
-            details.append("symbols " + ", ".join(f"`{symbol}`" for symbol in file.symbols[:5]))
-        if file.ranges:
-            details.append("ranges " + ", ".join(file.ranges[:4]))
-        if file.wiring:
-            details.append("wiring " + ", ".join(file.wiring[:4]))
-        lines.append(f"- `{file.path}`: " + "; ".join(details))
-    return lines
-
-
 def _range_labels(value: object) -> list[str]:
     labels: list[str] = []
     if not isinstance(value, list):
@@ -323,9 +308,28 @@ def _range_labels(value: object) -> list[str]:
         start = item.get("start")
         end = item.get("end")
         reason = _clean(str(item.get("reason") or "range"))
+        symbol = _clean(str(item.get("symbol") or ""))
         if start and end:
-            labels.append(f"{start}-{end}({reason})")
+            suffix = f":{symbol}" if symbol else ""
+            labels.append(f"L{start}-L{end}({reason}{suffix})")
     return labels
+
+
+def _prioritized_range_labels(labels: list[str]) -> list[str]:
+    return sorted(labels, key=_range_label_priority)
+
+
+def _range_label_priority(label: str) -> tuple[int, str]:
+    lowered = label.lower()
+    if "body_sample" in lowered:
+        return (0, label)
+    if "symbol" in lowered or "signature" in lowered:
+        return (1, label)
+    if "read_file" in lowered:
+        return (2, label)
+    if "imports" in lowered:
+        return (3, label)
+    return (4, label)
 
 
 def _edge_labels(value: object) -> list[str]:
@@ -336,12 +340,46 @@ def _edge_labels(value: object) -> list[str]:
         if not isinstance(item, dict):
             continue
         kind = _clean(str(item.get("kind") or "edge"))
-        target = _clean(str(item.get("target") or item.get("symbol") or ""))
+        raw_target = _clean(str(item.get("target") or item.get("symbol") or ""))
+        resolved_target = _clean_path(str(item.get("resolved_target") or ""))
+        target = resolved_target or raw_target
         if target:
-            label = f"{kind}:{target}"
+            label = f"{kind}:{raw_target}"
+            if resolved_target:
+                label = f"{label}->{resolved_target}"
+            line = item.get("line")
+            if isinstance(line, int) and line > 0:
+                label = f"{label}@L{line}"
             if label not in labels:
                 labels.append(label)
     return labels
+
+
+def _wide_symbol_labels(value: object) -> list[str]:
+    labels: list[str] = []
+    if not isinstance(value, list):
+        return labels
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        symbol = _clean(str(item.get("symbol") or ""))
+        span = item.get("span_lines")
+        kind = _clean(str(item.get("kind") or "symbol"))
+        summary = _clean(str(item.get("summary") or "header/signatures only"))
+        if symbol and isinstance(span, int) and span > 0:
+            labels.append(f"{symbol}({kind}, {span} lines, {summary})")
+        elif symbol:
+            labels.append(f"{symbol}({kind}, {summary})")
+    return labels
+
+
+def _read_file_range_labels(value: object) -> list[str]:
+    if not isinstance(value, list) or len(value) != 2:
+        return []
+    start, end = value
+    if not isinstance(start, int) or not isinstance(end, int) or start <= 0 or end <= 0:
+        return []
+    return [f"L{start}-L{end}(read_file)"]
 
 
 def _clean(value: str) -> str:

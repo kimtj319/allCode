@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from pydantic import Field
 
+from allCode.agent.context_file_sections import (
+    recent_file_sections as build_recent_file_sections,
+)
+from allCode.agent.context_file_sections import resolve_recent_file as resolve_context_recent_file
+from allCode.agent.context_file_sections import workspace_sections as build_workspace_sections
+from allCode.agent.context_session_sections import compact_answer_summary
+from allCode.agent.context_session_sections import document_context_lines as build_document_context_lines
+from allCode.agent.context_session_sections import document_followup_prompt as matches_document_followup_prompt
+from allCode.agent.context_session_sections import extract_session_note
+from allCode.agent.context_session_sections import followup_manifest_target as resolve_followup_manifest_target
+from allCode.agent.context_session_sections import session_note_sections as build_session_note_sections
+from allCode.agent.context_session_sections import target_exists as context_target_exists
 from allCode.core.models import CoreModel, TurnInput
-from allCode.core.path_patterns import is_followup_reference
 from allCode.core.result import DocumentManifest, ProjectManifest
 from allCode.agent.session_state import AgentSessionState
 from allCode.memory.compactor import ContextCompactor
 from allCode.memory.recent_targets import RecentTargetMemory
-from allCode.memory.redaction import redact_text
 from allCode.memory.schema import ContextSection, RecentTarget, estimate_tokens
 from allCode.memory.selector import ContextMemorySelector
 from allCode.workspace.indexer import WorkspaceIndex
@@ -114,31 +123,12 @@ class ContextBuilder:
         return paths
 
     def followup_manifest_target(self, prompt: str, *, workspace_root: str) -> str | None:
-        if not is_followup_reference(prompt):
-            return None
-        lowered = prompt.lower()
-        if self._document_manifests and self._document_followup_prompt(lowered):
-            for manifest in reversed(self._document_manifests):
-                for target in manifest.candidate_targets():
-                    if self._target_exists(workspace_root, target):
-                        return target
-        if not self._project_manifests:
-            return None
-        for manifest in reversed(self._project_manifests):
-            candidates = manifest.candidate_targets()
-            if any(marker in lowered for marker in ("test", "테스트")):
-                for target in candidates:
-                    if "test" in Path(target).name.lower() or "/test" in target.lower():
-                        return target
-            if any(marker in lowered for marker in ("cli", "command", "option", "명령", "옵션", "--")):
-                for target in candidates:
-                    name = Path(target).name.lower()
-                    if name in {"main.py", "cli.py", "__main__.py"} or "cli" in name:
-                        return target
-            for target in candidates:
-                if self._target_exists(workspace_root, target):
-                    return target
-        return None
+        return resolve_followup_manifest_target(
+            prompt,
+            workspace_root=workspace_root,
+            project_manifests=self._project_manifests,
+            document_manifests=self._document_manifests,
+        )
 
     def remember_user_note(self, session_id: str, prompt: str) -> None:
         note = self.extract_user_note(prompt)
@@ -160,29 +150,12 @@ class ContextBuilder:
         return self._extract_session_note(prompt)
 
     def _session_note_sections(self, turn_input: TurnInput) -> list[ContextSection]:
-        notes = self._session_notes.get(turn_input.session_id, [])
-        assistant = self._assistant_summaries.get(turn_input.session_id, [])
-        documents = self._document_context_lines()
-        if not notes and not assistant and not documents:
-            return []
-        lines = [f"- {note}" for note in notes[-10:]]
-        if assistant:
-            lines.append("Recent assistant answer summaries:")
-            lines.extend(f"- {item}" for item in assistant[-5:])
-        if documents:
-            lines.append("Recent document artifacts:")
-            lines.extend(documents)
-        content = "\n".join(lines)
-        return [
-            ContextSection(
-                name="session_notes",
-                priority=90,
-                token_estimate=estimate_tokens(content),
-                content=content,
-                source="session_notes",
-                section_type="session_summary",
-            )
-        ]
+        return build_session_note_sections(
+            session_id=turn_input.session_id,
+            session_notes=self._session_notes,
+            assistant_summaries=self._assistant_summaries,
+            document_manifests=self._document_manifests,
+        )
 
     def _project_state_sections(self) -> list[ContextSection]:
         sections: list[ContextSection] = []
@@ -214,205 +187,55 @@ class ContextBuilder:
                         section_type="project_obligations",
                     )
                 )
+        source_ledger = self.session_state.source_exploration_ledger
+        if source_ledger is not None:
+            content = source_ledger.render()
+            if content:
+                sections.append(
+                    ContextSection(
+                        name="source_exploration_ledger",
+                        priority=118,
+                        token_estimate=estimate_tokens(content),
+                        content=content,
+                        source="session_source_exploration_ledger",
+                        section_type="source_exploration_ledger",
+                    )
+                )
         return sections
 
     def _recent_file_sections(self, turn_input: TurnInput) -> list[ContextSection]:
-        workspace_root = Path(turn_input.workspace.root).expanduser().resolve()
         recent_paths = [
             *self.manifest_recent_paths(),
             *self.recent_targets.recent_paths(),
         ]
-        sections: list[ContextSection] = []
-        total_bytes = 0
-        seen: set[str] = set()
-        for raw_path in recent_paths:
-            path = self._resolve_recent_file(raw_path, workspace_root=workspace_root)
-            if path is None:
-                continue
-            try:
-                relative = path.relative_to(workspace_root).as_posix()
-            except ValueError:
-                continue
-            if relative in seen:
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if size > 16_000 or total_bytes + size > 36_000:
-                continue
-            try:
-                raw = path.read_bytes()
-            except OSError:
-                continue
-            if b"\0" in raw[:1024]:
-                continue
-            content = redact_text(raw.decode("utf-8", errors="replace"))
-            section_content = f"path: {relative}\n```text\n{content}\n```"
-            sections.append(
-                ContextSection(
-                    name=f"recent_file:{relative}",
-                    priority=118,
-                    token_estimate=estimate_tokens(section_content),
-                    content=section_content,
-                    source=relative,
-                    section_type="recent_file",
-                )
-            )
-            total_bytes += size
-            seen.add(relative)
-            if len(sections) >= 4:
-                break
-        return sections
+        return build_recent_file_sections(turn_input, recent_paths=recent_paths)
 
     def _extract_session_note(self, prompt: str) -> str | None:
-        compact = " ".join(prompt.strip().split())
-        if not compact:
-            return None
-        korean = re.search(
-            r"앞으로\s*[\"'“”‘’]?(?P<alias>[^\"'“”‘’\s]+(?:\s+[^\"'“”‘’\s]+){0,3})[\"'“”‘’]?\s*(?:은|는)\s*(?P<target>[A-Za-z0-9_.:/-]+)",
-            compact,
-        )
-        if korean:
-            alias = korean.group("alias").strip()
-            target = korean.group("target").strip().rstrip(".,")
-            return redact_text(f"User-defined alias: {alias} = {target}")
-        english = re.search(
-            r"remember\s+(?:that\s+)?[\"']?(?P<alias>[A-Za-z0-9_ .-]{2,40})[\"']?\s+(?:means|is)\s+[\"']?(?P<target>[A-Za-z0-9_.:/-]+)",
-            compact,
-            re.IGNORECASE,
-        )
-        if english:
-            alias = english.group("alias").strip()
-            target = english.group("target").strip().rstrip(".,")
-            return redact_text(f"User-defined alias: {alias} = {target}")
-        return None
+        return extract_session_note(prompt)
 
     def _compact_answer_summary(self, answer: str) -> str | None:
-        compact = " ".join(answer.strip().split())
-        if not compact:
-            return None
-        return redact_text(compact[:1200])
+        return compact_answer_summary(answer)
 
     @staticmethod
     def _target_exists(workspace_root: str, target: str) -> bool:
-        path = Path(target)
-        if not path.is_absolute():
-            path = Path(workspace_root) / path
-        try:
-            return path.expanduser().resolve().exists()
-        except OSError:
-            return False
+        return context_target_exists(workspace_root, target)
 
     @staticmethod
     def _resolve_recent_file(raw_path: str, *, workspace_root: Path) -> Path | None:
-        value = str(raw_path or "").strip()
-        if not value:
-            return None
-        candidate = Path(value)
-        if not candidate.is_absolute():
-            candidate = workspace_root / candidate
-        try:
-            resolved = candidate.expanduser().resolve()
-            resolved.relative_to(workspace_root)
-        except (OSError, ValueError):
-            return None
-        if not resolved.exists() or not resolved.is_file():
-            return None
-        if any(part in {".git", ".venv", "node_modules", "__pycache__", "dist", "build"} for part in resolved.parts):
-            return None
-        return resolved
+        return resolve_context_recent_file(raw_path, workspace_root=workspace_root)
 
     @staticmethod
     def _document_followup_prompt(lowered_prompt: str) -> bool:
-        compact = lowered_prompt.replace(" ", "")
-        markers = (
-            "document",
-            "report",
-            "brief",
-            "plan",
-            "playbook",
-            "문서",
-            "보고서",
-            "기획서",
-            "플레이북",
-            "시리즈바이블",
-            "앞문서",
-            "방금만든문서",
-        )
-        return any(marker in lowered_prompt or marker in compact for marker in markers)
+        return matches_document_followup_prompt(lowered_prompt)
 
     def _document_context_lines(self) -> list[str]:
-        lines: list[str] = []
-        for manifest in self._document_manifests[-5:]:
-            headings = ", ".join(manifest.section_headings[:8])
-            suffix = f" sections=[{headings}]" if headings else ""
-            lines.append(f"- {manifest.title or Path(manifest.path).name}: {manifest.path}{suffix}")
-        return lines
+        return build_document_context_lines(self._document_manifests)
 
     def _workspace_sections(self, turn_input: TurnInput) -> list[ContextSection]:
-        resolution = self.path_resolver.resolve_for_read(
-            turn_input.user_prompt,
+        return build_workspace_sections(
+            turn_input,
+            path_resolver=self.path_resolver,
+            workspace_index=self.workspace_index,
             recent_paths=self.recent_targets.recent_paths(),
-            workspace_candidates=self.workspace_index.paths(),
+            max_active_file_bytes=self.max_active_file_bytes,
         )
-        if resolution.resolved_path is None:
-            return []
-        path = Path(resolution.resolved_path)
-        if not path.exists() or not path.is_file():
-            return []
-        try:
-            file_size = path.stat().st_size
-            if file_size > 20_000:
-                token_est = int(file_size / 4)
-                line_count = self._count_lines(path)
-                workspace_root = Path(turn_input.workspace.root).expanduser().resolve()
-                try:
-                    relative_path = path.relative_to(workspace_root)
-                except ValueError:
-                    relative_path = path.name
-                section_content = (
-                    f"[large file suppressed: {path.name}]\n"
-                    f"- path: {relative_path}\n"
-                    f"- size_bytes: {file_size}\n"
-                    f"- estimated_tokens: {token_est}\n"
-                    f"- line_count: {line_count}\n"
-                    "- recommended_action: use search_files first, then read_file with start_line/end_line for the relevant range"
-                )
-                return [
-                    ContextSection(
-                        name=f"active_file:{path.name}",
-                        priority=100,
-                        token_estimate=estimate_tokens(section_content),
-                        content=section_content,
-                        source=str(path),
-                        section_type="active_file_metadata",
-                    )
-                ]
-            with path.open("rb") as handle:
-                raw = handle.read(self.max_active_file_bytes + 1)
-        except OSError:
-            return []
-        if b"\0" in raw[:1024]:
-            return []
-        truncated = file_size > self.max_active_file_bytes or len(raw) > self.max_active_file_bytes
-        content = raw[: self.max_active_file_bytes].decode("utf-8", errors="replace")
-        section_content = content if not truncated else content + "\n[truncated]"
-        return [
-            ContextSection(
-                name=f"active_file:{path.name}",
-                priority=100,
-                token_estimate=estimate_tokens(section_content),
-                content=section_content,
-                source=str(path),
-                section_type="active_file",
-            )
-        ]
-
-    @staticmethod
-    def _count_lines(path: Path) -> int:
-        try:
-            with path.open("rb") as handle:
-                return sum(1 for _ in handle)
-        except OSError:
-            return 0

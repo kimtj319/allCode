@@ -33,10 +33,19 @@ def decide_answer_policy(
             requires_external_knowledge=route.requires_external_knowledge,
             reason="Route is not an answer route.",
         )
+    if "answer_followup" in route.flags or constraints.answer_followup_hint:
+        return AnswerPolicyDecision(
+            mode="direct",
+            tool_capabilities=set(),
+            requires_external_knowledge=False,
+            reason="Answer follow-up should continue directly without new tool exposure.",
+        )
+    external_suppressed = "external_knowledge_suppressed" in constraints.matched_constraints
     external_requested = bool(
         (constraints.external_knowledge_hint or route.requires_external_knowledge)
         and not constraints.no_external_network
         and not local_workspace_request
+        and not external_suppressed
     )
     if external_requested:
         return AnswerPolicyDecision(
@@ -64,7 +73,9 @@ def apply_answer_policy(
     decision = decide_answer_policy(route, constraints=constraints, local_workspace_request=local_workspace_request)
     if decision.mode == "not_answer":
         return route
-    workflow_hint = "external_research" if decision.mode == "web_only" else "none"
+    workflow_hint = "external_research" if decision.mode == "web_only" else (
+        "direct_answer" if route.workflow_hint == "direct_answer" else "none"
+    )
     flags = set(route.flags)
     if decision.requires_external_knowledge:
         flags.add("requires_external_knowledge")

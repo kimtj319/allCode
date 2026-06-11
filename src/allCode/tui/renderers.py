@@ -7,6 +7,7 @@ from pydantic import Field
 from allCode.core.events import AgentEvent
 from allCode.core.models import CoreModel
 from allCode.tui import messages
+from allCode.tui.tool_timeline import build_tool_timeline_entry
 
 
 class RenderedEvent(CoreModel):
@@ -94,23 +95,16 @@ class EventRenderer:
             return RenderedEvent(status="도구 실행 완료", severity=event.severity)
         if result.name == "source_overview":
             return self._render_source_overview_result(result, event.severity)
-        quiet_status = _quiet_readonly_tool_status(result)
-        if quiet_status:
-            return RenderedEvent(status=quiet_status, severity="status_only")
-        status = "ok" if result.ok else result.error_type or "error"
-        target = _tool_target(result)
-        summary = _tool_summary(result)
-        target_suffix = f" {target}" if target else ""
-        summary_suffix = f" · {summary}" if summary else ""
-        transcript = f"• {result.name}{target_suffix} -> {status}{summary_suffix}"
-        full_text = result.content or result.error or ""
+        entry = build_tool_timeline_entry(result)
+        if entry.quiet_status:
+            return RenderedEvent(status=entry.quiet_status, severity="status_only")
         return RenderedEvent(
-            transcript=transcript,
+            transcript=entry.line,
             transcript_role="tool",
             status="도구 실행 완료",
-            foldable=bool(full_text),
-            fold_title=f"{result.name}: {status}",
-            fold_full_text=full_text,
+            foldable=entry.foldable,
+            fold_title=entry.fold_title,
+            fold_full_text=entry.fold_full_text,
             severity="user_visible",
         )
 
@@ -175,7 +169,7 @@ class EventRenderer:
 
     def _render_approval_requested(self, event: AgentEvent) -> RenderedEvent:
         return RenderedEvent(
-            transcript="승인이 필요합니다.",
+            transcript=messages.APPROVAL_REQUIRED_TITLE,
             transcript_role="approval",
             status=messages.APPROVAL_STATUS,
             severity=event.severity,
@@ -298,26 +292,6 @@ def _tool_target(result) -> str:
         value = metadata.get(key)
         if value:
             return str(value)
-    return ""
-
-
-def _tool_summary(result) -> str:
-    metadata = getattr(result, "metadata", {}) or {}
-    observation = metadata.get("observation")
-    if isinstance(observation, dict) and observation.get("summary"):
-        return str(observation["summary"])
-    if not result.ok and result.error:
-        return result.error.splitlines()[0][:120]
-    return ""
-
-
-def _quiet_readonly_tool_status(result) -> str:
-    if not result.ok:
-        return ""
-    if result.name == "read_file":
-        return "대표 파일 확인 중"
-    if result.name in {"list_tree", "glob_files", "list_directory", "search_files"}:
-        return "코드 구조 확인 중"
     return ""
 
 

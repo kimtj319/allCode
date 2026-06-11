@@ -17,6 +17,7 @@ from allCode.agent.inspect_targets import (
     target_matches_path,
     target_observed,
 )
+from allCode.agent.source_inspection_budget import broad_source_scope, required_representative_probe_count
 from allCode.core.models import CoreModel
 from allCode.core.result import CompletionEvidence
 
@@ -25,6 +26,15 @@ InspectStageName = Literal["none", "source_discovery", "targeted_read", "finaliz
 DISCOVERY_TOOLS = {"source_overview", "list_tree", "glob_files"}
 TARGETED_READ_TOOLS = {"source_probe", "read_file", "search_files", "source_overview", "list_tree", "glob_files"}
 REPRESENTATIVE_PROBE_TOOLS = {"source_probe"}
+WELL_KNOWN_EXTENSIONLESS_FILES = {
+    "Dockerfile",
+    "Containerfile",
+    "Makefile",
+    "Rakefile",
+    "Gemfile",
+    "Procfile",
+    "Brewfile",
+}
 
 
 class InspectToolStage(CoreModel):
@@ -70,12 +80,13 @@ def decide_inspect_stage(
             evidence_complete=True,
         )
 
-    if final_answer_requested:
+    missing_file_targets = _missing_explicit_file_targets(evidence, explicit_targets)
+    if missing_file_targets:
         return InspectToolStage(
-            stage="finalize",
-            allowed_tool_names=set(),
-            reason="A final-answer request is already pending.",
-            target_paths=explicit_targets,
+            stage="targeted_read",
+            allowed_tool_names={"source_probe", "read_file"},
+            reason="Explicit file targets must be observed before broad source-analysis finalization.",
+            target_paths=missing_file_targets,
         )
 
     missing_overview_targets = _missing_explicit_overview_targets(evidence, explicit_targets)
@@ -87,10 +98,18 @@ def decide_inspect_stage(
             target_paths=missing_overview_targets,
         )
 
+    if final_answer_requested:
+        return InspectToolStage(
+            stage="finalize",
+            allowed_tool_names=set(),
+            reason="A final-answer request is already pending.",
+            target_paths=explicit_targets,
+        )
+
     if explicit_targets and _has_file_target(explicit_targets) and round_index == 0:
         return InspectToolStage(
             stage="targeted_read",
-            allowed_tool_names={"source_probe", "read_file", "search_files", "list_tree", "source_overview"},
+            allowed_tool_names={"source_probe", "read_file"},
             reason="Explicit file or path target was provided; allow direct read.",
             target_paths=explicit_targets,
         )
@@ -128,7 +147,11 @@ def decide_inspect_stage(
 
 
 def _evidence_complete(*, evidence: CompletionEvidence, explicit_targets: Sequence[str]) -> bool:
+    if _missing_explicit_file_targets(evidence, explicit_targets):
+        return False
     if _missing_explicit_overview_targets(evidence, explicit_targets):
+        return False
+    if _representative_evidence_missing(evidence, explicit_targets):
         return False
     inspected = set(evidence.inspected_paths)
     if explicit_targets and _has_file_target(explicit_targets) and all(
@@ -146,14 +169,51 @@ def _evidence_complete(*, evidence: CompletionEvidence, explicit_targets: Sequen
     return False
 
 
+def _representative_evidence_missing(evidence: CompletionEvidence, explicit_targets: Sequence[str]) -> bool:
+    if not evidence.source_overview_paths:
+        return False
+    broad_scope = broad_source_scope(evidence) or any(_looks_directory_target(target) for target in explicit_targets)
+    if not broad_scope:
+        return False
+    observed = {_normalize_path(path) for path in [*evidence.inspected_paths, *evidence.representative_read_paths]}
+    candidates = _dedupe(evidence.source_representative_candidates)
+    if candidates:
+        required_count = _required_representative_read_count(evidence, candidate_count=len(candidates))
+        return _observed_representative_count(candidates, observed) < required_count
+    coverage = evidence.source_analysis_coverage or {}
+    package_count = _int_value(coverage.get("package_count"), default=0)
+    required_observed = min(4, max(2, package_count)) if package_count > 1 else 1
+    if explicit_targets:
+        directory_target_count = sum(1 for target in explicit_targets if _looks_directory_target(target))
+        required_observed = max(required_observed, min(4, max(1, directory_target_count)))
+    return len(observed) < required_observed
+
+
 def _missing_explicit_overview_targets(evidence: CompletionEvidence, explicit_targets: Sequence[str]) -> list[str]:
     directory_targets = [target for target in explicit_targets if not _is_file_target(target)]
-    if len(directory_targets) <= 1:
+    if not directory_targets:
         return []
     coverage_paths = _overview_coverage_paths(evidence)
     if not coverage_paths:
         return directory_targets
     return [target for target in directory_targets if not target_observed(target, coverage_paths)]
+
+
+def _missing_explicit_file_targets(evidence: CompletionEvidence, explicit_targets: Sequence[str]) -> list[str]:
+    file_targets = [target for target in explicit_targets if _is_file_target(target)]
+    if not file_targets:
+        return []
+    observed = {
+        _normalize_path(path)
+        for path in [*evidence.inspected_paths, *evidence.representative_read_paths]
+        if _normalize_path(path)
+    }
+    not_found = {_normalize_path(path) for path in evidence.not_found_targets if _normalize_path(path)}
+    return [
+        target
+        for target in file_targets
+        if _normalize_path(target) not in not_found and not target_observed(target, observed)
+    ]
 
 
 def _overview_coverage_paths(evidence: CompletionEvidence) -> set[str]:
@@ -182,12 +242,6 @@ def _representative_targets(evidence: CompletionEvidence, explicit_targets: Sequ
     remaining_needed = max(1, required_count - observed_count)
 
     groups = _candidate_groups(candidates, explicit_targets)
-
-    for key in groups:
-        groups[key].sort(
-            key=lambda path: evidence.source_representative_scores.get(path, 0.0),
-            reverse=True,
-        )
 
     balanced_selection: list[str] = []
     group_keys = sorted(groups.keys())
@@ -234,41 +288,11 @@ def _package_candidate_groups(candidates: Sequence[str]) -> dict[str, list[str]]
 
 
 def _required_representative_read_count(evidence: CompletionEvidence, *, candidate_count: int) -> int:
-    if candidate_count <= 0:
-        return 0
-    coverage = evidence.source_analysis_coverage or {}
-    package_count = _int_value(coverage.get("package_count"), default=0)
-    broad_or_truncated = _broad_or_truncated(evidence)
-    if broad_or_truncated:
-        coverage_cap = 8 if package_count >= 6 else 6 if package_count >= 4 else 4
-        structural_need = package_count if package_count > 0 else candidate_count
-        return min(candidate_count, coverage_cap, max(2, structural_need))
-    if package_count <= 1 and candidate_count == 1:
-        return 1
-    return min(candidate_count, 2)
+    return required_representative_probe_count(evidence, candidate_count=candidate_count)
 
 
 def _observed_representative_count(candidates: Sequence[str], observed: set[str]) -> int:
     return sum(1 for candidate in candidates if _normalize_path(candidate) in observed)
-
-
-def _broad_or_truncated(evidence: CompletionEvidence) -> bool:
-    coverage = evidence.source_analysis_coverage or {}
-    coverage_ratio = _float_value(coverage.get("coverage_ratio"), default=1.0)
-    package_count = _int_value(coverage.get("package_count"), default=0)
-    return (
-        evidence.source_overview_truncated
-        or bool(coverage.get("truncated"))
-        or coverage_ratio < 0.85
-        or package_count > 1
-    )
-
-
-def _float_value(value, *, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _int_value(value, *, default: int) -> int:
@@ -291,7 +315,9 @@ def _has_file_target(targets: Sequence[str]) -> bool:
 
 
 def _is_file_target(target: str) -> bool:
-    return bool(re.search(r"\.[A-Za-z0-9]{1,8}$", target.strip()))
+    cleaned = target.strip().strip("`").replace("\\", "/")
+    name = Path(cleaned).name
+    return name in WELL_KNOWN_EXTENSIONLESS_FILES or bool(re.search(r"\.[A-Za-z0-9]{1,16}$", cleaned))
 
 
 def _explicit_target_paths(prompt: str) -> list[str]:

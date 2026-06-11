@@ -68,6 +68,28 @@ def record_related_test_discovery(result, evidence: CompletionEvidence, *, works
             evidence.related_test_candidates.append(candidate)
 
 
+def record_mutated_test_artifacts(result, evidence: CompletionEvidence, *, workspace_root: str) -> None:
+    if result.name not in {"write_file", "patch_file"} or not result.ok:
+        return
+    paths: list[str] = []
+    for key in ("created_files", "changed_files"):
+        for item in result.metadata.get(key, []):
+            if isinstance(item, str):
+                _append_test_candidate(paths, item, workspace_root=workspace_root)
+    raw_path = str(result.metadata.get("file_path") or result.metadata.get("target") or "")
+    if raw_path:
+        _append_test_candidate(paths, raw_path, workspace_root=workspace_root)
+    if not paths:
+        return
+    added = False
+    for path in paths:
+        if path not in evidence.related_test_candidates:
+            evidence.related_test_candidates.append(path)
+            added = True
+    if added:
+        evidence.related_test_discovery_count += 1
+
+
 def related_test_candidates_from_metadata(metadata: dict, *, workspace_root: str) -> list[str]:
     paths: list[str] = []
     for key in ("matches", "results", "entries", "representative_reads", "suggested_reads", "source_overview_paths"):

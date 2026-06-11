@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from allCode.agent.related_tests import record_related_test_discovery
+from allCode.agent.related_tests import record_mutated_test_artifacts, record_related_test_discovery
 from allCode.core.models import ToolResult
 from allCode.core.result import CompletionEvidence, RepairTarget, RequestedArtifact
 
@@ -23,6 +23,7 @@ class ToolEvidenceRecorder:
         self._record_source_overview(result, evidence, workspace_root=workspace_root)
         self._record_validation_failure(result, evidence, workspace_root=workspace_root)
         record_related_test_discovery(result, evidence, workspace_root=workspace_root)
+        record_mutated_test_artifacts(result, evidence, workspace_root=workspace_root)
         self._record_patch_strategy(result, evidence, workspace_root=workspace_root)
         self._record_public_symbols(result, evidence, workspace_root=workspace_root)
         self._clear_repair_after_success(result, evidence, workspace_root=workspace_root)

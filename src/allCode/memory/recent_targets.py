@@ -27,9 +27,13 @@ class RecentTargetMemory:
     def resolve(self, prompt: str, *, workspace_candidates: list[str]) -> list[RecentTarget]:
         explicit = self._explicit_path(prompt)
         if explicit:
-            exact = [target for target in self.targets if target.path == explicit or Path(target.path).name == Path(explicit).name]
+            exact = [target for target in self.targets if target.path == explicit]
             if exact:
                 return exact[-1:]
+            if _basename_only(explicit):
+                basename_matches = [target for target in self.targets if Path(target.path).name == Path(explicit).name]
+                if basename_matches:
+                    return list(reversed(basename_matches))
             candidates = [path for path in workspace_candidates if path == explicit or Path(path).name == Path(explicit).name]
             return [RecentTarget(path=path, target_type="file", turn_id="workspace", summary="workspace candidate") for path in candidates]
         if self._is_followup(prompt) and self.targets:
@@ -55,3 +59,8 @@ class RecentTargetMemory:
 
     def _is_followup(self, prompt: str) -> bool:
         return is_followup_reference(prompt)
+
+
+def _basename_only(path: str) -> bool:
+    cleaned = path.replace("\\", "/")
+    return "/" not in cleaned

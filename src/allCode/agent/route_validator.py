@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import Field
 
 from allCode.agent.prompt_constraints import PromptConstraints
@@ -14,6 +16,15 @@ VALIDATION_CAPABILITIES: set[ToolCapability] = {"run_validation"}
 LOCAL_CAPABILITIES: set[ToolCapability] = {"read_file", "search_workspace"}
 WEB_CAPABILITIES: set[ToolCapability] = {"web_search"}
 NON_ANSWER_CAPABILITIES = MUTATION_CAPABILITIES | SHELL_CAPABILITIES | VALIDATION_CAPABILITIES | LOCAL_CAPABILITIES
+WELL_KNOWN_EXTENSIONLESS_FILES = {
+    "Dockerfile",
+    "Containerfile",
+    "Makefile",
+    "Rakefile",
+    "Gemfile",
+    "Procfile",
+    "Brewfile",
+}
 
 
 class RouteValidationReport(CoreModel):
@@ -36,16 +47,20 @@ def validate_route(
     repairs: list[str] = []
     capabilities = set(route.tool_capabilities)
     flags = set(route.flags)
+    if "external_knowledge_suppressed" in constraints.matched_constraints:
+        flags.add("external_knowledge_suppressed")
     kind: RouteKind = route.kind
     workflow_hint: WorkflowHint = route.workflow_hint
     target_hint = route.target_hint or constraints.primary_target_hint
     read_only_requested = bool(route.read_only_requested or constraints.read_only_requested)
     workspace_evidence = _workspace_evidence_required(constraints, local_workspace_request, target_hint)
+    answer_artifact = bool(constraints.answer_artifact_hint and not constraints.path_hints and not local_workspace_request)
     external_requested = bool(
         (route.requires_external_knowledge or constraints.external_knowledge_hint or "web_search" in capabilities)
         and not constraints.no_external_network
         and not local_workspace_request
     )
+    directory_generation = _directory_generation_supported(constraints, target_hint)
 
     if constraints.no_shell_requested:
         flags.add("no_shell")
@@ -62,13 +77,18 @@ def validate_route(
 
     if read_only_requested:
         flags.add("read_only_requested")
+        if answer_artifact:
+            flags.add("answer_artifact")
         removed = capabilities & (MUTATION_CAPABILITIES | SHELL_CAPABILITIES | VALIDATION_CAPABILITIES)
         if removed:
             repairs.append("removed mutation/shell/validation capabilities for read-only request")
         capabilities.difference_update(MUTATION_CAPABILITIES | SHELL_CAPABILITIES | VALIDATION_CAPABILITIES)
         flags.discard("requires_validation")
-        workflow_hint = "none"
-        if external_requested and not workspace_evidence:
+        workflow_hint = "direct_answer" if answer_artifact else "none"
+        if answer_artifact:
+            kind = "answer"
+            capabilities.clear()
+        elif external_requested and not workspace_evidence:
             kind = "answer"
             capabilities = {"web_search"}
         elif workspace_evidence or capabilities & LOCAL_CAPABILITIES:
@@ -90,13 +110,30 @@ def validate_route(
         flags.add("answer_followup")
         external_requested = False
 
-    if not read_only_requested and not answer_followup and external_requested and not workspace_evidence:
+    external_answer_only = external_requested and not (
+        constraints.mutation_requested_hint
+        or route.requires_mutation
+        or kind == "modify"
+        or directory_generation
+    )
+    if not read_only_requested and not answer_followup and external_answer_only and not workspace_evidence:
         if kind != "answer" or capabilities - WEB_CAPABILITIES:
             repairs.append("normalized external knowledge route to answer with web-only tools")
         kind = "answer"
         capabilities = {"web_search"}
         workflow_hint = "external_research"
         flags.add("requires_external_knowledge")
+
+    if not read_only_requested and not answer_followup and directory_generation and not external_requested:
+        if kind != "modify":
+            repairs.append("upgraded directory project generation request to modify")
+        kind = "modify"
+        capabilities.update({"read_file", "mutate_file"})
+        if constraints.validation_requested_hint and not constraints.no_shell_requested:
+            capabilities.add("run_validation")
+            flags.add("requires_validation")
+        workflow_hint = "multi_file_generation"
+        flags.update({"project_generation_requested", "directory_output_requested", "multi_artifact_requested"})
 
     if not read_only_requested and not answer_followup and kind == "modify":
         if not _mutation_is_structurally_supported(route, constraints, target_hint):
@@ -154,7 +191,7 @@ def validate_route(
         if target_hint and "." in target_hint.rsplit("/", 1)[-1] and workflow_hint in {"multi_file_generation", "validation_repair"}:
             workflow_hint = "direct_file_edit"
             repairs.append("normalized concrete-file workflow hint to direct_file_edit")
-        elif constraints.project_generation_hint:
+        elif constraints.project_generation_hint or directory_generation:
             workflow_hint = "multi_file_generation"
 
     requires_external = bool("web_search" in capabilities and not constraints.no_external_network and not local_workspace_request)
@@ -196,6 +233,8 @@ def _workspace_evidence_required(
 ) -> bool:
     if constraints.external_knowledge_hint and not constraints.path_hints and not local_workspace_request:
         return False
+    if constraints.answer_artifact_hint and not constraints.path_hints and not local_workspace_request:
+        return False
     return bool(constraints.workspace_evidence_requested or constraints.path_hints or local_workspace_request or target_hint)
 
 
@@ -208,6 +247,10 @@ def _mutation_is_structurally_supported(
         return False
     if constraints.project_generation_hint:
         return True
+    if _directory_generation_supported(constraints, target_hint):
+        return True
+    if constraints.mutation_requested_hint and constraints.code_artifact_hint and route.requires_mutation:
+        return True
     if target_hint:
         return True
     if route.workflow_hint == "multi_file_generation" and constraints.project_generation_hint:
@@ -215,3 +258,20 @@ def _mutation_is_structurally_supported(
     if route.workflow_hint == "validation_repair" and constraints.validation_requested_hint and target_hint:
         return True
     return False
+
+
+def _directory_generation_supported(constraints: PromptConstraints, target_hint: str | None) -> bool:
+    if constraints.read_only_requested:
+        return False
+    if not constraints.directory_output_hint:
+        return False
+    if not (constraints.project_generation_hint or constraints.project_output_hint):
+        return False
+    if not (constraints.multi_artifact_hint or constraints.validation_requested_hint):
+        return False
+    if not target_hint:
+        return False
+    name = Path(str(target_hint).strip().replace("\\", "/")).name
+    if "." in name or name in WELL_KNOWN_EXTENSIONLESS_FILES:
+        return False
+    return True

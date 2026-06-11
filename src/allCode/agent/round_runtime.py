@@ -8,7 +8,15 @@ from allCode.core.models import Message
 
 
 MUTATION_TOOL_NAMES = {"patch_file", "write_file", "delete_path"}
-INSPECTION_TOOL_NAMES = {"read_file", "search_files", "list_directory", "glob_files", "list_tree", "source_overview"}
+INSPECTION_TOOL_NAMES = {
+    "read_file",
+    "search_files",
+    "list_directory",
+    "glob_files",
+    "list_tree",
+    "source_overview",
+    "source_probe",
+}
 
 
 @dataclass

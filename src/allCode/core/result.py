@@ -27,6 +27,8 @@ RecoveryReason = Literal[
     "validation_failed",
     "completion_check_failed",
     "external_tool_failed",
+    "answer_scope_violation",
+    "dependency_constraint_violation",
     "no_progress",
 ]
 

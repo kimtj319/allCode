@@ -40,6 +40,8 @@ NEW_PROJECT_MARKERS = (
     "프로젝트 생성",
     "프로젝트를 만들어",
     "프로젝트를 만들",
+    "패키지형",
+    "패키지 생성",
 )
 
 
@@ -51,7 +53,8 @@ def should_use_generation_workflow(
 ) -> bool:
     if routing.kind != "modify" or routing.read_only_requested:
         return False
-    if routing.workflow_hint != "multi_file_generation":
+    structural_generation = _route_has_structural_generation_flags(routing)
+    if routing.workflow_hint != "multi_file_generation" and not structural_generation:
         return False
     if routing.target_hint and Path(routing.target_hint).suffix:
         return _is_new_file_with_tests(prompt, routing.target_hint, workspace_root=workspace_root)
@@ -60,6 +63,14 @@ def should_use_generation_workflow(
     if not _workspace_has_non_placeholder_source_files(Path(workspace_root)):
         return True
     return _has_explicit_new_project_intent(prompt) or infer_generation_target_root(prompt) is not None
+
+
+def _route_has_structural_generation_flags(routing: RoutingDecision) -> bool:
+    flags = set(getattr(routing, "flags", set()))
+    return bool(
+        {"directory_output_requested", "multi_artifact_requested"}.issubset(flags)
+        and ("project_generation_requested" in flags or "project_output_requested" in flags)
+    )
 
 
 def workflow_target_root_from_routing(prompt: str, routing: RoutingDecision) -> str | None:
@@ -84,7 +95,7 @@ def infer_generation_target_root(prompt: str) -> str | None:
     if not compact:
         return None
     for pattern in (
-        r"(?P<path>\.?/?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+)\s*(?:경로에|경로|아래에|하위에|내부에)",
+        r"(?P<path>\.?/?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+)\s*(?:경로에|경로|아래에|하위에|내부에|안에)",
         r"[`'\"](?P<path>[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)/[`'\"]",
         r"\b(?:in|under|inside|at)\s+[`'\"]?(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)/?[`'\"]?\b",
         r"[`'\"](?P<path>[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)[`'\"]?\s*(?:아래|하위|내부)",

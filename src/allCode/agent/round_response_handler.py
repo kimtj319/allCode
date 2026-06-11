@@ -15,6 +15,7 @@ from allCode.agent.round_runner_helpers import (
     validation_repair_messages,
     validated_complete,
 )
+from allCode.agent.round_text_response import RoundTextResponseHandler
 from allCode.agent.turn_completion import LoopOutcome
 from allCode.agent.validation_repair import validation_repair_needed
 from allCode.core.models import Message, ToolCall, TurnInput, TurnState
@@ -26,6 +27,7 @@ class RoundResponseHandler:
 
     def __init__(self, runner: Any) -> None:
         self._runner = runner
+        self._text_handler = RoundTextResponseHandler(runner)
 
     async def handle(
         self,
@@ -39,6 +41,7 @@ class RoundResponseHandler:
         evidence: CompletionEvidence,
         routing,
         phase_gate,
+        inspect_stage,
         more_mutation_before_validation: bool,
         round_index: int,
     ) -> LoopOutcome | None:
@@ -53,6 +56,7 @@ class RoundResponseHandler:
                 evidence,
                 routing,
                 phase_gate,
+                inspect_stage,
                 more_mutation_before_validation,
             )
         if parsed.status == "pseudo_tool_call":
@@ -81,16 +85,17 @@ class RoundResponseHandler:
             )
             return LoopOutcome(status="partial", answer=parsed.text.rstrip(), error="length_cutoff")
         if parsed.text.strip():
-            return await self._text_response(
-                parsed,
-                turn_input,
-                state,
-                runtime,
-                recovery,
-                evidence,
-                routing,
-                phase_gate,
-                more_mutation_before_validation,
+            return await self._text_handler.handle(
+                parsed=parsed,
+                turn_input=turn_input,
+                state=state,
+                runtime=runtime,
+                recovery=recovery,
+                evidence=evidence,
+                routing=routing,
+                phase_gate=phase_gate,
+                inspect_stage=inspect_stage,
+                more_mutation_before_validation=more_mutation_before_validation,
             )
         return None
 
@@ -112,6 +117,7 @@ class RoundResponseHandler:
         evidence: CompletionEvidence,
         routing,
         phase_gate,
+        inspect_stage,
         more_mutation_before_validation: bool,
     ) -> LoopOutcome | None:
         if getattr(phase_gate, "phase", "") == "related_test_discovery_required":
@@ -346,80 +352,3 @@ class RoundResponseHandler:
             runtime.mutation_succeeded_after_failed_validation = False
             runtime.malformed_tool_retries = 0
         return None
-
-    async def _text_response(
-        self,
-        parsed,
-        turn_input,
-        state,
-        runtime: RoundRuntime,
-        recovery,
-        evidence: CompletionEvidence,
-        routing,
-        phase_gate,
-        more_mutation_before_validation: bool,
-    ) -> LoopOutcome | None:
-        if routing.requires_mutation and not evidence.has_resolution_evidence() and recovery.can_request_mutation_action():
-            state.phase = "recovery"
-            await self._runner._record_recovery(state, recovery, "no_progress", attempts=1, last_error="model answered before file mutation")
-            runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))
-            runtime.messages = self._runner._prompt_builder.mutation_action_request(runtime.messages)
-            runtime.mutation_action_pending = True
-            return None
-        if more_mutation_before_validation:
-            if recovery.can_request_mutation_action(max_attempts=6):
-                state.phase = "recovery"
-                await self._runner._record_recovery(
-                    state,
-                    recovery,
-                    "no_progress",
-                    attempts=recovery.mutation_action_requests,
-                    last_error="model answered before required test artifact was written",
-                )
-                runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))
-                runtime.messages = test_authoring_messages(self._runner._phase_block, runtime.messages, evidence, phase_gate=phase_gate)
-                runtime.mutation_action_pending = True
-                return None
-            return LoopOutcome(
-                status="partial",
-                answer=blocked_summary(self._runner._prompt_builder, runtime.messages, "test_artifact_required_before_validation"),
-                error="A requested test artifact is required before validation and final answer.",
-            )
-        if getattr(phase_gate, "phase", "") == "related_test_discovery_required":
-            state.phase = "recovery"
-            await self._runner._record_recovery(
-                state,
-                recovery,
-                "no_progress",
-                attempts=1,
-                last_error="model answered before related test discovery",
-            )
-            runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))
-            runtime.messages = self._runner._phase_block.related_test_discovery_messages(runtime.messages, evidence, phase_gate=phase_gate)
-            return None
-        if runtime.validation_action_pending and evidence.validation_passed is not True:
-            if recovery.can_request_validation_action():
-                state.phase = "recovery"
-                await self._runner._record_recovery(state, recovery, "validation_failed", attempts=1, last_error="model answered before required validation")
-                runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))
-                runtime.messages = self._runner._prompt_builder.validation_action_request(runtime.messages)
-                return None
-            return LoopOutcome(
-                status="partial",
-                answer=blocked_summary(
-                    self._runner._prompt_builder,
-                    runtime.messages,
-                    "validation_required_but_model_answered_without_run_tests",
-                ),
-                error="Validation is required but the model answered before run_tests.",
-            )
-        if needs_validation_repair(routing, evidence) or validation_repair_needed(routing, evidence):
-            if recovery.can_request_validation_repair():
-                state.phase = "recovery"
-                await self._runner._record_recovery(state, recovery, "validation_failed", attempts=recovery.validation_repair_requests, last_error="model answered before validation passed")
-                runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))
-                runtime.messages = validation_repair_messages(self._runner._phase_block, runtime.messages, evidence, phase_gate=phase_gate)
-                runtime.validation_repair_pending = True
-                runtime.mutation_action_pending = True
-                return None
-        return LoopOutcome(status="success", answer=parsed.text.rstrip())

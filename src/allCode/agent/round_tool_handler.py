@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from allCode.agent.finalization_helpers import blocked_summary, has_blocking_tool_result
-from allCode.agent.grounding import next_candidate_read_call
+from allCode.agent.grounding import next_candidate_read_call, next_representative_source_probe_call
 from allCode.agent.phase_gate import mutation_artifact_required
 from allCode.agent.round_runtime import INSPECTION_TOOL_NAMES, MUTATION_TOOL_NAMES, RoundRuntime
 from allCode.agent.round_runner_helpers import (
@@ -280,7 +280,17 @@ class RoundToolHandler:
         return None
 
     async def _handle_grounding(self, turn_input, state, runtime, recovery, loop_guard, evidence, routing, phase_gate) -> LoopOutcome | None:
+        action_budget = self._runner._effective_inspect_action_budget(turn_input.user_prompt, routing, evidence)
+        remaining_budget = max(0, action_budget - runtime.inspection_actions)
+        if remaining_budget <= 0:
+            return None
         grounding_call = next_candidate_read_call(evidence, workspace_root=turn_input.workspace.root)
+        if grounding_call is None and getattr(routing, "kind", "") == "inspect" and getattr(routing, "read_only_requested", False):
+            grounding_call = next_representative_source_probe_call(
+                evidence,
+                workspace_root=turn_input.workspace.root,
+                remaining_budget=remaining_budget,
+            )
         if grounding_call is None:
             return None
         grounding_results = await self._runner._tool_call_processor.execute(

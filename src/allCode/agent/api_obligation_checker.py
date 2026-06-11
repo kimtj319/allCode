@@ -49,10 +49,17 @@ def api_obligation_errors(
 
 
 def _planned_public_symbols(plan: ProjectPlan) -> dict[str, set[str]]:
-    latest: dict[str, PlannedFile] = {}
     symbols: dict[str, set[str]] = {}
     for obligation in plan.api_obligations:
         symbols.setdefault(obligation.path, set()).add(obligation.symbol)
+    for path, parsed in _declared_public_symbols(plan).items():
+        symbols.setdefault(path, set()).update(parsed)
+    return symbols
+
+
+def _declared_public_symbols(plan: ProjectPlan) -> dict[str, set[str]]:
+    latest: dict[str, PlannedFile] = {}
+    symbols: dict[str, set[str]] = {}
     for planned_file in plan.files:
         if planned_file.stage == "tests" or _looks_test_path(planned_file.path):
             continue
@@ -63,8 +70,16 @@ def _planned_public_symbols(plan: ProjectPlan) -> dict[str, set[str]]:
         suffix = Path(planned_file.path).suffix.lower()
         parsed = _extract_file_symbols(planned_file.content, suffix)
         if parsed:
-            symbols.setdefault(path, set()).update(parsed)
+            symbols[path] = parsed
     return symbols
+
+
+def planned_public_api_symbols(plan: ProjectPlan) -> dict[str, set[str]]:
+    return _planned_public_symbols(plan)
+
+
+def declared_public_api_symbols(plan: ProjectPlan) -> dict[str, set[str]]:
+    return _declared_public_symbols(plan)
 
 
 def _actual_symbols(target_root: Path, planned_symbols: dict[str, set[str]]) -> dict[str, set[str]]:
@@ -97,9 +112,28 @@ def _python_public_symbols(content: str) -> set[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "__all__":
                     symbols.update(_static_all_exports(node.value))
-                elif isinstance(target, ast.Name) and not target.id.startswith("_"):
+                elif (
+                    isinstance(target, ast.Name)
+                    and not target.id.startswith("_")
+                    and not _is_typing_helper_assignment(node.value)
+                ):
                     symbols.add(target.id)
     return symbols
+
+
+def _is_typing_helper_assignment(value: ast.AST) -> bool:
+    if not isinstance(value, ast.Call):
+        return False
+    name = _call_name(value.func)
+    return name in {"NewType", "ParamSpec", "TypeVar", "TypeVarTuple"}
+
+
+def _call_name(func: ast.AST) -> str:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
 
 
 def _public_class_methods(node: ast.ClassDef) -> set[str]:

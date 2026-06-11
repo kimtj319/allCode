@@ -5,27 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from allCode.memory.schema import RepoMapEntry
+from allCode.tools.builtin.source_query_relevance import (
+    entry_relevance_tokens,
+    query_relevance_matches,
+    query_relevance_score,
+    query_relevance_tokens,
+)
+from allCode.tools.builtin.source_ranking_roles import (
+    architecture_diversity_candidates,
+    architecture_filename_score,
+    query_relevant_candidates,
+)
 from allCode.workspace.source_intelligence.graph import build_source_graph, rank_exploration_candidates
 
 ENTRYPOINT_NAMES = {"main.py", "__main__.py", "cli.py", "app.py", "index.ts", "index.js"}
-ARCHITECTURE_NAME_HINTS = (
-    "loop",
-    "runner",
-    "router",
-    "workflow",
-    "registry",
-    "executor",
-    "manager",
-    "service",
-    "client",
-    "parser",
-    "schema",
-    "models",
-    "events",
-    "indexer",
-    "store",
-    "runtime",
-)
 TEST_MARKERS = ("test", "spec")
 
 
@@ -35,6 +28,7 @@ def representative_reads_with_metadata(
     groups: list[dict[str, object]],
     focus: str,
     limit: int = 8,
+    query: str = "",
 ) -> tuple[list[str], list[dict[str, object]], dict[str, float]]:
     """Select representative files and explain the structural signals used.
 
@@ -45,12 +39,26 @@ def representative_reads_with_metadata(
 
     if not entries:
         return [], [], {}
-    scores = _representative_scores(entries, focus=focus)
+    query_tokens = _specific_query_tokens(entries, query_relevance_tokens(query))
+    scores = _representative_scores(entries, focus=focus, query_tokens=query_tokens)
     selected: list[str] = []
     for group in groups:
         best = _best_for_group(entries, scores=scores, group_path=str(group.get("path") or ""))
         if best:
             _append_unique(selected, best.path)
+        if len(selected) >= limit:
+            break
+    for entry in architecture_diversity_candidates(
+        entries,
+        scores=scores,
+        selected=selected,
+        query_tokens=query_tokens,
+    ):
+        _append_unique(selected, entry.path)
+        if len(selected) >= limit:
+            break
+    for entry in query_relevant_candidates(entries, scores=scores, selected=selected, query_tokens=query_tokens):
+        _append_unique(selected, entry.path)
         if len(selected) >= limit:
             break
     for entry in sorted(entries, key=lambda item: (scores.get(item.path, 0.0), -len(item.path)), reverse=True):
@@ -59,14 +67,21 @@ def representative_reads_with_metadata(
             break
     selected = selected[:limit]
     reasons = [
-        {"path": path, "reasons": _representative_reasons(_entry_by_path(entries, path), scores=scores)}
+        {
+            "path": path,
+            "reasons": _representative_reasons(
+                _entry_by_path(entries, path),
+                scores=scores,
+                query_tokens=query_tokens,
+            ),
+        }
         for path in selected
     ]
     score_map = {path: round(float(scores.get(path, 0.0)), 4) for path in selected}
     return selected, reasons, score_map
 
 
-def _representative_scores(entries: list[RepoMapEntry], *, focus: str) -> dict[str, float]:
+def _representative_scores(entries: list[RepoMapEntry], *, focus: str, query_tokens: set[str]) -> dict[str, float]:
     fan_in = _fan_in_counts(entries)
     unique_groups = _group_file_counts(entries)
     graph_candidates = {
@@ -87,7 +102,7 @@ def _representative_scores(entries: list[RepoMapEntry], *, focus: str) -> dict[s
         score += min(fan_in.get(entry.path, 0), 8) * 1.4
         if Path(entry.path).name in ENTRYPOINT_NAMES:
             score += 2.5
-        score += _architecture_filename_score(entry.path)
+        score += architecture_filename_score(entry.path)
         if unique_groups.get(_group_key(entry.path), 0) == 1 and public_defs:
             score += 0.8
         if focus == "tests" and _looks_test_path(entry.path):
@@ -97,8 +112,21 @@ def _representative_scores(entries: list[RepoMapEntry], *, focus: str) -> dict[s
         graph_candidate = graph_candidates.get(entry.path)
         if graph_candidate is not None:
             score += max(0.0, graph_candidate.score) * 0.35
+        score += query_relevance_score(entry, query_tokens)
         scores[entry.path] = score
     return scores
+
+
+def _specific_query_tokens(entries: list[RepoMapEntry], query_tokens: set[str]) -> set[str]:
+    if not query_tokens or len(entries) < 2:
+        return query_tokens
+    token_counts: dict[str, int] = {}
+    for entry in entries:
+        for token in entry_relevance_tokens(entry) & query_tokens:
+            token_counts[token] = token_counts.get(token, 0) + 1
+    common_threshold = max(2, int(len(entries) * 0.6))
+    common_tokens = {token for token, count in token_counts.items() if count >= common_threshold}
+    return query_tokens - common_tokens
 
 
 def _best_for_group(
@@ -174,7 +202,12 @@ def _group_key(path: str) -> str:
     return parent or "."
 
 
-def _representative_reasons(entry: RepoMapEntry | None, *, scores: dict[str, float]) -> list[str]:
+def _representative_reasons(
+    entry: RepoMapEntry | None,
+    *,
+    scores: dict[str, float],
+    query_tokens: set[str],
+) -> list[str]:
     if entry is None:
         return []
     reasons: list[str] = []
@@ -194,6 +227,8 @@ def _representative_reasons(entry: RepoMapEntry | None, *, scores: dict[str, flo
         reasons.append("highest ranked candidate in package")
     if _looks_test_path(entry.path):
         reasons.append("test/spec file")
+    if query_relevance_matches(entry, query_tokens):
+        reasons.append("query relevance")
     return reasons or ["source file candidate"]
 
 
@@ -237,15 +272,6 @@ def _graph_edge_count(entry: RepoMapEntry) -> int:
 def _looks_test_path(path: str) -> bool:
     lowered = path.lower()
     return any(marker in lowered for marker in TEST_MARKERS)
-
-
-def _architecture_filename_score(path: str) -> float:
-    stem = Path(path).stem.lower()
-    if stem in ARCHITECTURE_NAME_HINTS:
-        return 1.8
-    if any(hint in stem.split("_") or hint in stem.split("-") for hint in ARCHITECTURE_NAME_HINTS):
-        return 1.2
-    return 0.0
 
 
 def _is_private_or_generated(path: str) -> bool:

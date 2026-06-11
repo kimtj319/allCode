@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from allCode.agent.task_plan import PlannedFile, ProjectPlan, TaskItem
+from allCode.agent.task_plan import ApiObligation, PlannedFile, ProjectPlan, TaskItem
 from pathlib import PurePosixPath
 
 from allCode.generation.strategy import GenerationRequest, infer_target_root, safe_name, safe_target_root, validation_command
@@ -15,10 +15,10 @@ class PythonProjectStrategy:
     def create_plan(self, request: GenerationRequest) -> ProjectPlan:
         target = safe_target_root(request.target_root or infer_target_root(request.prompt))
         package = safe_name(PurePosixPath(target).name)
-        if self._looks_like_kebab_cli(request.prompt):
-            return self._kebab_cli_plan(target, package)
-        if self._looks_like_standard_library_api(request.prompt):
-            return self._api_plan(target, package)
+        featureful_cli = _requests_featureful_cli(request.prompt)
+        main_content = self._cli_main_implementation() if featureful_cli else self._main_implementation()
+        readme_content = self._cli_readme(target, package) if featureful_cli else self._readme(target, package)
+        test_content = self._cli_tests(package) if featureful_cli else self._tests(package)
         return ProjectPlan(
             target_root=target,
             language=self.language,
@@ -27,12 +27,14 @@ class PythonProjectStrategy:
                 PlannedFile(path="pyproject.toml", purpose="package metadata", stage="skeleton", content=self._pyproject(target)),
                 PlannedFile(path=f"src/{package}/__init__.py", purpose="package marker", stage="skeleton", content='"""Generated package."""\n'),
                 PlannedFile(path=f"src/{package}/main.py", purpose="public application API", stage="skeleton", content=self._main_skeleton()),
-                PlannedFile(path=f"src/{package}/main.py", purpose="public application API", stage="implementation", content=self._main_implementation()),
-                PlannedFile(path="tests/test_main.py", purpose="pytest coverage for public API", stage="tests", content=self._tests(package)),
+                PlannedFile(path=f"src/{package}/main.py", purpose="public application API", stage="implementation", content=main_content),
+                PlannedFile(path="README.md", purpose="project usage documentation", stage="implementation", content=readme_content),
+                PlannedFile(path="tests/test_main.py", purpose="pytest coverage for public API", stage="tests", content=test_content),
             ],
             validation_commands=[
                 validation_command("python -m pytest", cwd=target, environment={"PYTHONPATH": "src"}),
             ],
+            api_obligations=self._cli_api_obligations(package) if featureful_cli else [],
             tasks=[
                 TaskItem(description="Create package skeleton and project metadata.", step="skeleton"),
                 TaskItem(description="Implement the public application API.", step="implementation"),
@@ -42,79 +44,15 @@ class PythonProjectStrategy:
         )
 
     def repair_files(self, plan: ProjectPlan, failure_log: str) -> dict[str, str]:
-        package = safe_name(plan.target_root)
+        package = safe_name(PurePosixPath(plan.target_root).name)
+        if any(obligation.symbol == "TaskStore" for obligation in plan.api_obligations):
+            files = {f"src/{package}/main.py": self._cli_main_implementation()}
+            if "test coverage " in failure_log:
+                files["tests/test_main.py"] = self._cli_tests(package)
+            if "documentation references " in failure_log:
+                files["README.md"] = self._cli_readme(plan.target_root, package)
+            return files
         return {f"src/{package}/main.py": self._main_implementation()}
-
-    def _api_plan(self, target: str, package: str) -> ProjectPlan:
-        return ProjectPlan(
-            target_root=target,
-            language=self.language,
-            constraints=[
-                "Use only the Python standard library.",
-                "Separate routing, repository, auth, and server responsibilities.",
-                "Validate with pytest.",
-            ],
-            files=[
-                PlannedFile(path="pyproject.toml", purpose="package metadata", stage="skeleton", content=self._pyproject(target)),
-                PlannedFile(path=f"src/{package}/__init__.py", purpose="package exports", stage="skeleton", content=self._api_init(package)),
-                PlannedFile(path=f"src/{package}/routing.py", purpose="route table and handlers", stage="implementation", content=self._api_routing()),
-                PlannedFile(path=f"src/{package}/repository.py", purpose="in-memory repository", stage="implementation", content=self._api_repository()),
-                PlannedFile(path=f"src/{package}/auth.py", purpose="authentication stub", stage="implementation", content=self._api_auth()),
-                PlannedFile(path=f"src/{package}/server.py", purpose="standard-library request dispatcher", stage="implementation", content=self._api_server(package)),
-                PlannedFile(path="tests/test_api.py", purpose="pytest coverage for API scaffold", stage="tests", content=self._api_tests(package)),
-            ],
-            validation_commands=[
-                validation_command("python -m pytest", cwd=target, environment={"PYTHONPATH": "src"}),
-            ],
-            tasks=[
-                TaskItem(description="Create package metadata and public exports.", step="skeleton"),
-                TaskItem(description="Implement routing, repository, auth, and server modules.", step="implementation"),
-                TaskItem(description="Add validation tests for the API scaffold.", step="tests"),
-                TaskItem(description="Run pytest validation.", step="validation"),
-            ],
-        )
-
-    def _kebab_cli_plan(self, target: str, package: str) -> ProjectPlan:
-        return ProjectPlan(
-            target_root=target,
-            language=self.language,
-            constraints=["Use only the Python standard library.", "Expose an argparse CLI.", "Validate with pytest."],
-            files=[
-                PlannedFile(path="pyproject.toml", purpose="package metadata", stage="skeleton", content=self._pyproject(target)),
-                PlannedFile(path=f"src/{package}/__init__.py", purpose="package exports", stage="skeleton", content=self._kebab_init()),
-                PlannedFile(path=f"src/{package}/main.py", purpose="kebab-case conversion CLI", stage="implementation", content=self._kebab_main()),
-                PlannedFile(path="tests/test_main.py", purpose="pytest coverage for kebab-case conversion and CLI", stage="tests", content=self._kebab_tests(package)),
-            ],
-            validation_commands=[validation_command("python -m pytest", cwd=target, environment={"PYTHONPATH": "src"})],
-            tasks=[
-                TaskItem(description="Create package metadata and public exports.", step="skeleton"),
-                TaskItem(description="Implement kebab-case conversion and argparse CLI.", step="implementation"),
-                TaskItem(description="Add validation tests for conversion and CLI output.", step="tests"),
-                TaskItem(description="Run pytest validation.", step="validation"),
-            ],
-        )
-
-    @staticmethod
-    def _looks_like_kebab_cli(prompt: str) -> bool:
-        lowered = prompt.lower()
-        compact = prompt.replace(" ", "").lower()
-        transform_signal = "kebab-case" in lowered or "kebab case" in lowered or "케밥" in compact
-        cli_signal = any(marker in lowered for marker in ("cli", "argparse", "command")) or any(
-            marker in compact for marker in ("명령어", "커맨드")
-        )
-        return transform_signal and cli_signal
-
-    @staticmethod
-    def _looks_like_standard_library_api(prompt: str) -> bool:
-        lowered = prompt.lower()
-        compact = prompt.replace(" ", "").lower()
-        api_signal = any(marker in lowered for marker in ("api", "http", "server", "endpoint")) or any(
-            marker in compact for marker in ("라우팅", "인증", "저장소")
-        )
-        component_signal = any(marker in lowered for marker in ("routing", "repository", "auth")) or any(
-            marker in compact for marker in ("라우팅", "저장소", "인증")
-        )
-        return api_signal and component_signal
 
     def _pyproject(self, name: str) -> str:
         distribution = safe_name(PurePosixPath(name).name).replace("_", "-")
@@ -126,78 +64,13 @@ class PythonProjectStrategy:
                 f'description = "Generated Python project {distribution}."',
                 'requires-python = ">=3.11"',
                 "",
+                "[tool.pytest.ini_options]",
+                'pythonpath = ["src"]',
+                'testpaths = ["tests"]',
+                "",
                 "[build-system]",
                 'requires = ["hatchling"]',
                 'build-backend = "hatchling.build"',
-                "",
-            ]
-        )
-
-    def _kebab_init(self) -> str:
-        return "\n".join(
-            [
-                '"""Kebab-case conversion CLI package."""',
-                "",
-                "from .main import build_parser, main, to_kebab_case",
-                "",
-                '__all__ = ["build_parser", "main", "to_kebab_case"]',
-                "",
-            ]
-        )
-
-    def _kebab_main(self) -> str:
-        return "\n".join(
-            [
-                '"""Command-line helpers for converting text to kebab-case."""',
-                "",
-                "from __future__ import annotations",
-                "",
-                "import argparse",
-                "import re",
-                "from collections.abc import Sequence",
-                "",
-                "",
-                "def to_kebab_case(text: str) -> str:",
-                "    \"\"\"Convert an arbitrary string to kebab-case.\"\"\"",
-                "    words = re.findall(r\"[A-Za-z0-9]+\", text.replace(\"_\", \" \"))",
-                "    return \"-\".join(word.lower() for word in words)",
-                "",
-                "",
-                "def build_parser() -> argparse.ArgumentParser:",
-                "    parser = argparse.ArgumentParser(description=\"Convert text to kebab-case.\")",
-                "    parser.add_argument(\"text\", help=\"Text to convert.\")",
-                "    return parser",
-                "",
-                "",
-                "def main(argv: Sequence[str] | None = None) -> int:",
-                "    args = build_parser().parse_args(argv)",
-                "    print(to_kebab_case(args.text))",
-                "    return 0",
-                "",
-                "",
-                "if __name__ == \"__main__\":",
-                "    raise SystemExit(main())",
-                "",
-            ]
-        )
-
-    def _kebab_tests(self, package: str) -> str:
-        return "\n".join(
-            [
-                f"from {package}.main import main, to_kebab_case",
-                "",
-                "",
-                "def test_to_kebab_case_normalizes_spaces_symbols_and_case() -> None:",
-                "    assert to_kebab_case(\"Hello, Wise LLOA Max!\") == \"hello-wise-lloa-max\"",
-                "",
-                "",
-                "def test_to_kebab_case_handles_underscores() -> None:",
-                "    assert to_kebab_case(\"already_mixed Case\") == \"already-mixed-case\"",
-                "",
-                "",
-                "def test_main_prints_converted_text(capsys) -> None:",
-                "    assert main([\"Hello CLI World\"]) == 0",
-                "    assert capsys.readouterr().out.strip() == \"hello-cli-world\"",
                 "",
             ]
         )
@@ -230,6 +103,26 @@ class PythonProjectStrategy:
             ]
         )
 
+    def _readme(self, target: str, package: str) -> str:
+        return "\n".join(
+            [
+                f"# {PurePosixPath(target).name}",
+                "",
+                "Small Python CLI scaffold generated by allCode.",
+                "",
+                "## Usage",
+                "",
+                f"Run the package module with `python -m {package}.main` or import `greet` from `{package}.main`.",
+                "",
+                "## Validation",
+                "",
+                "```bash",
+                "PYTHONPATH=src python -m pytest",
+                "```",
+                "",
+            ]
+        )
+
     def _tests(self, package: str) -> str:
         return "\n".join(
             [
@@ -246,152 +139,262 @@ class PythonProjectStrategy:
             ]
         )
 
-    def _api_init(self, package: str) -> str:
+    def _cli_api_obligations(self, package: str) -> list[ApiObligation]:
+        path = f"src/{package}/main.py"
+        symbols = (
+            "retry",
+            "TaskStore",
+            "TaskStore.add",
+            "TaskStore.list",
+            "TaskStore.mark_done",
+            "TaskStore.export",
+            "CommandRegistry",
+            "CommandRegistry.register",
+            "CommandRegistry.dispatch",
+            "build_parser",
+            "main",
+        )
+        return [ApiObligation(path=path, symbol=symbol, reason="featureful CLI scaffold contract") for symbol in symbols]
+
+    def _cli_main_implementation(self) -> str:
+        return '''"""Standard-library task CLI implementation."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Callable
+
+
+def retry(attempts: int = 3, delay: float = 0.0, exceptions: tuple[type[BaseException], ...] = (Exception,)):
+    """Return a decorator that retries a callable for transient failures."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(attempts):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as exc:
+                    last_error = exc
+                    if attempt < attempts - 1 and delay:
+                        time.sleep(delay)
+            raise last_error
+        return wrapper
+    return decorator
+
+
+class TaskStore:
+    """JSON-backed task storage."""
+
+    def __init__(self, path: str | Path = "tasks.json") -> None:
+        self.path = Path(path)
+        self._tasks: list[dict] = []
+        self._load()
+
+    @retry()
+    def _load(self) -> None:
+        if not self.path.exists():
+            self._tasks = []
+            return
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self._tasks = data if isinstance(data, list) else []
+
+    @retry()
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self._tasks, indent=2), encoding="utf-8")
+
+    def add(self, title: str) -> dict:
+        task = {"id": self._next_id(), "title": title, "done": False}
+        self._tasks.append(task)
+        self._save()
+        return task
+
+    def list(self, *, include_done: bool = False) -> list[dict]:
+        if include_done:
+            return list(self._tasks)
+        return [task for task in self._tasks if not task.get("done")]
+
+    def mark_done(self, task_id: int) -> dict | None:
+        for task in self._tasks:
+            if task.get("id") == task_id:
+                task["done"] = True
+                self._save()
+                return task
+        return None
+
+    def export(self, destination: str | Path) -> Path:
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(self._tasks, indent=2), encoding="utf-8")
+        return target
+
+    def _next_id(self) -> int:
+        return max((int(task.get("id", 0)) for task in self._tasks), default=0) + 1
+
+
+class CommandRegistry:
+    """Map command names to handlers."""
+
+    def __init__(self) -> None:
+        self._commands: dict[str, Callable[[TaskStore, argparse.Namespace], int]] = {}
+
+    def register(self, name: str, handler: Callable[[TaskStore, argparse.Namespace], int]) -> None:
+        self._commands[name] = handler
+
+    def dispatch(self, name: str, store: TaskStore, args: argparse.Namespace) -> int:
+        return self._commands[name](store, args)
+
+
+def _cmd_add(store: TaskStore, args: argparse.Namespace) -> int:
+    task = store.add(args.title)
+    print(f"added {task['id']}: {task['title']}")
+    return 0
+
+
+def _cmd_list(store: TaskStore, args: argparse.Namespace) -> int:
+    for task in store.list(include_done=args.all):
+        status = "done" if task.get("done") else "pending"
+        print(f"{task['id']}\\t{status}\\t{task['title']}")
+    return 0
+
+
+def _cmd_done(store: TaskStore, args: argparse.Namespace) -> int:
+    return 0 if store.mark_done(args.id) else 1
+
+
+def _cmd_export(store: TaskStore, args: argparse.Namespace) -> int:
+    store.export(args.output)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="taskhub")
+    parser.add_argument("--store", default="tasks.json")
+    sub = parser.add_subparsers(dest="command", required=True)
+    add = sub.add_parser("add")
+    add.add_argument("title")
+    listing = sub.add_parser("list")
+    listing.add_argument("--all", action="store_true")
+    done = sub.add_parser("done")
+    done.add_argument("id", type=int)
+    export = sub.add_parser("export")
+    export.add_argument("output")
+    return parser
+
+
+def _registry() -> CommandRegistry:
+    registry = CommandRegistry()
+    registry.register("add", _cmd_add)
+    registry.register("list", _cmd_list)
+    registry.register("done", _cmd_done)
+    registry.register("export", _cmd_export)
+    return registry
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    store = TaskStore(args.store)
+    return _registry().dispatch(args.command, store, args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
+'''
+
+    def _cli_tests(self, package: str) -> str:
+        return f'''import pytest
+
+from {package}.main import CommandRegistry, TaskStore, retry
+
+
+def test_retry_retries_once() -> None:
+    calls = {{"count": 0}}
+
+    @retry(attempts=2, exceptions=(ValueError,))
+    def flaky() -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ValueError("temporary")
+        return "ok"
+
+    assert flaky() == "ok"
+    assert calls["count"] == 2
+
+
+def test_task_store_add_list_done_and_export(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks.json")
+    first = store.add("write tests")
+    second = store.add("ship cli")
+
+    assert [task["title"] for task in store.list()] == ["write tests", "ship cli"]
+    assert store.mark_done(first["id"]) == {{"id": first["id"], "title": "write tests", "done": True}}
+    assert [task["id"] for task in store.list()] == [second["id"]]
+
+    exported = store.export(tmp_path / "export.json")
+    assert exported.exists()
+    assert "ship cli" in exported.read_text(encoding="utf-8")
+
+
+def test_command_registry_dispatches_registered_handler(tmp_path) -> None:
+    registry = CommandRegistry()
+    store = TaskStore(tmp_path / "tasks.json")
+
+    def handler(task_store, args):
+        task_store.add(args.title)
+        return 7
+
+    registry.register("add", handler)
+    assert registry.dispatch("add", store, type("Args", (), {{"title": "from registry"}})()) == 7
+    assert store.list()[0]["title"] == "from registry"
+'''
+
+    def _cli_readme(self, target: str, package: str) -> str:
         return "\n".join(
             [
-                '"""Standard-library API scaffold."""',
+                f"# {PurePosixPath(target).name}",
                 "",
-                "from .auth import authenticate",
-                "from .repository import Repository",
-                "from .routing import route_request, routes",
-                "from .server import build_response",
+                "Standard-library task tracker CLI generated by allCode.",
                 "",
-                '__all__ = ["Repository", "authenticate", "build_response", "route_request", "routes"]',
+                "## Project Structure",
+                "",
+                "```text",
+                f"{PurePosixPath(target).name}/",
+                "├─ pyproject.toml",
+                "├─ README.md",
+                "├─ src/",
+                f"│  └─ {package}/",
+                "│     ├─ __init__.py",
+                "│     └─ main.py",
+                "└─ tests/",
+                "   └─ test_main.py",
+                "```",
+                "",
+                "## Usage",
+                "",
+                f"Run `python -m {package}.main add \"Write tests\"` from an installed environment.",
+                "",
+                "## Validation",
+                "",
+                "```bash",
+                "PYTHONPATH=src python -m pytest",
+                "```",
                 "",
             ]
         )
 
-    def _api_routing(self) -> str:
-        return "\n".join(
-            [
-                '"""Route table and request dispatch helpers."""',
-                "",
-                "from collections.abc import Callable",
-                "",
-                "",
-                "def health_handler() -> dict[str, str]:",
-                "    return {\"status\": \"ok\"}",
-                "",
-                "",
-                "def users_handler() -> dict[str, list[str]]:",
-                "    return {\"users\": []}",
-                "",
-                "",
-                "routes: dict[str, Callable[[], dict]] = {",
-                "    \"/health\": health_handler,",
-                "    \"/users\": users_handler,",
-                "}",
-                "",
-                "",
-                "def route_request(path: str) -> dict:",
-                "    handler = routes.get(path)",
-                "    if handler is None:",
-                "        return {\"error\": \"not_found\", \"path\": path}",
-                "    return handler()",
-                "",
-            ]
-        )
 
-    def _api_repository(self) -> str:
-        return "\n".join(
-            [
-                '"""Small in-memory repository used by the API scaffold."""',
-                "",
-                "from dataclasses import dataclass, field",
-                "",
-                "",
-                "@dataclass",
-                "class Repository:",
-                "    users: dict[str, dict] = field(default_factory=dict)",
-                "",
-                "    def add_user(self, user_id: str, payload: dict) -> dict:",
-                "        stored = dict(payload)",
-                "        stored[\"id\"] = user_id",
-                "        self.users[user_id] = stored",
-                "        return stored",
-                "",
-                "    def get_user(self, user_id: str) -> dict | None:",
-                "        return self.users.get(user_id)",
-                "",
-                "    def list_users(self) -> list[dict]:",
-                "        return list(self.users.values())",
-                "",
-            ]
-        )
-
-    def _api_auth(self) -> str:
-        return "\n".join(
-            [
-                '"""Authentication stub for local development and tests."""',
-                "",
-                "",
-                "def authenticate(token: str | None) -> bool:",
-                "    \"\"\"Accept a deterministic development token and reject empty tokens.\"\"\"",
-                "    return bool(token and token == \"dev-token\")",
-                "",
-            ]
-        )
-
-    def _api_server(self, package: str) -> str:
-        return "\n".join(
-            [
-                '"""Standard-library response dispatcher for the scaffold."""',
-                "",
-                "from __future__ import annotations",
-                "",
-                "import json",
-                "",
-                "from .auth import authenticate",
-                "from .routing import route_request",
-                "",
-                "",
-                "def build_response(path: str, *, token: str | None = None) -> tuple[int, str]:",
-                "    if not authenticate(token):",
-                "        return 401, json.dumps({\"error\": \"unauthorized\"})",
-                "    payload = route_request(path)",
-                "    status = 404 if payload.get(\"error\") == \"not_found\" else 200",
-                "    return status, json.dumps(payload, sort_keys=True)",
-                "",
-                "",
-                "def run() -> str:",
-                "    return \"standard-library api scaffold ready\"",
-                "",
-            ]
-        )
-
-    def _api_tests(self, package: str) -> str:
-        return "\n".join(
-            [
-                f"from {package}.auth import authenticate",
-                f"from {package}.repository import Repository",
-                f"from {package}.routing import route_request",
-                f"from {package}.server import build_response, run",
-                "",
-                "",
-                "def test_auth_stub_accepts_dev_token() -> None:",
-                "    assert authenticate(\"dev-token\") is True",
-                "    assert authenticate(None) is False",
-                "",
-                "",
-                "def test_repository_round_trip() -> None:",
-                "    repository = Repository()",
-                "    user = repository.add_user(\"u1\", {\"name\": \"Ada\"})",
-                "    assert user == {\"id\": \"u1\", \"name\": \"Ada\"}",
-                "    assert repository.get_user(\"u1\") == user",
-                "    assert repository.list_users() == [user]",
-                "",
-                "",
-                "def test_route_request_handles_known_and_unknown_paths() -> None:",
-                "    assert route_request(\"/health\") == {\"status\": \"ok\"}",
-                "    assert route_request(\"/missing\") == {\"error\": \"not_found\", \"path\": \"/missing\"}",
-                "",
-                "",
-                "def test_build_response_uses_auth_and_routing() -> None:",
-                "    assert build_response(\"/health\", token=None)[0] == 401",
-                "    status, body = build_response(\"/health\", token=\"dev-token\")",
-                "    assert status == 200",
-                "    assert 'ok' in body",
-                "    assert run().endswith(\"ready\")",
-                "",
-            ]
-        )
+def _requests_featureful_cli(prompt: str) -> bool:
+    lowered = prompt.lower()
+    compact = lowered.replace(" ", "")
+    cli = any(term in lowered for term in ("cli", "command", "entrypoint", "argparse")) or any(
+        term in prompt for term in ("명령어", "커맨드", "진입점")
+    )
+    feature = any(term in lowered or term in compact for term in ("registry", "retry", "json", "task", "export", "pytest")) or any(
+        term in prompt for term in ("레지스트리", "재시도", "저장소", "테스트", "검증")
+    )
+    return cli and feature

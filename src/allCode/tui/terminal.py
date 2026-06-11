@@ -13,9 +13,11 @@ from rich.markdown import Markdown
 
 from allCode.core.events import AgentEvent
 from allCode.tui import messages
+from allCode.tui.approval_preview_view import approval_preview_from_payload
 from allCode.tui.markdown import logo_text
 from allCode.tui.renderers import EventRenderer
 from allCode.tui.slash_commands import SlashCommandHandler
+from allCode.tui.streaming import MarkdownStreamBuffer
 from allCode.tui.terminal_activity import ActivityProps
 from allCode.tui.terminal_answer_renderer import TerminalAnswerRenderer
 from allCode.tui.terminal_input import TerminalInputEditor
@@ -71,6 +73,7 @@ class TerminalSession:
         self._last_status = ""
         self._stream_started = False
         self._stream_buffer = ""
+        self._stream_markdown_buffer = MarkdownStreamBuffer()
         self._final_answer_rendered = False
         self._running_started_at: float | None = None
         self._spinner_index = 0
@@ -112,10 +115,18 @@ class TerminalSession:
                 self._print_status(rendered.status)
             self._stream_started = True
             self._stream_buffer += rendered.transcript
+            visible_chunk = self._stream_markdown_buffer.append(rendered.transcript)
+            if visible_chunk.strip():
+                self._print_assistant_stream_chunk(visible_chunk)
+                self._final_answer_rendered = True
             self._render_running_composer(rendered.status or messages.ANSWERING_STATUS)
             return
         if event.event_type in {"final_answer_ready", "turn_finalized"}:
             final_answer = getattr(event, "final_answer", event.message)
+            pending_stream = self._stream_markdown_buffer.flush()
+            if pending_stream.strip():
+                self._print_assistant_stream_chunk(pending_stream)
+                self._final_answer_rendered = True
             answer = final_answer if final_answer.strip() else self._stream_buffer
             if answer.strip() and not self._final_answer_rendered:
                 self._print_assistant_block(answer)
@@ -131,6 +142,7 @@ class TerminalSession:
         self._print_user_prompt(prompt)
         self._stream_started = False
         self._stream_buffer = ""
+        self._stream_markdown_buffer.reset()
         self._final_answer_rendered = False
         self._last_status = ""
         self._running_started_at = time.monotonic()
@@ -154,12 +166,18 @@ class TerminalSession:
 
     async def handle_approval_request(self, request: ApprovalRequest) -> ApprovalAction:
         self._prepare_body_output()
-        self.console.print("[bold]승인이 필요합니다[/]")
+        self.console.print(f"[bold]{messages.APPROVAL_REQUIRED_TITLE}[/]")
         self.console.print(f"[dim]{request.tool_name} · risk: {request.risk}[/]")
-        preview = self._approval_preview(request.preview)
+        view = approval_preview_from_payload(request.decision.model_dump(mode="json"), fallback_preview="")
+        if view.summary:
+            self.console.print(f"[dim]{view.summary}[/]")
+        preview = view.preview
+        if not preview:
+            preview = self._approval_preview(request.preview)
         if preview:
-            self.console.print(Markdown(f"```diff\n{preview}\n```"))
-        self.stdout.write("  y: once, a: session, n: deny > ")
+            language = "bash" if view.kind == "shell_command" else "diff"
+            self.console.print(Markdown(f"```{language}\n{preview}\n```"))
+        self.stdout.write(messages.APPROVAL_ACTION_PROMPT)
         self.stdout.flush()
         line = self.stdin.readline()
         choice = (line or "").strip().lower()
@@ -199,6 +217,12 @@ class TerminalSession:
         self.console.print("[bold]allCode[/]")
         self.answer_renderer.render(text)
         self.console.print()
+
+    def _print_assistant_stream_chunk(self, text: str) -> None:
+        self._prepare_body_output()
+        if not self._final_answer_rendered:
+            self.console.print("[bold]allCode[/]")
+        self.answer_renderer.render(text)
 
     def _print_rendered_block(self, role: str, text: str) -> None:
         if role == "error":
@@ -266,7 +290,7 @@ class TerminalSession:
         return len(positional) >= 3 or "approval_handler" in signature.parameters
 
     @staticmethod
-    def _approval_preview(preview: str, *, max_lines: int = 80, max_chars: int = 5000) -> str:
+    def _approval_preview(preview: str, *, max_lines: int = 120, max_chars: int = 8000) -> str:
         if not preview:
             return ""
         lines = preview.splitlines()

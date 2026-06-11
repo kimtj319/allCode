@@ -56,6 +56,25 @@ class LatestRepairContext(CoreModel):
         return "\n".join(lines)
 
 
+class SourceExplorationLedger(CoreModel):
+    observed_scopes: list[str] = Field(default_factory=list)
+    representative_files: list[str] = Field(default_factory=list)
+    unobserved_candidates: list[str] = Field(default_factory=list)
+    coverage_note: str = ""
+
+    def render(self) -> str:
+        lines: list[str] = []
+        if self.observed_scopes:
+            lines.append("Observed source scopes: " + ", ".join(self.observed_scopes[:6]))
+        if self.representative_files:
+            lines.append("Representative files read: " + ", ".join(self.representative_files[:8]))
+        if self.unobserved_candidates:
+            lines.append("Unobserved representative candidates: " + ", ".join(self.unobserved_candidates[:6]))
+        if self.coverage_note:
+            lines.append("Coverage note: " + self.coverage_note[:240])
+        return "\n".join(lines)
+
+
 def active_obligations_from_evidence(evidence: CompletionEvidence, *, workspace_root: str = "") -> ActiveProjectObligations:
     changed = [_relative_to_workspace(path, workspace_root=workspace_root) for path in [*evidence.created_files, *evidence.changed_files]]
     source_files = [path for path in changed if not _looks_test_path(path)]
@@ -74,6 +93,39 @@ def active_obligations_from_evidence(evidence: CompletionEvidence, *, workspace_
         validation_commands=evidence.validation_commands[-3:],
         feature_objectives=_dedupe(evidence.feature_objectives)[:12],
         unsatisfied_conditions=_dedupe(unsatisfied)[:8],
+    )
+
+
+def source_exploration_ledger_from_evidence(
+    evidence: CompletionEvidence,
+    *,
+    workspace_root: str = "",
+) -> SourceExplorationLedger:
+    observed = _dedupe(
+        [
+            _relative_to_workspace(path, workspace_root=workspace_root)
+            for path in [*evidence.source_overview_paths, *evidence.inspected_paths]
+        ]
+    )
+    representatives = _dedupe(
+        [
+            _relative_to_workspace(path, workspace_root=workspace_root)
+            for path in [*evidence.representative_read_paths, *evidence.inspected_paths]
+        ]
+    )
+    representative_set = set(representatives)
+    unobserved = [
+        _relative_to_workspace(path, workspace_root=workspace_root)
+        for path in evidence.source_representative_candidates
+        if _relative_to_workspace(path, workspace_root=workspace_root) not in representative_set
+    ]
+    coverage = evidence.source_analysis_coverage or {}
+    coverage_note = _coverage_note(coverage, truncated=evidence.source_overview_truncated)
+    return SourceExplorationLedger(
+        observed_scopes=observed[:10],
+        representative_files=representatives[:12],
+        unobserved_candidates=_dedupe(unobserved)[:8],
+        coverage_note=coverage_note,
     )
 
 
@@ -136,6 +188,22 @@ def _dedupe(values: list[str]) -> list[str]:
         if value and value not in seen:
             seen.append(value)
     return seen
+
+
+def _coverage_note(coverage: dict[str, object], *, truncated: bool) -> str:
+    parts: list[str] = []
+    if truncated or bool(coverage.get("truncated")):
+        parts.append("source overview was truncated")
+    ratio = coverage.get("coverage_ratio")
+    if ratio is not None:
+        try:
+            parts.append(f"coverage_ratio={float(ratio):.4f}")
+        except (TypeError, ValueError):
+            pass
+    package_count = coverage.get("package_count")
+    if package_count is not None:
+        parts.append(f"package_count={package_count}")
+    return "; ".join(parts)
 
 
 def _add_objective(objectives: list[str], value: str) -> None:

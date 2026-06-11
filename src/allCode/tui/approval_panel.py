@@ -8,6 +8,7 @@ from pydantic import Field
 
 from allCode.core.events import ApprovalRequested
 from allCode.core.models import CoreModel
+from allCode.tui.approval_preview_view import approval_preview_from_payload
 
 ApprovalAction = Literal["approve_once", "deny", "allow_session"]
 
@@ -23,10 +24,11 @@ class ApprovalPanelState(CoreModel):
     @classmethod
     def from_event(cls, event: ApprovalRequested) -> "ApprovalPanelState":
         data = event.data
+        view = approval_preview_from_payload(data, fallback_preview=str(data.get("preview", "")))
         return cls(
             visible=True,
             reason=str(data.get("reason", event.message)),
-            preview=str(data.get("preview", "")),
+            preview=view.preview,
             risk=str(data.get("risk", "medium")),
         )
 

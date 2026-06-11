@@ -82,6 +82,40 @@ def read_only_clause_matched(prompt: str) -> bool:
     return False
 
 
+def scoped_output_mutation_allowed(prompt: str) -> bool:
+    """Return true for prompts that prohibit existing-file edits but allow scoped output changes."""
+
+    compact = re.sub(r"\s+", "", prompt).lower()
+    existing_only = any(
+        token in compact
+        for token in (
+            "기존파일수정금지",
+            "기존파일변경금지",
+            "기존파일은수정하지",
+            "donotmodifyexisting",
+            "don'tmodifyexisting",
+            "nevermodifyexisting",
+        )
+    )
+    if not existing_only:
+        return False
+    scoped_write = any(
+        token in compact
+        for token in (
+            "하위만수정",
+            "하위만변경",
+            "하위만생성",
+            "아래에생성",
+            "아래에작성",
+            "underonly",
+            "onlyunder",
+            "insideonly",
+        )
+    )
+    output_path = bool(re.search(r"(?:^|[\s`\"'(<])\.?/?(?:output|dist|build|apps|packages)/", prompt, re.IGNORECASE))
+    return scoped_write and output_path
+
+
 def _contains_any(text: str, tokens: Sequence[str]) -> bool:
     return any(token.lower().replace(" ", "") in text for token in tokens)
 

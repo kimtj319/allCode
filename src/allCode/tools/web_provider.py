@@ -11,6 +11,7 @@ import httpx
 
 from allCode.config.schema import WebConfig
 from allCode.core.models import CoreModel
+from allCode.tools.web_health import WebHealth, host_from_url
 
 
 class WebSearchUnavailable(RuntimeError):
@@ -30,11 +31,22 @@ class WebEvidence(CoreModel):
 
 
 class WebSearchProvider(Protocol):
+    def health(self) -> WebHealth:
+        raise NotImplementedError("web search providers may expose health metadata")
+
     async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
         raise NotImplementedError("web search providers must implement search")
 
 
 class DisabledWebSearchProvider:
+    def health(self) -> WebHealth:
+        return WebHealth(
+            configured=False,
+            backend="disabled",
+            supports_json=False,
+            last_error_type="web_search_unavailable",
+        )
+
     async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
         _ = query, top_n
         raise WebSearchUnavailable("web_search backend is disabled. Configure ALLCODE_WEB_SEARCH_BACKEND and ALLCODE_WEB_SEARCH_URL.")
@@ -55,6 +67,14 @@ class HttpWebSearchProvider:
         self._api_key_env = api_key_env
         self._timeout_seconds = timeout_seconds
         self._http_client = http_client
+
+    def health(self) -> WebHealth:
+        return WebHealth(
+            configured=bool(self._endpoint),
+            backend="http_json",
+            search_url_host=host_from_url(self._endpoint),
+            supports_json=True,
+        )
 
     async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
         headers = {"Content-Type": "application/json"}
@@ -92,6 +112,14 @@ class SearxngSearchProvider:
         self._categories = categories or ["general"]
         self._http_client = http_client
 
+    def health(self) -> WebHealth:
+        return WebHealth(
+            configured=bool(self._search_url),
+            backend="searxng",
+            search_url_host=host_from_url(self._search_url),
+            supports_json=True,
+        )
+
     async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
         params = {
             "q": query,
@@ -118,7 +146,7 @@ class SearxngSearchProvider:
 
 
 def provider_from_config(config: WebConfig) -> WebSearchProvider:
-    if not config.search_url:
+    if config.backend == "disabled" or not config.search_url:
         return DisabledWebSearchProvider()
     if config.backend == "searxng":
         return SearxngSearchProvider(

@@ -54,4 +54,10 @@ def completion_check_repairable(
         return False
     if not validation_results or validation_results[-1].ok is not True:
         return False
-    return any(error.startswith("public API ") for error in check.errors)
+    return any(
+        error.startswith("public API ")
+        or error.startswith("python syntax error")
+        or error.startswith("test coverage ")
+        or error.startswith("documentation references ")
+        for error in check.errors
+    )

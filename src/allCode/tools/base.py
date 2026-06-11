@@ -30,6 +30,7 @@ class ToolContext(CoreModel):
     turn_id: str | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     approval_mode: str = "ask"
+    user_prompt: str = ""
 
 
 class BaseTool(Protocol):

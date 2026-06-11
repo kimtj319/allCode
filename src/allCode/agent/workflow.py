@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from pydantic import Field
-
-from allCode.agent.completion_checker import CompletionCheck, CompletionChecker
+from allCode.agent.api_obligation_checker import declared_public_api_symbols, planned_public_api_symbols
+from allCode.agent.completion_checker import CompletionChecker
 from allCode.agent.final_reporter import FinalReporter
 from allCode.agent.language import detect_response_language
 from allCode.agent.project_planner import ModelProjectPlanner
@@ -15,15 +14,23 @@ from allCode.agent.task_plan import ProjectPlan
 from allCode.agent.task_loop_digest import TaskLoopDigest, build_task_loop_digest
 from allCode.agent.validation_runner import ValidationResult, ValidationRunner
 from allCode.agent.workflow_actions import WorkflowActions, WorkflowStepRecord
-from allCode.agent.workflow_completion import build_project_manifest, completion_check_repairable
+from allCode.agent.workflow_completion import build_project_manifest
+from allCode.agent.workflow_digest import workflow_digest
+from allCode.agent.workflow_editor import ModelWorkflowEditor
+from allCode.agent.workflow_repair import repair_completion_check, repair_until_valid
+from allCode.agent.workflow_result import (
+    GenerationWorkflowResult,
+    build_failed_workflow_result,
+    build_workflow_turn_result,
+)
 from allCode.agent.workflow_routing import workflow_target_root_from_routing
 from allCode.core.event_bus import AsyncEventBus, EventBus
 from allCode.core.events import (
     GenerationWorkflowFinished,
     GenerationWorkflowStarted,
 )
-from allCode.core.models import CoreModel, TurnInput
-from allCode.core.result import CompletionEvidence, RecoveryState, TurnResult
+from allCode.core.models import TurnInput
+from allCode.core.result import CompletionEvidence, RecoveryState
 from allCode.generation.strategy import GenerationRequest, StrategyRegistry
 from allCode.generation.strategies import default_strategy_registry
 from allCode.llm.client import LLMClient
@@ -32,16 +39,6 @@ from allCode.tools.approval import ApprovalManager
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.executor import ToolExecutor
 from allCode.tools.registry import ToolRegistry
-
-
-class GenerationWorkflowResult(CoreModel):
-    plan: ProjectPlan
-    turn_result: TurnResult
-    validation_results: list[ValidationResult] = Field(default_factory=list)
-    completion_check: CompletionCheck
-    step_history: list[WorkflowStepRecord] = Field(default_factory=list)
-    task_loop_digests: list[TaskLoopDigest] = Field(default_factory=list)
-    repair_attempts: int = 0
 
 
 class GenerationWorkflow:
@@ -71,6 +68,11 @@ class GenerationWorkflow:
             if llm_client is not None and settings is not None
             else None
         )
+        self.model_editor = (
+            ModelWorkflowEditor(llm_client=llm_client, settings=settings)
+            if llm_client is not None and settings is not None
+            else None
+        )
         self.max_repair_attempts = max_repair_attempts
         self.tool_executor = tool_executor or ToolExecutor(
             registry=ToolRegistry(builtin_tools()),
@@ -95,13 +97,21 @@ class GenerationWorkflow:
             target_root=workflow_target_root_from_routing(turn_input.user_prompt, routing),
         )
         strategy = self.strategy_registry.select(request)
-        plan = await self._create_plan(request, routing=routing, strategy=strategy)
         completion_evidence = CompletionEvidence()
         recovery_states: list[RecoveryState] = []
         step_history: list[WorkflowStepRecord] = []
         task_loop_digests: list[TaskLoopDigest] = []
         validation_results: list[ValidationResult] = []
         repair_attempts = 0
+        planning_digest = build_task_loop_digest(
+            turn_input=turn_input,
+            routing=routing,
+            evidence=completion_evidence,
+            current_step="planning",
+            next_required_action="Create a skeleton-first plan that satisfies prompt-derived artifact obligations.",
+        )
+        task_loop_digests.append(planning_digest)
+        plan = await self._create_plan(request, routing=routing, strategy=strategy, task_digest=planning_digest)
 
         await self._publish(
             GenerationWorkflowStarted(
@@ -112,50 +122,62 @@ class GenerationWorkflow:
         )
 
         try:
-            task_loop_digests.append(
-                self._digest(
-                    turn_input,
-                    routing,
-                    completion_evidence,
-                    plan=plan,
-                    current_step="skeleton",
-                    next_required_action="Write skeleton files through file mutation tools.",
-                )
+            skeleton_digest = workflow_digest(
+                turn_input,
+                routing,
+                completion_evidence,
+                plan=plan,
+                current_step="skeleton",
+                next_required_action="Write skeleton files through file mutation tools.",
             )
+            task_loop_digests.append(skeleton_digest)
             await self.actions.write_step_files("skeleton", plan, turn_input, turn_id, routing, completion_evidence, step_history)
-            task_loop_digests.append(
-                self._digest(
-                    turn_input,
-                    routing,
-                    completion_evidence,
-                    plan=plan,
-                    current_step="implementation",
-                    next_required_action="Write implementation files and preserve requested behavior.",
-                )
+            implementation_digest = workflow_digest(
+                turn_input,
+                routing,
+                completion_evidence,
+                plan=plan,
+                current_step="implementation",
+                next_required_action="Write implementation files and preserve requested behavior.",
             )
+            task_loop_digests.append(implementation_digest)
+            for file in plan.files_for_step("implementation"):
+                if self.model_editor is not None:
+                    file.content = await self.model_editor.generate_file(
+                        file,
+                        plan,
+                        turn_input,
+                        task_digest=implementation_digest.render(),
+                    )
             await self.actions.write_step_files("implementation", plan, turn_input, turn_id, routing, completion_evidence, step_history)
-            task_loop_digests.append(
-                self._digest(
-                    turn_input,
-                    routing,
-                    completion_evidence,
-                    plan=plan,
-                    current_step="tests",
-                    next_required_action="Write requested test artifacts before validation.",
-                )
+            tests_digest = workflow_digest(
+                turn_input,
+                routing,
+                completion_evidence,
+                plan=plan,
+                current_step="tests",
+                next_required_action="Write requested test artifacts before validation.",
             )
+            task_loop_digests.append(tests_digest)
+            for file in plan.files_for_step("tests"):
+                if self.model_editor is not None:
+                    file.content = await self.model_editor.generate_file(
+                        file,
+                        plan,
+                        turn_input,
+                        task_digest=tests_digest.render(),
+                    )
             await self.actions.write_step_files("tests", plan, turn_input, turn_id, routing, completion_evidence, step_history)
 
-            task_loop_digests.append(
-                self._digest(
-                    turn_input,
-                    routing,
-                    completion_evidence,
-                    plan=plan,
-                    current_step="validation",
-                    next_required_action="Run validation and capture the result.",
-                )
+            validation_digest = workflow_digest(
+                turn_input,
+                routing,
+                completion_evidence,
+                plan=plan,
+                current_step="validation",
+                next_required_action="Run validation and capture the result.",
             )
+            task_loop_digests.append(validation_digest)
             validation_results.extend(
                 await self._run_validation_step(plan, turn_input, turn_id, routing, completion_evidence, step_history)
             )
@@ -164,7 +186,7 @@ class GenerationWorkflow:
                 await self.actions.record_skipped_step("repair", turn_id, step_history, "Validation passed before repair.")
             else:
                 task_loop_digests.append(
-                    self._digest(
+                    workflow_digest(
                         turn_input,
                         routing,
                         completion_evidence,
@@ -174,7 +196,7 @@ class GenerationWorkflow:
                         next_required_action="Repair validation or completion failures, then validate again.",
                     )
                 )
-                repair_attempts = await self._repair_until_valid(
+                repair_attempts = await repair_until_valid(
                     strategy=strategy,
                     plan=plan,
                     turn_input=turn_input,
@@ -184,6 +206,11 @@ class GenerationWorkflow:
                     validation_results=validation_results,
                     recovery_states=recovery_states,
                     step_history=step_history,
+                    actions=self.actions,
+                    run_validation_step=self._run_validation_step,
+                    repair_files=self._repair_files_from_model_or_strategy,
+                    max_repair_attempts=self.max_repair_attempts,
+                    completion_checker=self.completion_checker,
                 )
 
             preliminary_check = self.completion_checker.check(
@@ -192,7 +219,7 @@ class GenerationWorkflow:
                 completion_evidence=completion_evidence,
                 validation_results=validation_results,
             )
-            repair_attempts += await self._repair_completion_check(
+            repair_attempts += await repair_completion_check(
                 strategy=strategy,
                 check=preliminary_check,
                 plan=plan,
@@ -203,6 +230,11 @@ class GenerationWorkflow:
                 validation_results=validation_results,
                 recovery_states=recovery_states,
                 step_history=step_history,
+                actions=self.actions,
+                completion_checker=self.completion_checker,
+                run_validation_step=self._run_validation_step,
+                repair_files=self._repair_files_from_model_or_strategy,
+                max_repair_attempts=self.max_repair_attempts,
                 current_attempts=repair_attempts,
             )
             preliminary_check = self.completion_checker.check(
@@ -242,65 +274,36 @@ class GenerationWorkflow:
                     "Final report rendered.",
                 )
 
-            if final_check.ok:
-                completion_evidence.final_answer_ready = True
-                completion_evidence.status = "reported"
-                status = "success"
-                error_message = None
-            else:
-                completion_evidence.final_answer_ready = False
-                completion_evidence.status = "blocked"
-                status = "failed"
-                error_message = "Completion check failed: " + "; ".join(final_check.errors)
-                final_report = ""
-
             await self._publish(
                 GenerationWorkflowFinished(
                     turn_id=turn_id,
                     message="Generation workflow finished.",
-                    data={"status": status, "errors": final_check.errors},
+                    data={"status": "success" if final_check.ok else "failed", "errors": final_check.errors},
                 )
             )
-            return GenerationWorkflowResult(
+            return build_workflow_turn_result(
+                turn_id=turn_id,
                 plan=plan,
-                turn_result=TurnResult(
-                    turn_id=turn_id,
-                    status=status,
-                    final_answer=final_report,
-                    created_files=completion_evidence.created_files,
-                    modified_files=completion_evidence.changed_files,
-                    validation_passed=completion_evidence.validation_passed,
-                    error_message=error_message,
-                    completion_evidence=completion_evidence,
-                    recovery_states=recovery_states,
-                    requires_change_evidence=True,
-                    validation_required=True,
-                ),
+                completion_evidence=completion_evidence,
                 validation_results=validation_results,
-                completion_check=final_check,
+                final_check=final_check,
+                final_report=final_report,
                 step_history=step_history,
                 task_loop_digests=task_loop_digests,
                 repair_attempts=repair_attempts,
+                recovery_states=recovery_states,
             )
         except Exception as exc:
-            completion_evidence.status = "blocked"
-            completion_evidence.final_answer_ready = False
-            return GenerationWorkflowResult(
+            return build_failed_workflow_result(
+                turn_id=turn_id,
                 plan=plan,
-                turn_result=TurnResult(
-                    turn_id=turn_id,
-                    status="failed",
-                    error_message=str(exc),
-                    completion_evidence=completion_evidence,
-                    recovery_states=recovery_states,
-                    requires_change_evidence=True,
-                    validation_required=True,
-                ),
+                completion_evidence=completion_evidence,
                 validation_results=validation_results,
-                completion_check=CompletionCheck(ok=False, errors=[str(exc)]),
+                exc=exc,
                 step_history=step_history,
                 task_loop_digests=task_loop_digests,
                 repair_attempts=repair_attempts,
+                recovery_states=recovery_states,
             )
 
     async def _run_validation_step(
@@ -327,131 +330,105 @@ class GenerationWorkflow:
         await self.actions.finish_step("validation", turn_id, step_history, status, "Validation completed.")
         return results
 
-    async def _create_plan(self, request: GenerationRequest, *, routing: RoutingDecision, strategy) -> ProjectPlan:
+    async def _create_plan(
+        self,
+        request: GenerationRequest,
+        *,
+        routing: RoutingDecision,
+        strategy,
+        task_digest: TaskLoopDigest,
+    ) -> ProjectPlan:
         target_hint = routing.target_hint or request.target_root
         if self.model_planner is not None:
             try:
-                model_plan = await self.model_planner.create_plan(request.prompt, target_hint=target_hint)
+                model_plan = await self.model_planner.create_plan(
+                    request.prompt,
+                    target_hint=target_hint,
+                    task_digest=task_digest.render(),
+                )
             except Exception:
                 model_plan = None
-            if model_plan is not None:
+            if model_plan is not None and _model_plan_acceptable(model_plan, request.prompt):
                 return model_plan
         return strategy.create_plan(request)
 
-    async def _repair_until_valid(
+    async def _repair_files_from_model_or_strategy(
         self,
-        *,
         strategy,
         plan: ProjectPlan,
+        failure_log: str,
         turn_input: TurnInput,
-        turn_id: str,
-        routing: RoutingDecision,
-        completion_evidence: CompletionEvidence,
-        validation_results: list[ValidationResult],
-        recovery_states: list[RecoveryState],
-        step_history: list[WorkflowStepRecord],
-    ) -> int:
-        await self.actions.start_step("repair", turn_id, step_history, "Repairing validation failure.")
-        attempts = 0
-        previous_hash = validation_results[-1].error_hash if validation_results else None
-        while validation_results and not validation_results[-1].ok and attempts < self.max_repair_attempts:
-            failure = validation_results[-1]
-            attempts += 1
-            recovery_states.append(
-                RecoveryState(reason="validation_failed", attempts=attempts, last_error=failure.summary or failure.error)
-            )
-            repair_files = strategy.repair_files(plan, failure.summary or failure.error or "")
-            if not repair_files:
-                recovery_states[-1] = recovery_states[-1].model_copy(update={"blocked": True})
-                break
-            await self.actions.write_repair_files(repair_files, plan, turn_input, turn_id, routing, completion_evidence)
-            validation_results.extend(
-                await self._run_validation_step(plan, turn_input, turn_id, routing, completion_evidence, step_history)
-            )
-            current_hash = validation_results[-1].error_hash
-            if validation_results[-1].ok:
-                break
-            if current_hash and current_hash == previous_hash:
-                recovery_states.append(
-                    RecoveryState(
-                        reason="validation_failed",
-                        attempts=attempts,
-                        last_error=validation_results[-1].summary or validation_results[-1].error,
-                        blocked=True,
-                    )
-                )
-                break
-            previous_hash = current_hash
-        status = "succeeded" if validation_results and validation_results[-1].ok else "failed"
-        if attempts >= self.max_repair_attempts and validation_results and not validation_results[-1].ok:
-            recovery_states.append(
-                RecoveryState(
-                    reason="validation_failed",
-                    attempts=attempts,
-                    last_error=validation_results[-1].summary or validation_results[-1].error,
-                    blocked=True,
-                )
-            )
-        await self.actions.finish_step("repair", turn_id, step_history, status, f"Repair attempts: {attempts}.")
-        return attempts
-
-    async def _repair_completion_check(
-        self,
         *,
-        strategy,
-        check: CompletionCheck,
-        plan: ProjectPlan,
-        turn_input: TurnInput,
-        turn_id: str,
-        routing: RoutingDecision,
-        completion_evidence: CompletionEvidence,
-        validation_results: list[ValidationResult],
-        recovery_states: list[RecoveryState],
-        step_history: list[WorkflowStepRecord],
-        current_attempts: int,
-    ) -> int:
-        if not completion_check_repairable(check, completion_evidence, validation_results):
-            return 0
-        if current_attempts >= self.max_repair_attempts:
-            return 0
-        failure_log = "Completion check failed:\n" + "\n".join(check.errors)
-        await self.actions.start_step("repair", turn_id, step_history, "Repairing completion obligation failure.")
-        recovery_states.append(
-            RecoveryState(reason="completion_check_failed", attempts=current_attempts + 1, last_error=failure_log)
-        )
-        repair_files = strategy.repair_files(plan, failure_log)
-        if not repair_files:
-            recovery_states[-1] = recovery_states[-1].model_copy(update={"blocked": True})
-            await self.actions.finish_step("repair", turn_id, step_history, "failed", "No completion repair files returned.")
-            return 0
-        await self.actions.write_repair_files(repair_files, plan, turn_input, turn_id, routing, completion_evidence)
-        validation_results.extend(
-            await self._run_validation_step(plan, turn_input, turn_id, routing, completion_evidence, step_history)
-        )
-        status = "succeeded" if validation_results and validation_results[-1].ok else "failed"
-        await self.actions.finish_step("repair", turn_id, step_history, status, "Completion repair attempts: 1.")
-        return 1
+        task_digest: str = "",
+    ) -> dict[str, str]:
+        if self.model_editor is not None:
+            try:
+                repair_files = await self.model_editor.repair_files(
+                    plan,
+                    failure_log,
+                    turn_input,
+                    task_digest=task_digest,
+                )
+            except Exception:
+                repair_files = {}
+            if repair_files:
+                return repair_files
+        return strategy.repair_files(plan, failure_log)
 
     async def _publish(self, event) -> None:
         await self.event_bus.publish(event)
 
-    def _digest(
-        self,
-        turn_input: TurnInput,
-        routing: RoutingDecision,
-        completion_evidence: CompletionEvidence,
-        *,
-        recovery_states: list[RecoveryState] | None = None,
-        plan: ProjectPlan,
-        current_step: str,
-        next_required_action: str,
-    ) -> TaskLoopDigest:
-        return build_task_loop_digest(
-            turn_input=turn_input,
-            routing=routing,
-            evidence=completion_evidence,
-            recovery_states=recovery_states or [],
-            plan=plan,
-            current_step=current_step,
-            next_required_action=next_required_action,
-        )
+
+def _model_plan_acceptable(plan: ProjectPlan, prompt: str) -> bool:
+    if plan.language.lower() != "python" or not _featureful_python_cli_prompt(prompt):
+        return True
+    source_symbols = set().union(*planned_public_api_symbols(plan).values()) if plan.files else set()
+    contract_symbols = _contract_symbol_names(source_symbols)
+    if len(contract_symbols) < 4:
+        return False
+    if not _api_obligations_declared_in_plan(plan):
+        return False
+    test_content = "\n".join(file.content for file in plan.files if file.stage == "tests")
+    if not test_content.strip():
+        return False
+    covered = {symbol for symbol in contract_symbols if symbol in test_content}
+    return len(covered) >= 2
+
+
+def _featureful_python_cli_prompt(prompt: str) -> bool:
+    lowered = prompt.lower()
+    compact = lowered.replace(" ", "")
+    cli = any(term in lowered for term in ("cli", "command", "entrypoint", "argparse")) or any(
+        term in prompt for term in ("명령어", "커맨드", "진입점")
+    )
+    feature = any(term in lowered or term in compact for term in ("registry", "retry", "json", "task", "export", "pytest")) or any(
+        term in prompt for term in ("레지스트리", "재시도", "저장소", "테스트", "검증")
+    )
+    return cli and feature
+
+
+def _contract_symbol_names(symbols: set[str]) -> set[str]:
+    names: set[str] = set()
+    for symbol in symbols:
+        if symbol.startswith("__all__:"):
+            symbol = symbol.split(":", 1)[1]
+        if "." in symbol:
+            owner, _, member = symbol.partition(".")
+            names.add(owner)
+            if len(member) > 2:
+                names.add(member)
+            continue
+        if len(symbol) > 2:
+            names.add(symbol)
+    return names
+
+
+def _api_obligations_declared_in_plan(plan: ProjectPlan) -> bool:
+    if not plan.api_obligations:
+        return True
+    declared = declared_public_api_symbols(plan)
+    for obligation in plan.api_obligations:
+        symbols = declared.get(obligation.path, set())
+        if not symbols or obligation.symbol not in symbols:
+            return False
+    return True

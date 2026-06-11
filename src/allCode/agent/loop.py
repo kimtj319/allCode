@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from allCode.agent.completion_gate import tool_loop_signatures
 from allCode.agent.context import ContextBuilder
@@ -19,8 +18,8 @@ from allCode.agent.preflight import (
     should_force_mutation_after_inspection,
 )
 from allCode.agent.prompt_builder import PromptBuilder
-from allCode.agent.phase_gate import seed_known_artifact_targets
 from allCode.agent.model_router import ModelRouter
+from allCode.agent.loop_obligations import remember_generation_workflow_result, seed_session_artifact_obligations, target_hint_exists
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
 from allCode.agent.router import RuleBasedRouter
 from allCode.agent.round_runner import RoundRunner
@@ -44,7 +43,6 @@ from allCode.core.models import Message, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence, TurnResult
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings
-from allCode.memory.project_obligations import feature_objectives_from_prompt
 from allCode.tools.approval import ApprovalHandler, ApprovalManager
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.executor import ToolExecutor
@@ -191,7 +189,7 @@ class AgentLoop:
             target_hint = manifest_target or followup_target_hint(turn_input.user_prompt, recent_targets)
             if target_hint is not None and (
                 routing.target_hint is None
-                or not self._target_hint_exists(turn_input.workspace.root, routing.target_hint)
+                or not target_hint_exists(turn_input.workspace.root, routing.target_hint)
             ):
                 routing = routing.model_copy(update={"target_hint": target_hint})
         await self._publish(
@@ -203,20 +201,17 @@ class AgentLoop:
         )
         if should_use_generation_workflow(turn_input.user_prompt, routing, workspace_root=turn_input.workspace.root):
             workflow_result = await self._generation_workflow.run(turn_input, routing=routing)
-            if self._context_builder is not None:
-                for path in [*workflow_result.turn_result.created_files, *workflow_result.turn_result.modified_files]:
-                    self._context_builder.remember_target(path, turn_id=workflow_result.turn_result.turn_id, summary="generation workflow output")
-                self._context_builder.session_state.remember_turn_outcome(
-                    workflow_result.turn_result.completion_evidence,
-                    status=workflow_result.turn_result.status,
-                    workspace_root=turn_input.workspace.root,
-                )
+            remember_generation_workflow_result(
+                self._context_builder,
+                workflow_result,
+                workspace_root=turn_input.workspace.root,
+            )
             return workflow_result.turn_result
         state.messages = self._prompt_builder.initial_messages(turn_input, routing, context_bundle)
         recovery = RecoveryTracker()
         loop_guard = ToolLoopGuard()
         completion_evidence = CompletionEvidence()
-        self._seed_session_artifact_obligations(turn_input, completion_evidence, routing)
+        seed_session_artifact_obligations(turn_input, completion_evidence, routing, self._context_builder)
         force_mutation_action = False
 
         try:
@@ -399,35 +394,3 @@ class AgentLoop:
 
     async def _publish(self, event) -> None:
         await self._event_bus.publish(event)
-
-    def _seed_session_artifact_obligations(self, turn_input: TurnInput, evidence: CompletionEvidence, routing) -> None:
-        if getattr(routing, "read_only_requested", False) or getattr(routing, "kind", "") in {"answer", "inspect"}:
-            return
-        for objective in feature_objectives_from_prompt(turn_input.user_prompt):
-            if objective not in evidence.feature_objectives:
-                evidence.feature_objectives.append(objective)
-        if self._context_builder is None:
-            return
-        obligations = self._context_builder.session_state.active_project_obligations
-        if obligations is None:
-            return
-        for objective in obligations.feature_objectives:
-            if objective not in evidence.feature_objectives:
-                evidence.feature_objectives.append(objective)
-        seed_known_artifact_targets(
-            turn_input.user_prompt,
-            evidence,
-            workspace_root=turn_input.workspace.root,
-            source_files=obligations.source_files,
-            test_files=obligations.test_files,
-        )
-
-    @staticmethod
-    def _target_hint_exists(workspace_root: str, target_hint: str) -> bool:
-        candidate = Path(target_hint)
-        if not candidate.is_absolute():
-            candidate = Path(workspace_root) / candidate
-        try:
-            return candidate.expanduser().resolve().exists()
-        except OSError:
-            return False

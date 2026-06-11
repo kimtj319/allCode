@@ -78,6 +78,14 @@ class RuleBasedRouter:
         flags = self._flags(signals)
 
         if signals.read_only_requested:
+            if signals.answer_artifact_requested:
+                return self._decision(
+                    "answer",
+                    0.90,
+                    "Read-only answer artifact request detected.",
+                    signals,
+                    flags,
+                )
             if signals.operate_action:
                 return self._decision(
                     "inspect",
@@ -183,10 +191,14 @@ class RuleBasedRouter:
             flags.add("requires_validation")
         if signals.external_knowledge_requested:
             flags.add("requires_external_knowledge")
+        if "external_knowledge_suppressed" in signals.matched_terms:
+            flags.add("external_knowledge_suppressed")
         if signals.followup_requested:
             flags.add("followup")
         if signals.conceptual_question:
             flags.add("conceptual_question")
         if signals.explicit_change_request:
             flags.add("explicit_change_request")
+        if signals.answer_artifact_requested:
+            flags.add("answer_artifact")
         return flags

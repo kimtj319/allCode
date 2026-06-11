@@ -33,10 +33,46 @@ class ContextCompactor:
         max_chars = max_tokens * 4
         content = section.content
         if section.section_type == "active_file":
-            compacted = content[:max_chars]
+            compacted = _compact_active_file(content, max_chars=max_chars)
         else:
             lines = content.splitlines()
             compacted = "\n".join(lines[: max(1, max_tokens // 12)])
             if len(compacted) > max_chars:
                 compacted = compacted[:max_chars]
         return section.model_copy(update={"content": compacted, "token_estimate": estimate_tokens(compacted)})
+
+
+def _compact_active_file(content: str, *, max_chars: int) -> str:
+    """Compact active-file context without cutting code in the middle of a line."""
+
+    if len(content) <= max_chars:
+        return content
+    lines = content.splitlines()
+    if not lines:
+        return ""
+    marker = "[active file middle omitted: use source_probe/read_file ranges for exact code]"
+    if max_chars <= len(marker) + 20:
+        return marker[:max_chars]
+
+    head_lines: list[str] = []
+    tail_lines: list[str] = []
+    used = len(marker) + 2
+    for line in lines:
+        addition = len(line) + 1
+        if head_lines and used + addition > max_chars // 2:
+            break
+        if used + addition > max_chars - 1:
+            break
+        head_lines.append(line)
+        used += addition
+    for line in reversed(lines):
+        addition = len(line) + 1
+        if used + addition > max_chars:
+            break
+        tail_lines.append(line)
+        used += addition
+    tail_lines.reverse()
+    compacted = "\n".join([*head_lines, marker, *tail_lines]).strip()
+    if len(compacted) <= max_chars:
+        return compacted
+    return "\n".join([*head_lines, marker]).strip()

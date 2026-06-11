@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from allCode.agent.language import ResponseLanguage, generation_report_labels, normalize_response_language
+from allCode.agent.obligation_matrix import build_obligation_matrix
 from allCode.agent.task_plan import ProjectPlan
 from allCode.agent.validation_runner import ValidationResult
 from allCode.core.result import CompletionEvidence, RecoveryState
@@ -28,6 +29,11 @@ class FinalReporter:
             f"- {state.reason}: attempts={state.attempts}, blocked={state.blocked}"
             for state in recovery_states
         ]
+        obligation_lines = build_obligation_matrix(
+            plan=plan,
+            completion_evidence=completion_evidence,
+            validation_results=validation_results,
+        ).render(language=language)
         risk_lines = risks or [labels.no_known_risk]
         next_command = completion_evidence.validation_commands[-1] if completion_evidence.validation_commands else ""
 
@@ -43,6 +49,7 @@ class FinalReporter:
             f"- Generated a {plan.language} scaffold using skeleton-first workflow.",
             "- Added implementation files and validation coverage.",
             "",
+            *(obligation_lines + [""] if obligation_lines else []),
             f"{labels.validation}:",
             *(validation_lines or [f"- {labels.not_executed}"]),
             "",
