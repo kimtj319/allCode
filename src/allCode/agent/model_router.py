@@ -37,6 +37,8 @@ def _fallback_flags(existing: set[str], constraints: PromptConstraints) -> set[s
         flags.add("followup")
     if constraints.workspace_evidence_requested:
         flags.add("workspace_evidence_requested")
+    if constraints.broad_source_analysis_requested:
+        flags.add("broad_source_analysis")
     if constraints.answer_artifact_hint:
         flags.add("answer_artifact")
     if constraints.code_artifact_hint:
@@ -133,6 +135,8 @@ class ModelRouter:
             flags.add("followup")
         if constraints.workspace_evidence_requested:
             flags.add("workspace_evidence_requested")
+        if constraints.broad_source_analysis_requested:
+            flags.add("broad_source_analysis")
         confidence = min(max(decision.confidence, 0.0), 1.0)
         kind = decision.kind
         target_hint = decision.target_hint or constraints.primary_target_hint

@@ -49,6 +49,8 @@ def validate_route(
     flags = set(route.flags)
     if "external_knowledge_suppressed" in constraints.matched_constraints:
         flags.add("external_knowledge_suppressed")
+    if constraints.broad_source_analysis_requested:
+        flags.add("broad_source_analysis")
     kind: RouteKind = route.kind
     workflow_hint: WorkflowHint = route.workflow_hint
     target_hint = route.target_hint or constraints.primary_target_hint

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Iterable
 
 from allCode.agent.prompt_constraint_terms import (
     CODE_ARTIFACT_TERMS,
@@ -128,6 +129,63 @@ def external_knowledge_suppressed(prompt: str) -> bool:
     return evergreen_signal and not explicit_current_request
 
 
+def dependency_constraint_hint(prompt: str) -> bool:
+    """Detect no-third-party / stdlib-only constraints with bounded context."""
+
+    for sentence in _prompt_sentences(prompt):
+        lowered = sentence.lower()
+        compact = re.sub(r"\s+", "", lowered)
+        if _english_dependency_constraint(lowered):
+            return True
+        if _korean_dependency_constraint(compact):
+            return True
+    return False
+
+
+def _english_dependency_constraint(sentence: str) -> bool:
+    tokens = re.findall(r"[a-z0-9.+_-]+", sentence)
+    joined = " ".join(tokens)
+    if not tokens:
+        return False
+    stdlib_terms = ("standard library", "stdlib", "built in", "built-in", "builtin", "builtins")
+    if any(term in joined for term in stdlib_terms) and any(term in tokens for term in ("only", "just", "solely")):
+        return True
+    negation_indexes = [
+        idx
+        for idx, token in enumerate(tokens)
+        if token in {"no", "without", "avoid", "exclude", "excluding"}
+        or (token == "not" and idx > 0 and tokens[idx - 1] in {"do", "does", "should", "must"})
+    ]
+    dependency_indexes = [
+        idx
+        for idx, token in enumerate(tokens)
+        if token in {"dependency", "dependencies", "package", "packages", "library", "libraries", "module", "modules"}
+        or (token == "party" and idx > 0 and tokens[idx - 1] == "third")
+        or token in {"external", "third-party"}
+    ]
+    return any(abs(left - right) <= 12 for left in negation_indexes for right in dependency_indexes)
+
+
+def _korean_dependency_constraint(compact: str) -> bool:
+    dependency = any(term in compact for term in ("패키지", "모듈", "라이브러리", "의존성"))
+    if not dependency:
+        return False
+    builtin_scope = any(term in compact for term in ("표준", "기본", "내장"))
+    only_scope = any(term in compact for term in ("만", "으로만"))
+    if builtin_scope and only_scope:
+        return True
+    external_scope = any(term in compact for term in ("외부", "서드파티", "추가"))
+    exclusion = any(term in compact for term in ("없이", "제외", "금지", "사용하지", "쓰지", "빼고"))
+    return external_scope and exclusion
+
+
+def _prompt_sentences(prompt: str) -> Iterable[str]:
+    for sentence in re.split(r"[\n.!?。！？]+", str(prompt or "")):
+        stripped = sentence.strip()
+        if stripped:
+            yield stripped
+
+
 def answer_only_artifact_hint(prompt: str) -> bool:
     """Detect requests for code/project artifacts as answer text, not files."""
 
@@ -177,3 +235,53 @@ def answer_only_artifact_hint(prompt: str) -> bool:
         )
     )
     return has_artifact and answer_form and no_file_output
+
+
+def broad_source_analysis_hint(paths: list[str], prompt: str, *, workspace_evidence: bool) -> bool:
+    """Detect broad workspace/source analysis intent from structural signals.
+
+    This helper intentionally stays in constraint detection so answer guards do
+    not re-parse raw prompts independently from routing.
+    """
+
+    if not workspace_evidence and not paths:
+        return False
+    lowered = prompt.lower()
+    compact = re.sub(r"\s+", "", lowered)
+    broad_path = any(_broad_workspace_path(path) for path in paths)
+    if not broad_path:
+        return False
+    scope_terms = (
+        "source tree",
+        "codebase",
+        "repository",
+        "workspace",
+        "project",
+        "architecture",
+        "layer",
+        "layers",
+        "structure",
+        "layout",
+        "overview",
+        "역할",
+        "구조",
+        "구성",
+        "아키텍처",
+        "레이어",
+        "뼈대",
+        "개요",
+    )
+    return any(term in lowered or term in compact for term in scope_terms)
+
+
+def _broad_workspace_path(path: str) -> bool:
+    normalized = path.strip().strip("`").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if not normalized or normalized.startswith("../"):
+        return False
+    if normalized in COMMON_WORKSPACE_DIRS:
+        return True
+    first = normalized.split("/", 1)[0]
+    name = normalized.rsplit("/", 1)[-1]
+    return first in COMMON_WORKSPACE_DIRS and "." not in name

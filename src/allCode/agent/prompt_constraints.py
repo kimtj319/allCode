@@ -8,7 +8,9 @@ from pydantic import Field
 
 from allCode.agent.prompt_constraint_detection import (
     answer_only_artifact_hint,
+    broad_source_analysis_hint,
     concrete_workspace_paths,
+    dependency_constraint_hint,
     direct_mutation_command,
     directory_output_hint,
     external_knowledge_suppressed,
@@ -57,6 +59,7 @@ class PromptConstraints(CoreModel):
     argumentation_followup_hint: bool = False
     format_conversion_followup_hint: bool = False
     workspace_evidence_requested: bool = False
+    broad_source_analysis_requested: bool = False
     directory_output_hint: bool = False
     multi_artifact_hint: bool = False
     project_output_hint: bool = False
@@ -128,7 +131,8 @@ class PromptConstraintExtractor:
         multi_artifact = has_any(self.MULTI_ARTIFACT_TERMS, compact_match=True)
         project_output = directory_output and has_any(self.PROJECT_OUTPUT_TERMS, compact_match=True)
         code_artifact = has_any(self.CODE_ARTIFACT_TERMS, compact_match=True)
-        stdlib_only = has_any(self.STDLIB_ONLY_TERMS, compact_match=True)
+        stdlib_only = has_any(self.STDLIB_ONLY_TERMS, compact_match=True) or dependency_constraint_hint(prompt)
+        append_marker_if_matched(matched, "dependency_constraint_hint", condition=stdlib_only)
         answer_artifact = bool(read_only_requested and code_artifact and answer_only_artifact_hint(prompt))
         if answer_artifact:
             paths = concrete_workspace_paths(paths)
@@ -145,6 +149,11 @@ class PromptConstraintExtractor:
         workspace_evidence = has_any(self.WORKSPACE_EVIDENCE_TERMS, compact_match=True)
         if answer_artifact and not paths:
             workspace_evidence = False
+        broad_source_analysis = broad_source_analysis_hint(
+            paths,
+            prompt,
+            workspace_evidence=workspace_evidence,
+        )
 
         return PromptConstraints(
             read_only_requested=read_only_requested,
@@ -159,6 +168,7 @@ class PromptConstraintExtractor:
             argumentation_followup_hint=argumentation_followup,
             format_conversion_followup_hint=format_followup,
             workspace_evidence_requested=workspace_evidence,
+            broad_source_analysis_requested=broad_source_analysis,
             directory_output_hint=False if read_only_requested else directory_output,
             multi_artifact_hint=False if read_only_requested else multi_artifact,
             project_output_hint=False if read_only_requested else project_output,

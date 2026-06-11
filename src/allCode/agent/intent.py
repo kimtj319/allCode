@@ -15,7 +15,12 @@ from allCode.agent.prompt_safety import (
     read_only_pattern_matched,
     scoped_output_mutation_allowed,
 )
-from allCode.agent.prompt_constraint_detection import answer_only_artifact_hint, external_knowledge_suppressed
+from allCode.agent.prompt_constraint_detection import (
+    answer_only_artifact_hint,
+    broad_source_analysis_hint,
+    external_knowledge_suppressed,
+    path_hints,
+)
 from allCode.agent import intent_terms
 
 
@@ -35,6 +40,7 @@ class IntentSignals(CoreModel):
     project_output_hint: bool = False
     unstable_knowledge_hint: bool = False
     answer_artifact_requested: bool = False
+    broad_source_analysis_requested: bool = False
     followup_requested: bool = False
     target_hint: str | None = None
     matched_terms: list[str] = Field(default_factory=list)
@@ -72,6 +78,7 @@ class IntentExtractor:
             return bool(found)
 
         target_hint = self._extract_target_hint(prompt)
+        broad_hint_paths = [path for path in path_hints(prompt) if path.strip().strip("`").replace("\\", "/") != "test"]
         modify_term_found = has_any(self.MODIFY_TERMS)
         directory_output = self._directory_output_hint(target_hint, prompt=prompt, modify_term_found=modify_term_found)
         multi_artifact = has_any(self.MULTI_ARTIFACT_TERMS)
@@ -100,6 +107,21 @@ class IntentExtractor:
         if read_only_requested:
             explicit_change_request = False
         validation_requested = self._has_validation_request(prompt, lowered)
+        inspect_term_seen = any(term in lowered for term in intent_terms.INSPECT_TERMS)
+        workspace_evidence = bool(
+            target_hint
+            or broad_hint_paths
+            or inspect_term_seen
+            or conceptual_question
+        )
+        broad_source_analysis = (
+            not explicit_change_request
+            and broad_source_analysis_hint(
+                broad_hint_paths or ([target_hint] if target_hint else []),
+                prompt,
+                workspace_evidence=workspace_evidence,
+            )
+        )
         return IntentSignals(
             read_only_requested=read_only_requested,
             no_shell_requested=has_any(self.NO_SHELL_TERMS),
@@ -120,6 +142,7 @@ class IntentExtractor:
             project_output_hint=False if read_only_requested else project_output,
             unstable_knowledge_hint=unstable_knowledge and not external_suppressed,
             answer_artifact_requested=answer_artifact,
+            broad_source_analysis_requested=broad_source_analysis,
             followup_requested=has_any(FOLLOWUP_TERMS),
             target_hint=target_hint,
             matched_terms=matched,

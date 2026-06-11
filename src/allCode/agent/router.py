@@ -95,7 +95,7 @@ class RuleBasedRouter:
                     flags,
                 )
             return self._decision(
-                "inspect" if signals.inspect_action or signals.target_hint else "answer",
+                "inspect" if signals.inspect_action or signals.target_hint or signals.broad_source_analysis_requested else "answer",
                 0.90,
                 "Read-only request detected.",
                 signals,
@@ -103,7 +103,7 @@ class RuleBasedRouter:
             )
         if signals.conceptual_question and not signals.explicit_change_request and not signals.operate_action:
             return self._decision(
-                "inspect" if signals.target_hint else "answer",
+                "inspect" if signals.target_hint or signals.broad_source_analysis_requested else "answer",
                 0.86,
                 "Conceptual or explanatory question detected without an explicit change command.",
                 signals,
@@ -201,4 +201,6 @@ class RuleBasedRouter:
             flags.add("explicit_change_request")
         if signals.answer_artifact_requested:
             flags.add("answer_artifact")
+        if signals.broad_source_analysis_requested:
+            flags.add("broad_source_analysis")
         return flags

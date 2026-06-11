@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import re
+import sys
 from dataclasses import dataclass
 from typing import Iterable
 
+from allCode.agent.prompt_constraint_terms import COMMON_WORKSPACE_DIRS
 from allCode.core.models import Message
 
 THIRD_PARTY_TERMS = (
@@ -30,8 +33,45 @@ INSTALL_PATTERNS = (
     re.compile(r"(?<![A-Za-z0-9_.-])uv\s+add(?![A-Za-z0-9_.-])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_.-])poetry\s+add(?![A-Za-z0-9_.-])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_.-])pipenv\s+install(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])npm\s+install(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])yarn\s+add(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])pnpm\s+add(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])bun\s+add(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])go\s+get(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])cargo\s+add(?![A-Za-z0-9_.-])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_.-])requirements\.txt(?![A-Za-z0-9_.-])", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9_.-])pyproject\.toml(?![A-Za-z0-9_.-]).{0,80}(?<![A-Za-z0-9_.-])dependencies(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])package\.json(?![A-Za-z0-9_.-]).{0,80}(?<![A-Za-z0-9_.-])dependencies(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])go\.mod(?![A-Za-z0-9_.-]).{0,80}(?<![A-Za-z0-9_.-])require(?![A-Za-z0-9_.-])", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9_.-])Cargo\.toml(?![A-Za-z0-9_.-]).{0,80}(?<![A-Za-z0-9_.-])dependencies(?![A-Za-z0-9_.-])", re.IGNORECASE),
+)
+FENCED_BLOCK_PATTERN = re.compile(r"```(?P<lang>[A-Za-z0-9_+.-]*)[^\n]*\n(?P<code>.*?)```", re.DOTALL)
+ANSWER_PATH_PATTERN = re.compile(r"`?(?P<path>(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.py)`?")
+PYTHON_STDLIB_MODULES = frozenset(
+    set(getattr(sys, "stdlib_module_names", ()))
+    | set(sys.builtin_module_names)
+    | {
+        "__future__",
+        "argparse",
+        "asyncio",
+        "collections",
+        "dataclasses",
+        "datetime",
+        "functools",
+        "html",
+        "http",
+        "importlib",
+        "json",
+        "pathlib",
+        "re",
+        "sqlite3",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "typing",
+        "unittest",
+        "urllib",
+    }
 )
 
 ENGLISH_PREFIX_NEGATION_MARKERS = (
@@ -54,6 +94,8 @@ TERM_SUFFIX_REJECTION_MARKERS = (
     "대신",
     "없이",
     "불필요",
+    "실행하지",
+    "하지 말",
 )
 
 
@@ -75,7 +117,7 @@ def dependency_answer_violation(*, answer: str, routing) -> DependencyAnswerViol
         return None
     for line in _meaningful_lines(answer):
         lowered = line.lower()
-        if any(pattern.search(line) for pattern in INSTALL_PATTERNS):
+        if _line_has_positive_install_command(line):
             return DependencyAnswerViolation("dependency_constraint_install_suggestion", _excerpt(line))
         for term in THIRD_PARTY_TERMS:
             match = _ascii_token_match(lowered, term)
@@ -84,6 +126,12 @@ def dependency_answer_violation(*, answer: str, routing) -> DependencyAnswerViol
             if _term_is_rejected_or_negated(lowered, start=match.start(), end=match.end()):
                 continue
             return DependencyAnswerViolation("dependency_constraint_third_party_package", _excerpt(line))
+    local_roots = _local_package_roots(answer)
+    for module in _python_import_violations(answer, local_roots=local_roots):
+        return DependencyAnswerViolation(
+            "dependency_constraint_non_stdlib_import",
+            f"non-stdlib import: {module}",
+        )
     return None
 
 
@@ -196,13 +244,118 @@ def _strip_dependency_violation_lines(answer: str) -> str:
 
 def _line_has_dependency_violation(line: str) -> bool:
     lowered = line.lower()
-    if any(pattern.search(line) for pattern in INSTALL_PATTERNS):
+    if _line_has_positive_install_command(line):
         return True
     for term in THIRD_PARTY_TERMS:
         match = _ascii_token_match(lowered, term)
         if match is not None and not _term_is_rejected_or_negated(lowered, start=match.start(), end=match.end()):
             return True
     return False
+
+
+def _line_has_positive_install_command(line: str) -> bool:
+    lowered = line.lower()
+    for pattern in INSTALL_PATTERNS:
+        match = pattern.search(line)
+        if match is None:
+            continue
+        if _term_is_rejected_or_negated(lowered, start=match.start(), end=match.end()):
+            continue
+        return True
+    return False
+
+
+def _python_import_violations(answer: str, *, local_roots: set[str]) -> Iterable[str]:
+    for code in _extract_python_code_blocks(answer):
+        for module in _imported_modules(code):
+            top_level = module.split(".", 1)[0]
+            if _allowed_python_import(top_level, local_roots=local_roots):
+                continue
+            yield top_level
+
+
+def _extract_python_code_blocks(answer: str) -> Iterable[str]:
+    found = False
+    for match in FENCED_BLOCK_PATTERN.finditer(str(answer or "")):
+        lang = match.group("lang").strip().lower()
+        code = match.group("code")
+        if lang in {"", "python", "py", "python3"} and _looks_like_python_import_block(code):
+            found = True
+            yield code
+    if not found:
+        import_lines = [
+            line
+            for line in str(answer or "").splitlines()
+            if re.match(r"\s*(?:from\s+[A-Za-z_][A-Za-z0-9_.]*\s+import|import\s+[A-Za-z_][A-Za-z0-9_.]*)", line)
+        ]
+        if import_lines:
+            yield "\n".join(import_lines)
+
+
+def _looks_like_python_import_block(code: str) -> bool:
+    return bool(re.search(r"^\s*(?:from\s+[A-Za-z_][A-Za-z0-9_.]*\s+import|import\s+[A-Za-z_][A-Za-z0-9_.]*)", code, re.MULTILINE))
+
+
+def _imported_modules(code: str) -> Iterable[str]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names if alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                continue
+            if node.module:
+                modules.append(node.module)
+        elif isinstance(node, ast.Call):
+            dynamic = _dynamic_import_module(node)
+            if dynamic:
+                modules.append(dynamic)
+    return modules
+
+
+def _dynamic_import_module(node: ast.Call) -> str:
+    function = node.func
+    is_importlib_call = (
+        isinstance(function, ast.Attribute)
+        and function.attr == "import_module"
+        and isinstance(function.value, ast.Name)
+        and function.value.id == "importlib"
+    )
+    is_builtin_import = isinstance(function, ast.Name) and function.id == "__import__"
+    if not (is_importlib_call or is_builtin_import):
+        return ""
+    if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
+        return ""
+    return node.args[0].value
+
+
+def _allowed_python_import(top_level: str, *, local_roots: set[str]) -> bool:
+    normalized = top_level.strip().replace("-", "_")
+    if not normalized:
+        return True
+    if normalized in PYTHON_STDLIB_MODULES:
+        return True
+    return normalized in local_roots
+
+
+def _local_package_roots(answer: str) -> set[str]:
+    roots: set[str] = set()
+    workspace_dirs = {item.replace("\\", "/") for item in COMMON_WORKSPACE_DIRS}
+    for match in ANSWER_PATH_PATTERN.finditer(str(answer or "")):
+        path = match.group("path").strip().strip("`").replace("\\", "/")
+        parts = [part for part in path.split("/") if part]
+        if not parts:
+            continue
+        root = parts[0]
+        if root in workspace_dirs and len(parts) > 1:
+            root = parts[1]
+        if root:
+            roots.add(root.replace("-", "_"))
+    return roots
 
 
 def _term_is_rejected_or_negated(lowered_line: str, *, start: int, end: int) -> bool:

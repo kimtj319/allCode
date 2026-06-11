@@ -94,6 +94,7 @@ def source_answer_violation(
     package_role_violation = missing_priority_package_roles(
         answer=answer,
         messages=messages,
+        routing=routing,
         user_prompt=user_prompt,
     )
     if package_role_violation is not None:
