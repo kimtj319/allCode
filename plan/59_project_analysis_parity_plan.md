@@ -226,6 +226,34 @@ python -m pytest
 codex/agy의 계층 아키텍처 요약에 내용·구조상 근접. 남은 미세 갭은 "모델 산문 vs
 구조적 fallback" 문체 차이.
 
+## 구현 결과 (2026-06-13, 4차 — 돌파구)
+
+codex가 fallback 출력을 30%로 평가(사실 덤프, 목적·흐름·핵심파일 부재). 재인식:
+탐색을 고치니 모델이 풍부한 답변을 쓰는데 `source_answer_guard`의 per-line 앵커/
+경로/심볼 검사가 이를 거부해 저품질 fallback으로 강등 → **guard가 좋은 분석을
+막고 있었음**. 참조(codex)조차 telemetry를 생략하므로 "전 패키지 강제"는 과도.
+
+수정(`source_answer_guard.py`, `source_package_role_guard.py`):
+
+- 광역 아키텍처 분석(`broad_source_analysis` flag 또는 관찰 패키지 역할 ≥4)에서는
+  per-line 검사(`_missing_anchors`, `_unobserved_path_claim`,
+  `_unobserved_dotted_symbol_claim`, `mismatched_anchor`)를 건너뛴다. 패키지/흐름
+  수준 서술이 목적이므로 라인 정밀 매칭은 부적절. 좁은 소스 질문은 strict 유지.
+- 광역 grounding은 raw JSON 금지 + 패키지 커버리지(소수 누락 tolerance
+  `max(2, n//4)`)로 한정.
+- path-claim은 관찰 경로 suffix·관찰 패키지 하위 파일 허용(이전 단계).
+- 관련 guard 테스트 3개를 새 정책(소수 누락 허용, 대부분 무시는 위반)에 맞게 갱신.
+  전체 `python -m pytest` → 775 passed.
+
+검증(실모델 v8) — **돌파구**:
+
+- 재시도 0회로 모델 답변이 guard 통과(더 이상 fallback 아님).
+- 출력이 진짜 분석 산문: 범위 → 8개 패키지 역할 표(라인 앵커) → 실제 6단계 실행
+  흐름(CLI→프롬프트→라운드[압축/게이트/모델호출/파싱/이벤트/정리]→생성→UI) →
+  모듈 의존 그래프 → 대표 파일 근거 → 정직한 한계.
+- codex/agy의 계층 아키텍처 요약에 내용·구조상 견줄 만한 수준으로 도약(이전 30%
+  fallback 대비).
+
 ## 남은 리스크
 
 - source-analysis 서브시스템(다수 파일)이 크다. 합성 정리 시 기존 evidence/guard

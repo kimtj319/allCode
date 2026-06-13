@@ -39,7 +39,12 @@ def missing_priority_package_roles(
         return None
     priority_entries = _priority_role_entries(role_entries)
     missing = [entry.path for entry in priority_entries if not _role_entry_supported(answer, entry)]
-    if not missing:
+    # Require broad coverage, not an exhaustive enumeration: a strong architecture
+    # summary may legitimately omit a couple of minor packages (e.g. config,
+    # telemetry) — reference agents do too. Only fail when the answer covers fewer
+    # than ~three quarters of the observed packages.
+    tolerance = max(2, len(priority_entries) // 4)
+    if len(missing) <= tolerance:
         return None
     return PackageRoleCoverageViolation(
         reason="source_answer_missing_priority_package_roles",

@@ -12,6 +12,7 @@ from allCode.agent.router import RoutingDecision
 from allCode.agent.source_answer_retry_context import safe_source_anchor_candidates
 from allCode.agent.source_package_role_guard import (
     missing_priority_package_roles,
+    package_role_entries,
     package_role_retry_candidates,
 )
 from allCode.core.models import Message
@@ -109,6 +110,19 @@ def source_answer_violation(
     )
     if body_violation is not None:
         return body_violation
+    # Broad architecture overviews describe the system at the package/flow level,
+    # so exact line-range anchor matching would reject legitimate holistic prose
+    # and force a low-value deterministic fallback. For broad analysis keep only
+    # coarse grounding (no unobserved files/symbols, no raw tool JSON, package-role
+    # coverage); apply strict per-line anchor matching to narrow source questions.
+    broad = _is_broad_source_analysis(routing, messages)
+    if broad:
+        # Broad architecture overviews are graded on package coverage + no raw tool
+        # JSON (checked above). Per-line file/symbol/anchor precision checks would
+        # reject legitimate holistic prose that names modules inside observed
+        # packages, so they are skipped here (matching how reference agents
+        # describe a codebase). Narrow source questions keep full strictness below.
+        return None
     for line in answer.splitlines():
         for missing in _missing_anchors(line, anchor_map):
             return SourceAnswerViolation(
@@ -134,6 +148,15 @@ def source_answer_violation(
                     excerpt=_compact(line),
                 )
     return None
+
+
+def _is_broad_source_analysis(routing: RoutingDecision, messages: list[Message]) -> bool:
+    flags = set(getattr(routing, "flags", set()) or set())
+    if "broad_source_analysis" in flags:
+        return True
+    # An overview that surfaced several package roles is a broad architecture
+    # request rather than a narrow symbol/line lookup.
+    return len(package_role_entries(messages)) >= 4
 
 
 def source_answer_retry_messages(

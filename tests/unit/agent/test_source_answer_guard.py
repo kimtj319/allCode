@@ -168,14 +168,13 @@ def test_source_answer_guard_allows_matching_symbol_anchor() -> None:
 
 
 def test_source_answer_guard_requires_priority_package_roles_for_broad_source_request() -> None:
+    # Covering only 2 of 6 observed packages ignores the bulk of the architecture
+    # and still fails (minor omissions are tolerated; wholesale omission is not).
     answer = "\n".join(
         [
             "src 구조는 다음과 같습니다.",
             "- `src/app/agent`: agent orchestration",
-            "- `src/app/llm`: model adapter",
-            "- `src/app/memory`: session memory",
             "- `src/app/tools`: tool execution",
-            "- `src/app/tui`: terminal UI",
         ]
     )
 
@@ -192,8 +191,9 @@ def test_source_answer_guard_requires_priority_package_roles_for_broad_source_re
 
 
 def test_source_answer_guard_uses_broad_route_flag_for_package_roles() -> None:
+    # Covers only 1 of 4 observed packages -> exceeds the omission tolerance.
     violation = source_answer_violation(
-        answer="agent와 tools 중심입니다.",
+        answer="agent 중심입니다.",
         routing=broad_inspect_routing(),
         messages=[narrow_package_role_message()],
         user_prompt="프로젝트 레이어를 알려줘",
@@ -237,7 +237,10 @@ def test_source_answer_guard_rejects_observed_package_role_in_limitation_section
     assert "src/app/generation" in violation.excerpt
 
 
-def test_source_answer_guard_prioritizes_concrete_layers_over_root_roles() -> None:
+def test_source_answer_guard_tolerates_minor_package_omissions() -> None:
+    # Covers 8 of 10 concrete packages, omitting only minor ones (config,
+    # telemetry). Reference agents do the same, so this must NOT be forced into a
+    # deterministic fallback.
     answer = "\n".join(
         [
             "`src/app/agent`: agent orchestration",
@@ -258,8 +261,7 @@ def test_source_answer_guard_prioritizes_concrete_layers_over_root_roles() -> No
         user_prompt="프로젝트 레이어를 알려줘",
     )
 
-    assert violation is not None
-    assert "src/app/config" in violation.excerpt
+    assert violation is None
 
 
 def test_source_answer_retry_message_lists_priority_package_roles() -> None:
