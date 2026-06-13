@@ -68,6 +68,7 @@ class ModelProjectPlanner:
                     "Use relative paths only, never absolute paths or '..'. "
                     "Make files complete and runnable. Do not include markdown fences. "
                     "Validation commands must be test/build commands only. "
+                    "When the planning context lists required exact filenames, use those paths verbatim instead of generic names like main.py or test_main.py. "
                     "You must plan specific files and target constraints to fully satisfy all prompt-derived artifact obligations listed in the planning context. "
                     "When tests are planned, they must import or call the public classes, functions, methods, or command entrypoints listed in api_obligations and assert expected behavior. "
                     "Do not generate simple hello-world smoke tests for a featureful request. "
@@ -96,6 +97,10 @@ def _planning_context(prompt: str, *, target_hint: str | None, task_digest: str 
     lines = ["Planning context:"]
     if target_hint:
         lines.append(f"- Target root: {target_hint}")
+    required_names = _explicit_required_names(prompt)
+    if required_names:
+        lines.append("- Required exact filenames (use verbatim, do not rename to main.py/test_main.py):")
+        lines.extend(f"  - {item}" for item in required_names[:8])
     obligations = _artifact_obligations(prompt)
     if obligations:
         lines.append("- Prompt-derived artifact obligations:")
@@ -108,6 +113,15 @@ def _planning_context(prompt: str, *, target_hint: str | None, task_digest: str 
         lines.append("- Compact task state:")
         lines.append(_indent(_compact(task_digest, limit=1800)))
     return "\n".join(lines)
+
+
+def _explicit_required_names(prompt: str) -> list[str]:
+    """Filenames the prompt names verbatim (e.g. breaker.py, test_breaker.py)."""
+    names: list[str] = []
+    for raw in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*\.py)\b", prompt):
+        if raw not in names:
+            names.append(raw)
+    return names
 
 
 def _artifact_obligations(prompt: str) -> list[str]:

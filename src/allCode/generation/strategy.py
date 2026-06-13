@@ -72,6 +72,40 @@ def safe_name(value: str) -> str:
     return cleaned
 
 
+# Python filenames the scaffold owns itself and must never be treated as the
+# user's requested implementation module.
+_RESERVED_PY_NAMES = {"setup.py", "__init__.py", "__main__.py", "conftest.py", "pyproject.py"}
+
+
+def explicit_module_names(prompt: str) -> tuple[str | None, str | None]:
+    """Extract an explicit implementation and test module name from the prompt.
+
+    A request like "클래스명: CircuitBreaker (파일명: breaker.py)" and
+    "테스트 파일(test_breaker.py)" should produce ``breaker.py`` / ``test_breaker.py``
+    instead of the generic ``main.py`` / ``test_main.py`` scaffold names. Returns
+    ``(module, test_module)`` stems (without ``.py``), each ``None`` when the
+    prompt does not name one. The scaffold falls back to ``main`` / ``test_main``.
+    """
+    impl: str | None = None
+    test: str | None = None
+    for raw in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\.py\b", prompt):
+        filename = f"{raw}.py"
+        if filename in _RESERVED_PY_NAMES:
+            continue
+        stem = raw.lower()
+        if stem.startswith("test_") or stem.endswith("_test"):
+            if test is None:
+                test = safe_name(stem)
+            continue
+        if impl is None:
+            impl = safe_name(stem)
+    # If only a test file was named (e.g. test_breaker.py), derive the module
+    # from it so imports stay consistent.
+    if impl is None and test is not None and test.startswith("test_"):
+        impl = test[len("test_") :] or None
+    return impl, test
+
+
 def safe_target_root(value: str) -> str:
     normalized = value.strip().strip("/").replace("\\", "/")
     while normalized.startswith("./"):

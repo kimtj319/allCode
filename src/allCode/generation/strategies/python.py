@@ -5,7 +5,14 @@ from __future__ import annotations
 from allCode.agent.task_plan import ApiObligation, PlannedFile, ProjectPlan, TaskItem
 from pathlib import PurePosixPath
 
-from allCode.generation.strategy import GenerationRequest, infer_target_root, safe_name, safe_target_root, validation_command
+from allCode.generation.strategy import (
+    GenerationRequest,
+    explicit_module_names,
+    infer_target_root,
+    safe_name,
+    safe_target_root,
+    validation_command,
+)
 
 
 class PythonProjectStrategy:
@@ -15,10 +22,15 @@ class PythonProjectStrategy:
     def create_plan(self, request: GenerationRequest) -> ProjectPlan:
         target = safe_target_root(request.target_root or infer_target_root(request.prompt))
         package = safe_name(PurePosixPath(target).name)
+        # Honor an explicit module/test filename from the prompt (e.g. "파일명:
+        # breaker.py") instead of the generic main.py/test_main.py scaffold names.
+        module, explicit_test = explicit_module_names(request.prompt)
+        module = module or "main"
+        test_module = explicit_test or f"test_{module}"
         featureful_cli = _requests_featureful_cli(request.prompt)
         main_content = self._cli_main_implementation() if featureful_cli else self._main_implementation()
-        readme_content = self._cli_readme(target, package) if featureful_cli else self._readme(target, package)
-        test_content = self._cli_tests(package) if featureful_cli else self._tests(package)
+        readme_content = self._cli_readme(target, package, module) if featureful_cli else self._readme(target, package, module)
+        test_content = self._cli_tests(package, module) if featureful_cli else self._tests(package, module)
         return ProjectPlan(
             target_root=target,
             language=self.language,
@@ -26,15 +38,15 @@ class PythonProjectStrategy:
             files=[
                 PlannedFile(path="pyproject.toml", purpose="package metadata", stage="skeleton", content=self._pyproject(target)),
                 PlannedFile(path=f"src/{package}/__init__.py", purpose="package marker", stage="skeleton", content='"""Generated package."""\n'),
-                PlannedFile(path=f"src/{package}/main.py", purpose="public application API", stage="skeleton", content=self._main_skeleton()),
-                PlannedFile(path=f"src/{package}/main.py", purpose="public application API", stage="implementation", content=main_content),
+                PlannedFile(path=f"src/{package}/{module}.py", purpose="public application API", stage="skeleton", content=self._main_skeleton()),
+                PlannedFile(path=f"src/{package}/{module}.py", purpose="public application API", stage="implementation", content=main_content),
                 PlannedFile(path="README.md", purpose="project usage documentation", stage="implementation", content=readme_content),
-                PlannedFile(path="tests/test_main.py", purpose="pytest coverage for public API", stage="tests", content=test_content),
+                PlannedFile(path=f"tests/{test_module}.py", purpose="pytest coverage for public API", stage="tests", content=test_content),
             ],
             validation_commands=[
                 validation_command("python -m pytest", cwd=target, environment={"PYTHONPATH": "src"}),
             ],
-            api_obligations=self._cli_api_obligations(package) if featureful_cli else [],
+            api_obligations=self._cli_api_obligations(package, module) if featureful_cli else [],
             tasks=[
                 TaskItem(description="Create package skeleton and project metadata.", step="skeleton"),
                 TaskItem(description="Implement the public application API.", step="implementation"),
@@ -45,14 +57,15 @@ class PythonProjectStrategy:
 
     def repair_files(self, plan: ProjectPlan, failure_log: str) -> dict[str, str]:
         package = safe_name(PurePosixPath(plan.target_root).name)
+        module, test_module = _plan_module_names(plan, package)
         if any(obligation.symbol == "TaskStore" for obligation in plan.api_obligations):
-            files = {f"src/{package}/main.py": self._cli_main_implementation()}
+            files = {f"src/{package}/{module}.py": self._cli_main_implementation()}
             if "test coverage " in failure_log:
-                files["tests/test_main.py"] = self._cli_tests(package)
+                files[f"tests/{test_module}.py"] = self._cli_tests(package, module)
             if "documentation references " in failure_log:
-                files["README.md"] = self._cli_readme(plan.target_root, package)
+                files["README.md"] = self._cli_readme(plan.target_root, package, module)
             return files
-        return {f"src/{package}/main.py": self._main_implementation()}
+        return {f"src/{package}/{module}.py": self._main_implementation()}
 
     def _pyproject(self, name: str) -> str:
         distribution = safe_name(PurePosixPath(name).name).replace("_", "-")
@@ -103,7 +116,7 @@ class PythonProjectStrategy:
             ]
         )
 
-    def _readme(self, target: str, package: str) -> str:
+    def _readme(self, target: str, package: str, module: str = "main") -> str:
         return "\n".join(
             [
                 f"# {PurePosixPath(target).name}",
@@ -112,7 +125,7 @@ class PythonProjectStrategy:
                 "",
                 "## Usage",
                 "",
-                f"Run the package module with `python -m {package}.main` or import `greet` from `{package}.main`.",
+                f"Run the package module with `python -m {package}.{module}` or import `greet` from `{package}.{module}`.",
                 "",
                 "## Validation",
                 "",
@@ -123,10 +136,10 @@ class PythonProjectStrategy:
             ]
         )
 
-    def _tests(self, package: str) -> str:
+    def _tests(self, package: str, module: str = "main") -> str:
         return "\n".join(
             [
-                f"from {package}.main import greet",
+                f"from {package}.{module} import greet",
                 "",
                 "",
                 "def test_greet_uses_name() -> None:",
@@ -139,8 +152,8 @@ class PythonProjectStrategy:
             ]
         )
 
-    def _cli_api_obligations(self, package: str) -> list[ApiObligation]:
-        path = f"src/{package}/main.py"
+    def _cli_api_obligations(self, package: str, module: str = "main") -> list[ApiObligation]:
+        path = f"src/{package}/{module}.py"
         symbols = (
             "retry",
             "TaskStore",
@@ -306,10 +319,10 @@ if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
 '''
 
-    def _cli_tests(self, package: str) -> str:
+    def _cli_tests(self, package: str, module: str = "main") -> str:
         return f'''import pytest
 
-from {package}.main import CommandRegistry, TaskStore, retry
+from {package}.{module} import CommandRegistry, TaskStore, retry
 
 
 def test_retry_retries_once() -> None:
@@ -353,7 +366,7 @@ def test_command_registry_dispatches_registered_handler(tmp_path) -> None:
     assert store.list()[0]["title"] == "from registry"
 '''
 
-    def _cli_readme(self, target: str, package: str) -> str:
+    def _cli_readme(self, target: str, package: str, module: str = "main") -> str:
         return "\n".join(
             [
                 f"# {PurePosixPath(target).name}",
@@ -369,14 +382,14 @@ def test_command_registry_dispatches_registered_handler(tmp_path) -> None:
                 "├─ src/",
                 f"│  └─ {package}/",
                 "│     ├─ __init__.py",
-                "│     └─ main.py",
+                f"│     └─ {module}.py",
                 "└─ tests/",
-                "   └─ test_main.py",
+                f"   └─ test_{module}.py",
                 "```",
                 "",
                 "## Usage",
                 "",
-                f"Run `python -m {package}.main add \"Write tests\"` from an installed environment.",
+                f"Run `python -m {package}.{module} add \"Write tests\"` from an installed environment.",
                 "",
                 "## Validation",
                 "",
@@ -386,6 +399,28 @@ def test_command_registry_dispatches_registered_handler(tmp_path) -> None:
                 "",
             ]
         )
+
+
+def _plan_module_names(plan: ProjectPlan, package: str) -> tuple[str, str]:
+    """Recover the implementation module and test module stems from a plan.
+
+    repair_files only sees the plan (not the original prompt), so honor whatever
+    filenames the plan already settled on instead of re-hardcoding main.py.
+    """
+    module = "main"
+    test_module = "test_main"
+    src_prefix = f"src/{package}/"
+    for planned_file in plan.files:
+        path = planned_file.path.replace("\\", "/")
+        name = path.rsplit("/", 1)[-1]
+        if not name.endswith(".py"):
+            continue
+        stem = name[: -len(".py")]
+        if path.startswith("tests/") or name.startswith("test_"):
+            test_module = stem
+        elif path.startswith(src_prefix) and stem != "__init__":
+            module = stem
+    return module, test_module
 
 
 def _requests_featureful_cli(prompt: str) -> bool:
