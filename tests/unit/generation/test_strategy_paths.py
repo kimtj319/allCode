@@ -94,3 +94,38 @@ def test_python_strategy_generates_featureful_cli_contract_for_registry_retry_js
     assert "test_task_store_add_list_done_and_export" in files["tests/test_main.py"]
     assert "TaskStore" in files["tests/test_main.py"]
     assert "_storage.py" not in files["README.md"]
+
+
+def test_python_strategy_honors_explicit_module_filename() -> None:
+    plan = PythonProjectStrategy().create_plan(
+        GenerationRequest(
+            prompt=(
+                "상태 기반 서킷 브레이커 모듈을 구현하라. 클래스명: CircuitBreaker "
+                "(파일명: breaker.py). pytest 테스트 파일(test_breaker.py)도 작성하라."
+            ),
+            workspace_root=".",
+            target_root="./output/circuit_breaker",
+        )
+    )
+    paths = [file.path for file in plan.files]
+    assert "src/circuit_breaker/breaker.py" in paths
+    assert "tests/test_breaker.py" in paths
+    # generic scaffold names must not leak when explicit names were given
+    assert "src/circuit_breaker/main.py" not in paths
+    assert "tests/test_main.py" not in paths
+    # repair files honor the same module name (no original prompt available there)
+    repaired = PythonProjectStrategy().repair_files(plan, "test coverage ")
+    assert any(path.endswith("breaker.py") for path in repaired)
+
+
+def test_python_strategy_defaults_to_main_without_explicit_filename() -> None:
+    plan = PythonProjectStrategy().create_plan(
+        GenerationRequest(
+            prompt="Build a small python utility library",
+            workspace_root=".",
+            target_root="./output/util_lib",
+        )
+    )
+    paths = [file.path for file in plan.files]
+    assert "src/util_lib/main.py" in paths
+    assert "tests/test_main.py" in paths
