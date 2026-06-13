@@ -29,6 +29,8 @@ def source_analysis_final_answer_instruction(language: ResponseLanguage) -> str:
             "do not reuse a class/header/import anchor as evidence for a different method or behavior. "
             "If the user requested function or method body evidence, prioritize observed `symbol_body_sample` and "
             "`child_body_sample` anchors; if none are supplied, state that limitation instead of inventing body-level claims. "
+            "When body samples exist for central orchestrator/entrypoint files, describe what those functions actually do "
+            "(their key steps, control flow, and contracts) from the body sample, not only which modules they import. "
             "If the user requested a specific length, sentence count, bullet count, or output "
             "format, that user format constraint is higher priority than this section template: do not add headings "
             "or extra sections when they would violate the requested count; compress observed facts, inferred roles, "
@@ -45,6 +47,8 @@ def source_analysis_final_answer_instruction(language: ResponseLanguage) -> str:
         "해당 앵커의 괄호 안 reason/symbol과 정확히 맞는 주장에만 붙이십시오. 클래스 헤더/가져오기 앵커를 다른 메서드나 동작의 근거로 재사용하지 마십시오. "
         "사용자가 함수나 메서드 본문 근거를 요구했다면 관찰된 `symbol_body_sample` 및 `child_body_sample` 앵커를 우선 사용하고, "
         "그런 앵커가 없으면 본문 수준 주장을 만들지 말고 한계로 명시하십시오. "
+        "핵심 오케스트레이터/진입점 파일에 본문 샘플이 있으면, 어떤 모듈을 import하는지에 그치지 말고 그 함수가 실제로 무엇을 하는지"
+        "(핵심 단계·제어 흐름·계약)를 본문 샘플 근거로 서술하십시오. "
         "단, 사용자가 문장 수, 분량, bullet 수, 출력 형식을 지정했다면 그 사용자 형식 제약이 이 섹션 템플릿보다 우선입니다. "
         "요청된 개수를 깨는 제목이나 추가 섹션을 만들지 말고, 관찰 사실/추론 역할/한계를 요청된 형식 안에 정확히 압축하십시오."
     )

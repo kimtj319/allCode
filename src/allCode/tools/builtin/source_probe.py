@@ -13,9 +13,11 @@ from allCode.tools.builtin.file_common import LARGE_FILE_BYTES, content_hash, re
 from allCode.tools.builtin.source_probe_edges import enriched_outgoing_edges
 from allCode.workspace.source_intelligence import SourceFileAnalysis, SourceIntelligenceService, SourceSymbol
 
-MAX_SYMBOL_SPAN_LINES = 24
+MAX_SYMBOL_SPAN_LINES = 32
 MAX_CHILD_SIGNATURES_PER_WIDE_SYMBOL = 4
-MAX_BODY_SAMPLE_LINES = 10
+# Wide-symbol body samples drive behavior-level (not just import-level) analysis,
+# so give the model enough of a key method to describe what it actually does.
+MAX_BODY_SAMPLE_LINES = 18
 
 
 @dataclass(frozen=True)
