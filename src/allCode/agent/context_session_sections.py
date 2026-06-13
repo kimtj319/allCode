@@ -16,17 +16,28 @@ def session_note_sections(
     session_id: str,
     session_notes: dict[str, list[str]],
     assistant_summaries: dict[str, list[str]],
+    recent_prompts: dict[str, list[str]] | None = None,
     document_manifests: list[DocumentManifest],
 ) -> list[ContextSection]:
     notes = session_notes.get(session_id, [])
     assistant = assistant_summaries.get(session_id, [])
+    prompts = (recent_prompts or {}).get(session_id, [])
     documents = document_context_lines(document_manifests)
-    if not notes and not assistant and not documents:
+    if not notes and not assistant and not documents and not prompts:
         return []
     lines = [f"- {note}" for note in notes[-10:]]
-    if assistant:
-        lines.append("Recent assistant answer summaries:")
-        lines.extend(f"- {item}" for item in assistant[-5:])
+    if prompts or assistant:
+        # Interleave recent user turns with the matching answer summaries so the
+        # model sees how the conversation actually flowed (oldest first). This is
+        # what lets follow-ups that reference earlier questions resolve.
+        prompt_tail = prompts[-5:]
+        assistant_tail = assistant[-5:]
+        lines.append("Recent conversation turns (oldest first):")
+        for index in range(max(len(prompt_tail), len(assistant_tail))):
+            if index < len(prompt_tail):
+                lines.append(f"- 사용자(user): {prompt_tail[index]}")
+            if index < len(assistant_tail):
+                lines.append(f"  assistant: {assistant_tail[index]}")
     if documents:
         lines.append("Recent document artifacts:")
         lines.extend(documents)

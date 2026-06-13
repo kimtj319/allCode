@@ -59,6 +59,7 @@ class ContextBuilder:
         self.session_state = session_state or AgentSessionState()
         self.max_active_file_bytes = max_active_file_bytes
         self._session_notes: dict[str, list[str]] = {}
+        self._recent_prompts: dict[str, list[str]] = {}
         self._assistant_summaries: dict[str, list[str]] = {}
         self._project_manifests: list[ProjectManifest] = []
         self._document_manifests: list[DocumentManifest] = []
@@ -138,6 +139,20 @@ class ContextBuilder:
         if note not in notes:
             notes.append(note)
 
+    def remember_user_prompt(self, session_id: str, prompt: str) -> None:
+        # Keep a compact record of recent user turns so the next turn's context
+        # carries the actual back-and-forth (not just answer summaries). This is
+        # what lets follow-ups like "그 두 번째 방법 더 설명해줘" resolve.
+        compact = " ".join(str(prompt or "").split())
+        if not compact:
+            return
+        prompts = self._recent_prompts.setdefault(session_id, [])
+        snippet = compact[:240]
+        if prompts and prompts[-1] == snippet:
+            return
+        prompts.append(snippet)
+        del prompts[:-8]
+
     def remember_assistant_summary(self, session_id: str, answer: str) -> None:
         summary = self._compact_answer_summary(answer)
         if summary is None:
@@ -154,6 +169,7 @@ class ContextBuilder:
             session_id=turn_input.session_id,
             session_notes=self._session_notes,
             assistant_summaries=self._assistant_summaries,
+            recent_prompts=self._recent_prompts,
             document_manifests=self._document_manifests,
         )
 

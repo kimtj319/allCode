@@ -84,6 +84,7 @@ async def run_agent_turn(
         result = await loop.run_turn(turn_input)
         await _save_persisted_session_state(config, turn_input.session_id, effective_context_builder)
         _remember_result_targets(effective_context_builder, result)
+        effective_context_builder.remember_user_prompt(turn_input.session_id, prompt)
         effective_context_builder.remember_user_note(turn_input.session_id, prompt)
         effective_context_builder.remember_assistant_summary(turn_input.session_id, result.final_answer)
         await _persist_user_note_summary(config, turn_input.session_id, effective_context_builder.extract_user_note(prompt))
