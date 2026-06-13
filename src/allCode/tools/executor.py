@@ -22,7 +22,7 @@ from allCode.core.events import (
 )
 from allCode.core.models import ToolCall, ToolResult
 from allCode.core.result import CompletionEvidence
-from allCode.tools.approval import ApprovalHandler, ApprovalManager, ApprovalRequest
+from allCode.tools.approval import ApprovalDecision, ApprovalHandler, ApprovalManager, ApprovalRequest
 from allCode.tools.approval_preview import ApprovalPreview, build_command_preview, build_diff_preview
 from allCode.tools.base import ToolContext
 from allCode.tools.builtin.file_ops import PatchApplicationError, apply_exact_patches, read_text_if_exists, resolve_under_root
