@@ -25,6 +25,7 @@ ARCHITECTURE_FILE_STEMS = {
     "schema",
     "models",
     "events",
+    "result",
     "indexer",
     "store",
 }

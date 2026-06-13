@@ -26,6 +26,10 @@ from allCode.tools.builtin.source_ranking import representative_reads_with_metad
 from allCode.workspace.indexer import CODE_EXTENSIONS, DEFAULT_IGNORE_DIRS, SOURCE_EXTENSIONS, WorkspaceIndex, WorkspaceIndexer
 from allCode.workspace.roots import WorkspaceRoots
 
+# Runtime entrypoints that anchor the top of the execution spine.
+_ENTRYPOINT_NAMES = {"__main__.py", "main.py", "cli.py", "runtime.py"}
+
+
 class SourceOverviewTool:
     definition = ToolDefinition(
         name="source_overview",
@@ -224,12 +228,26 @@ def _select_balanced_records(records: list, *, limit: int, query: str = "") -> l
             doc_records.append(record)
         else:
             other_records.append(record)
+    # Always surface the runtime entrypoints first. They live in a small top-level
+    # package that the size-capped round-robin can otherwise drop, which leaves the
+    # analysis without the main -> runtime -> loop spine.
+    selected: list = []
+    selected_paths: set[str] = set()
+    for record in code_records:
+        if Path(record.path).name in _ENTRYPOINT_NAMES and record.relative_path not in selected_paths:
+            selected.append(record)
+            selected_paths.add(record.relative_path)
+            if len(selected) >= limit:
+                return selected[:limit]
     # Architecture overviews should center on real code: fill the budget from the
     # largest code packages first, then top up with docs/config/data only if room
     # remains. This keeps generated/scratch trees from diluting the core source.
-    selected = _round_robin_by_group(code_records, limit=limit, query_tokens=query_tokens)
+    remaining = [record for record in code_records if record.relative_path not in selected_paths]
+    for record in _round_robin_by_group(remaining, limit=limit - len(selected), query_tokens=query_tokens):
+        if record.relative_path not in selected_paths:
+            selected.append(record)
+            selected_paths.add(record.relative_path)
     if len(selected) < limit:
-        selected_paths = {record.relative_path for record in selected}
         doc_fill = _round_robin_by_group(doc_records, limit=limit - len(selected), query_tokens=query_tokens)
         for record in [*doc_fill, *other_records]:
             if record.relative_path in selected_paths:

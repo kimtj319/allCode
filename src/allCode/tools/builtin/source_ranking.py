@@ -19,6 +19,10 @@ from allCode.tools.builtin.source_ranking_roles import (
 from allCode.workspace.source_intelligence.graph import build_source_graph, rank_exploration_candidates
 
 ENTRYPOINT_NAMES = {"main.py", "__main__.py", "cli.py", "app.py", "index.ts", "index.js"}
+# Runtime entrypoints that anchor the top of the execution spine and must always
+# be offered as representative reads, even if a per-package score ranks other
+# files higher. (app.py is excluded: it is often an optional/alternate UI.)
+PRIORITY_ENTRYPOINTS = {"main.py", "__main__.py", "cli.py", "runtime.py", "index.ts", "index.js"}
 TEST_MARKERS = ("test", "spec")
 
 
@@ -42,6 +46,14 @@ def representative_reads_with_metadata(
     query_tokens = _specific_query_tokens(entries, query_relevance_tokens(query))
     scores = _representative_scores(entries, focus=focus, query_tokens=query_tokens)
     selected: list[str] = []
+    # Always offer runtime entrypoints first so the analysis can trace the
+    # top-level main -> runtime -> loop spine rather than only per-package leaves.
+    if focus != "tests":
+        for entry in sorted(entries, key=lambda item: item.path):
+            if Path(entry.path).name in PRIORITY_ENTRYPOINTS:
+                _append_unique(selected, entry.path)
+                if len(selected) >= limit:
+                    break
     for group in groups:
         best = _best_for_group(entries, scores=scores, group_path=str(group.get("path") or ""))
         if best:
