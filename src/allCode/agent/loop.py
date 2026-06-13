@@ -41,7 +41,8 @@ from allCode.core.events import (
     TurnResultReady,
     TurnStarted,
 )
-from allCode.core.models import Message, TurnInput, TurnState
+from allCode.core.models import Message, ToolCall, TurnInput, TurnState
+from allCode.tools.base import ToolContext
 from allCode.core.result import CompletionEvidence, TurnResult
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings
@@ -267,6 +268,24 @@ class AgentLoop:
                     routing,
                     force_mutation_action=force_mutation_action,
                 )
+            # Auto-validate after edit: a modify turn may apply a correct change but
+            # never call run_tests itself, leaving validation unmet. Run the detected
+            # validation command once so a legitimate edit completes instead of
+            # failing on missing validation.
+            if (
+                outcome.status != "success"
+                and (getattr(routing, "requires_mutation", False) or getattr(routing, "kind", "") == "modify")
+                and not getattr(routing, "read_only_requested", False)
+                and completion_evidence.has_file_change()
+                and completion_evidence.validation_passed is not True
+            ):
+                await self._auto_validate_after_edit(turn_input, state, routing, completion_evidence)
+                if completion_evidence.validation_passed is True:
+                    outcome = LoopOutcome(
+                        status="success",
+                        answer=outcome.answer if outcome.answer.strip() else "요청한 변경을 적용하고 검증했습니다.",
+                        error=None,
+                    )
             # Graceful degradation: a modify turn that inspected the code but never
             # produced a file change would otherwise return a bare block-reason
             # failure. Replace it with a grounded change plan (clearly not applied)
@@ -411,6 +430,40 @@ class AgentLoop:
                 )
             )
             return result
+
+    async def _auto_validate_after_edit(
+        self,
+        turn_input: TurnInput,
+        state: TurnState,
+        routing,
+        completion_evidence: CompletionEvidence,
+    ) -> None:
+        """Run the detected validation command once when a modify turn applied a
+        file change but never validated. run_tests infers the command and project
+        root, and treats a project with no test suite as satisfied-by-absence."""
+
+        call = ToolCall(
+            id=f"autovalidate-{state.turn_id}",
+            name="run_tests",
+            arguments={"command": "", "cwd": "."},
+        )
+        context = ToolContext(
+            workspace=turn_input.workspace,
+            session_id=turn_input.session_id or state.turn_id,
+            turn_id=state.turn_id,
+            approval_mode="auto",
+        )
+        try:
+            await self._tool_executor.execute(
+                call,
+                context,
+                routing=routing,
+                completion_evidence=completion_evidence,
+                event_bus=self._event_bus,
+            )
+        except Exception:
+            # Auto-validation is best-effort; never let it crash the turn.
+            return
 
     async def _publish(self, event) -> None:
         await self._event_bus.publish(event)

@@ -82,3 +82,20 @@ wise-lloa-max의 edit-emission 한계 자체는 harness로 극복 불가.
   필요(회귀 위험).
 - **edit-without-validation graceful 보고**: 파일 변경은 했으나 검증을 못 한 경우,
   bare 실패 대신 "변경 적용됨(검증 미완)" partial로 명확히 보고.
+
+## 적용 (2026-06-13, 4차): edit 후 자동 검증
+
+- **구현**: `loop.py`에 `run_rounds` 직후·`finalize_completion` 직전 단일 chokepoint
+  추가. 턴이 비성공이고 modify/mutation 경로이며 read-only 요청이 아니고 파일
+  변경 근거가 있는데 validation이 통과하지 않은 경우, harness가 `_auto_validate_after_edit`
+  로 `run_tests`(탐지된 validation_command)를 결정론적으로 1회 실행해 루프를 닫음.
+  no-tests 프로젝트는 3차의 완화(exit 5/"no tests ran" → 만족)와 맞물려 통과.
+  파일 변경이 전혀 없으면 기존 graceful change-plan(미적용 명시)로 분기.
+- **결정론적 검증(통과)**: FakeLLM이 `write_file`로 편집만 하고 `run_tests`를 호출하지
+  않는 시나리오를 no-tests 임시 프로젝트에서 실행 → 결과 `status=success`,
+  `validation_passed=True`, 최종 답변이 정상 완료 보고("검증 명령: python -m pytest -q /
+  검증 결과: 통과"). 즉 모델이 편집 후 검증을 빠뜨려도 harness가 Codex류로 완료.
+- **무회귀**: 전체 775 passed. 단순 명시 편집(`config.max_tasks`)은 이미 success라
+  자동검증 조건(`status != success`)에 걸리지 않아 간섭 없음 확인.
+- 남은 격차는 (a)모델이 edit를 아예 emit하지 않는 회차(graceful change-plan으로 처리)와
+  (b)크로스커팅 변경의 정확성 자체 — 둘 다 하부 모델 역량 의존.
