@@ -12,6 +12,7 @@ from allCode.agent.project_planner import _extract_json_object
 from allCode.agent.task_plan import PlannedFile, ProjectPlan
 from allCode.agent.workflow_diff import search_replace_repairs
 from allCode.core.models import Message, TurnInput
+from allCode.core.path_patterns import looks_like_test_path as _looks_test_path
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings
 
@@ -283,11 +284,6 @@ def _contract_symbol_satisfied(actual_symbols: set[str], expected_symbol: str) -
         return expected_symbol in actual_symbols
     return expected_symbol in actual_symbols or any(symbol.endswith(f".{expected_symbol}") for symbol in actual_symbols)
 
-
-def _looks_test_path(path: str) -> bool:
-    lowered = path.lower().replace("\\", "/")
-    name = Path(lowered).name
-    return lowered.startswith("tests/") or "/tests/" in lowered or name.startswith("test_")
 
 
 def _looks_like_prompt_echo(text: str) -> bool:

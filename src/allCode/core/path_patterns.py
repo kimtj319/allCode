@@ -3,6 +3,15 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+
+
+def looks_like_test_path(path: str) -> bool:
+    """True for paths under a tests/ directory or with a test_ filename prefix."""
+    lowered = path.lower().replace("\\", "/")
+    name = Path(lowered).name
+    return lowered.startswith("tests/") or "/tests/" in lowered or name.startswith("test_")
+
 
 PATH_PATTERN = re.compile(
     r"(?:@)?(?P<path>(?:\.{1,2}/|/)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.@+-]+)+|[A-Za-z0-9_.-]+\.(?:py|js|ts|tsx|java|go|rs|md|toml|yaml|yml|json|txt))"

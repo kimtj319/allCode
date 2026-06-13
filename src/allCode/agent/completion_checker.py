@@ -16,6 +16,7 @@ from allCode.agent.validation_runner import ValidationResult
 from allCode.core.models import CoreModel
 from allCode.core.result import CompletionEvidence
 from allCode.workspace.path_resolver import safe_resolve_under_root
+from allCode.core.path_patterns import looks_like_test_path as _looks_test_path
 
 
 class CompletionCheck(CoreModel):
@@ -394,8 +395,3 @@ def _package_names(plan: ProjectPlan) -> set[str]:
             names.add(parts[0])
     return names
 
-
-def _looks_test_path(path: str) -> bool:
-    lowered = path.lower().replace("\\", "/")
-    name = Path(lowered).name
-    return lowered.startswith("tests/") or "/tests/" in lowered or name.startswith("test_")

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from allCode.agent.task_plan import ProjectPlan
+from allCode.core.path_patterns import looks_like_test_path as _looks_test_path
 
 
 @dataclass
@@ -327,8 +328,3 @@ def _target_label(document_path: str, parser_targets: str) -> str:
         return f"{document_path}, {parser_targets}"
     return document_path
 
-
-def _looks_test_path(path: str) -> bool:
-    lowered = path.lower().replace("\\", "/")
-    name = Path(lowered).name
-    return lowered.startswith("tests/") or "/tests/" in lowered or name.startswith("test_")

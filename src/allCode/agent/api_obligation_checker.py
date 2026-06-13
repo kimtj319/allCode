@@ -9,6 +9,7 @@ from pathlib import Path
 from allCode.agent.task_plan import PlannedFile, ProjectPlan
 from allCode.core.result import CompletionEvidence
 from allCode.workspace.path_resolver import safe_resolve_under_root
+from allCode.core.path_patterns import looks_like_test_path as _looks_test_path
 
 SUPPORTED_SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs"}
 CONTROL_WORDS = {"catch", "class", "constructor", "for", "function", "get", "if", "set", "switch", "while"}
@@ -183,11 +184,6 @@ def _expected_symbol_satisfied(actual_symbols: set[str], expected_symbol: str) -
         return any(symbol.endswith(f".{expected_symbol}") for symbol in actual_symbols)
     return False
 
-
-def _looks_test_path(path: str) -> bool:
-    lowered = path.lower().replace("\\", "/")
-    name = Path(lowered).name
-    return lowered.startswith("tests/") or "/tests/" in lowered or name.startswith("test_")
 
 
 def _extract_file_symbols(content: str, suffix: str) -> set[str]:
