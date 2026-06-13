@@ -63,3 +63,22 @@ wise-lloa-max의 edit-emission 한계 자체는 harness로 극복 불가.
   Codex(workspace-write)는 검증에 막히지 않고 수정 완료. → 테스트 부재 시 modify의
   validation 처리를 완화(변경 자체로 부분 완료 인정 또는 "테스트 없음" 명시)하는
   것이 다음 이터레이션 과제.
+
+## 추가 검증 (2026-06-13, 3차)
+
+- no-tests 검증 완화(`run_tests` exit 5/"no tests ran" → 검증 만족) 적용 후에도,
+  어떤 회차는 모델이 service.py를 올바르게 수정했지만 **run_tests를 한 번도 호출하지
+  않아**(세션 로그상 run_tests 이벤트 0건) validation 미수행으로 "validation did
+  not pass" 실패. 즉 modify 실패가 (a)모델이 edit 미emit 또는 (b)edit 후 검증
+  미실행이라는 **model tool-following 변동성**에서 비롯됨.
+- 적용한 harness 개선 누계(축 ④): 다층 탐색 여유(예산/잠금/도구), no-edit graceful
+  change-plan, no-tests 검증 완화. 모두 무회귀(775 passed).
+
+## 다음 큰 레버 (후속 이터레이션)
+
+- **edit 후 자동 검증**: 모델이 파일 변경을 만든 뒤 run_tests를 호출하지 않으면,
+  harness가 detected validation_command를 결정론적으로 1회 실행해 루프를 닫는다
+  (Codex류 완료). validation 게이트/generation 흐름과의 상호작용을 신중히 설계
+  필요(회귀 위험).
+- **edit-without-validation graceful 보고**: 파일 변경은 했으나 검증을 못 한 경우,
+  bare 실패 대신 "변경 적용됨(검증 미완)" partial로 명확히 보고.
