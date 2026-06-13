@@ -21,6 +21,7 @@ from allCode.agent.round_inspection_budget import (
     inspection_budget_available,
     required_source_probe_count,
 )
+from allCode.agent.inspect_summary import grounded_inspect_summary, has_inspect_summary_evidence
 from allCode.agent.round_repair_state import round_state_snapshot, update_repair_flags
 from allCode.agent.round_response_handler import RoundResponseHandler
 from allCode.agent.round_runtime import RoundRuntime
@@ -33,6 +34,10 @@ from allCode.agent.task_loop_digest import build_task_loop_digest, task_loop_dig
 from allCode.agent.tool_call_processor import ToolCallProcessor
 from allCode.agent.turn_completion import LoopOutcome
 from allCode.agent.validation_controller import ValidationRepairController
+from allCode.agent.web_finalization import (
+    should_request_web_final_answer,
+    web_evidence_fallback_answer,
+)
 from allCode.core.event_bus import EventBus
 from allCode.core.events import ModelStreamStarted, RecoveryStateUpdated
 from allCode.core.models import Message, ToolResult, TurnInput, TurnState
@@ -164,8 +169,22 @@ class RoundRunner:
             if control.should_inject_validation_action:
                 continue
 
+            if should_request_web_final_answer(
+                routing,
+                completion_evidence,
+                runtime.messages,
+                already_requested=runtime.external_final_answer_requested,
+            ):
+                if not runtime.external_final_answer_requested:
+                    runtime.messages = self._prompt_builder.final_answer_request(
+                        runtime.messages,
+                        response_language=response_language(turn_input.user_prompt),
+                    )
+                runtime.external_final_answer_requested = True
+
             suppress_tools_for_final_answer = (
                 runtime.inspect_final_answer_requested
+                or runtime.external_final_answer_requested
                 or (
                     runtime.final_answer_after_change_requested
                     and mutation_complete(routing, completion_evidence)
@@ -281,6 +300,18 @@ class RoundRunner:
                 state.token_usage = parsed.usage
 
             if parsed.status == "ok_tool_calls":
+                if runtime.external_final_answer_requested:
+                    return LoopOutcome(
+                        status="partial",
+                        answer=web_evidence_fallback_answer(
+                            prompt=turn_input.user_prompt,
+                            messages=runtime.messages,
+                            evidence=completion_evidence,
+                            reason="model_requested_tool_after_web_finalization",
+                            response_language=response_language(turn_input.user_prompt),
+                        ),
+                        error="Model requested another web tool after final-answer synthesis was required.",
+                    )
                 if runtime.final_answer_after_change_requested and mutation_complete(routing, completion_evidence):
                     return LoopOutcome(
                         status="success",
@@ -320,6 +351,34 @@ class RoundRunner:
                 return outcome
 
         state.messages = runtime.messages
+        if getattr(routing, "kind", "") == "inspect" and has_inspect_summary_evidence(completion_evidence):
+            return LoopOutcome(
+                status="partial",
+                answer=grounded_inspect_summary(
+                    messages=runtime.messages,
+                    evidence=completion_evidence,
+                    reason="max_rounds_reached",
+                    response_language=response_language(turn_input.user_prompt),
+                ),
+                error="max_rounds_reached",
+            )
+        if should_request_web_final_answer(
+            routing,
+            completion_evidence,
+            runtime.messages,
+            already_requested=runtime.external_final_answer_requested,
+        ):
+            return LoopOutcome(
+                status="partial",
+                answer=web_evidence_fallback_answer(
+                    prompt=turn_input.user_prompt,
+                    messages=runtime.messages,
+                    evidence=completion_evidence,
+                    reason="max_rounds_reached",
+                    response_language=response_language(turn_input.user_prompt),
+                ),
+                error="max_rounds_reached",
+            )
         return LoopOutcome(
             status="partial",
             answer=blocked_summary(self._prompt_builder, runtime.messages, "max_rounds_reached"),

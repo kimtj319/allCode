@@ -49,7 +49,9 @@ class TerminalFooterRenderer:
         if props.mode == "task_running":
             if props.queued_messages:
                 return f"Tab to queue next prompt · {props.queued_messages} queued · /stop to cancel"
-            return "Working · type /stop to cancel"
+            # The activity line already shows "Working (Ns · esc to interrupt)",
+            # so keep the footer for context (model/workspace) like Codex does.
+            return None
         if props.mode == "queue_hint":
             return f"{props.queued_messages} queued · Enter to keep editing · /stop to cancel"
         if props.mode == "shortcut_overlay":

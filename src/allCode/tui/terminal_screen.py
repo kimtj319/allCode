@@ -16,6 +16,38 @@ class TerminalTheme:
     dim_fg: tuple[int, int, int] = (138, 138, 138)
 
 
+class _BodyRowCounter:
+    """Wrap stdout and count newlines so the screen knows where body output ends.
+
+    Body text (assistant answers, prompts, the banner) is written through Rich's
+    Console, which emits a ``\\n`` per visual line. The composer/activity panel is
+    drawn with absolute cursor moves and emits no newlines, so counting newlines on
+    this stream tracks how far body output has flowed without guessing Rich's
+    wrapping.
+    """
+
+    def __init__(self, target: TextIO, screen: "TerminalScreen") -> None:
+        self._target = target
+        self._screen = screen
+
+    def write(self, text: str) -> int:
+        if text:
+            newlines = text.count("\n")
+            if newlines:
+                self._screen._advance_body_rows(newlines)
+        return self._target.write(text)
+
+    def flush(self) -> None:
+        self._target.flush()
+
+    def isatty(self) -> bool:
+        isatty = getattr(self._target, "isatty", None)
+        return bool(isatty and isatty())
+
+    def __getattr__(self, name: str):
+        return getattr(self._target, name)
+
+
 class TerminalScreen:
     """Reserve a small bottom prompt area while body output scrolls above it."""
 
@@ -30,10 +62,15 @@ class TerminalScreen:
         theme: TerminalTheme | None = None,
     ) -> None:
         self.stdin = stdin
-        self.stdout = stdout
         self.theme = theme or TerminalTheme()
         self.interactive = self._is_terminal(stdin) and self._is_terminal(stdout)
         self._entered = False
+        self._applied_height: int | None = None
+        # Next free body row (1-based). Body output flows from here; once it
+        # reaches body_bottom it stays clamped there and content scrolls.
+        self._body_row = 1
+        self._raw_stdout = stdout
+        self.stdout: TextIO = _BodyRowCounter(stdout, self)
 
     @property
     def size(self) -> os.terminal_size:
@@ -51,10 +88,14 @@ class TerminalScreen:
     def body_bottom(self) -> int:
         return max(1, self.height - self.reserved_rows)
 
+    def _advance_body_rows(self, count: int) -> None:
+        self._body_row = min(self._body_row + count, self.body_bottom)
+
     def enter(self) -> None:
         if not self.interactive:
             return
         self._entered = True
+        self._body_row = 1
         self.stdout.write("\x1b[2J\x1b[H")
         self._apply_scroll_region()
         self.stdout.flush()
@@ -71,6 +112,7 @@ class TerminalScreen:
     def clear_all(self) -> None:
         if not self.interactive:
             return
+        self._body_row = 1
         self.stdout.write("\x1b[2J\x1b[H")
         self._apply_scroll_region()
         self.stdout.flush()
@@ -102,7 +144,9 @@ class TerminalScreen:
             self.set_reserved_rows(needed_rows)
             self._clear_prompt_area()
             start = self.height - self.reserved_rows + 1
-            self._write_line(start, self._separator(), style="dim")
+            # Codex separates the live composer from scrollback with blank space
+            # rather than a full-width rule.
+            self._write_line(start, "")
             row = start + 1
 
             for line in frame.activity_lines:
@@ -137,9 +181,26 @@ class TerminalScreen:
             self.stdout.flush()
 
     def set_reserved_rows(self, rows: int) -> None:
-        rows = max(3, min(self.max_reserved_rows, rows, self.height - 1))
+        # Reserved height is monotonic (high-water) within a session: once the
+        # running composer needs N rows we keep them, so the scroll region does
+        # not thrash smaller↔larger every turn (which scrolled committed body
+        # lines and produced visible jumps). It only ever grows.
+        rows = max(self.reserved_rows, min(self.max_reserved_rows, rows, self.height - 1))
         if rows == self.reserved_rows:
             return
+        delta = rows - self.reserved_rows
+        if self._entered and self.interactive and self._applied_height == self.height:
+            # Growing the reserved area shrinks the scroll region from the bottom.
+            # Scroll the committed body up by `delta` first so the rows that are
+            # about to become composer rows are blank instead of clobbering the
+            # last committed body lines. Compute against the OLD body_bottom.
+            # Write through the raw stream: these newlines shift existing content
+            # UP, they are not new body output, so adjust the body row directly.
+            old_body_bottom = max(1, self.height - self.reserved_rows)
+            self._raw_stdout.write(f"\x1b[1;{old_body_bottom}r")
+            self._raw_stdout.write(f"\x1b[{old_body_bottom};1H")
+            self._raw_stdout.write("\n" * delta)
+            self._body_row = max(1, self._body_row - delta)
         self.reserved_rows = rows
         self._apply_scroll_region()
 
@@ -156,8 +217,8 @@ class TerminalScreen:
             return
         self._clear_prompt_area()
         self._apply_scroll_region()
-        self.stdout.write(f"\x1b[{self.body_bottom};1H")
-        self.stdout.write("\n")
+        target_row = min(max(1, self._body_row), self.body_bottom)
+        self.stdout.write(f"\x1b[{target_row};1H")
         self.stdout.flush()
 
     def _clear_prompt_area(self) -> None:
@@ -166,6 +227,7 @@ class TerminalScreen:
             self.stdout.write(f"\x1b[{row};1H\x1b[2K")
 
     def _apply_scroll_region(self) -> None:
+        self._applied_height = self.height
         self.stdout.write(f"\x1b[1;{self.body_bottom}r")
 
     def _separator(self) -> str:

@@ -133,6 +133,8 @@ class CompletionEvidence(CoreModel):
     feature_objectives: list[str] = Field(default_factory=list)
     patch_ambiguous_files: list[str] = Field(default_factory=list)
     policy_denied_tools: list[str] = Field(default_factory=list)
+    web_evidence_queries: list[str] = Field(default_factory=list)
+    web_evidence_count: int = 0
     web_unavailable_queries: list[str] = Field(default_factory=list)
     project_manifest: ProjectManifest | None = None
     document_manifest: DocumentManifest | None = None

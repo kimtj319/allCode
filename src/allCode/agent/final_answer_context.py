@@ -5,7 +5,14 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
+from allCode.agent.final_answer_format import brevity_requested
 from allCode.agent.language import ResponseLanguage, final_answer_request_text
+from allCode.agent.web_formatter import (
+    format_web_tool_observation,
+    metadata_has_web_evidence,
+    metadata_is_web_unavailable,
+    web_citation_guard,
+)
 from allCode.core.models import Message
 
 MAX_SYSTEM_CHARS = 5000
@@ -134,6 +141,9 @@ def _system_content(messages: Sequence[Message], *, response_language: ResponseL
     web_guidance = _web_unavailable_guidance(messages, response_language=response_language)
     if web_guidance:
         guard = f"{guard}\n{web_guidance}"
+    citation_guidance = web_citation_guard(_has_web_evidence(messages), response_language=response_language)
+    if citation_guidance:
+        guard = f"{guard}\n{citation_guidance}"
     format_guidance = _output_format_guidance(messages, response_language=response_language)
     if format_guidance:
         guard = f"{guard}\n{format_guidance}"
@@ -164,7 +174,7 @@ def _tool_observation_summary(
         if count > MAX_TOOL_OBSERVATIONS:
             lines.append("- Additional tool observations were omitted to keep the final synthesis bounded.")
             break
-        entry = _format_tool_message(message)
+        entry = _format_tool_message(message, response_language=response_language)
         if used + len(entry) > MAX_OBSERVATION_CHARS:
             lines.append("- Observation summary was truncated to stay within the final-answer context budget.")
             break
@@ -231,9 +241,11 @@ def _compact_important_tail(text: str, *, reserved_head_chars: int, marker: str)
     return text[:front_budget].rstrip() + tail_marker + text[-back_budget:].strip()
 
 
-def _format_tool_message(message: Message) -> str:
+def _format_tool_message(message: Message, *, response_language: ResponseLanguage) -> str:
     metadata = message.metadata
     tool_name = str(metadata.get("tool_name") or "tool")
+    if metadata_has_web_evidence(metadata) or metadata_is_web_unavailable(metadata):
+        return format_web_tool_observation(metadata, response_language=response_language)
     ok = bool(metadata.get("ok"))
     observation = metadata.get("observation")
     target = ""
@@ -273,6 +285,10 @@ def _web_unavailable_guidance(messages: Sequence[Message], *, response_language:
     )
 
 
+def _has_web_evidence(messages: Sequence[Message]) -> bool:
+    return any(message.role == "tool" and metadata_has_web_evidence(message.metadata) for message in messages)
+
+
 def _output_format_guidance(messages: Sequence[Message], *, response_language: ResponseLanguage) -> str:
     prompt = _first_user_content(messages)
     sentence_count = _requested_count(prompt, unit_patterns=(r"문장", r"sentence(?:s)?"))
@@ -291,6 +307,18 @@ def _output_format_guidance(messages: Sequence[Message], *, response_language: R
         if response_language == "ko":
             return f"사용자가 정확히 {line_count}줄로 답변하라고 요청했습니다. 제목이나 추가 섹션 없이 정확히 {line_count}줄만 작성하세요."
         return f"The user requested exactly {line_count} line(s). Do not add headings or extra sections; write exactly {line_count} line(s)."
+    if brevity_requested(prompt):
+        if response_language == "ko":
+            return (
+                "사용자가 짧고 간결한 답변을 요청했습니다. "
+                "필요한 근거만 남기고 최대 3개의 짧은 문장 또는 최대 4개의 짧은 줄로 답하세요. "
+                "사용자가 명시적으로 요청하지 않은 추가 섹션, 긴 배경 설명, 마무리 문구는 생략하세요."
+            )
+        return (
+            "The user requested a brief, concise answer. "
+            "Keep only necessary evidence and answer in at most 3 short sentences or 4 short lines. "
+            "Omit extra sections, long background, and closing filler unless explicitly requested."
+        )
     return ""
 
 

@@ -58,7 +58,7 @@ class TerminalSession:
             footer=app_info.replace(" | ", " · "),
         )
         self.console = Console(
-            file=stdout,
+            file=self.screen.stdout,
             force_terminal=self.screen.interactive,
             color_system="truecolor" if self.screen.interactive else None,
             highlight=False,
@@ -132,6 +132,7 @@ class TerminalSession:
                 self._print_assistant_block(answer)
                 self._final_answer_rendered = True
             self._last_status = ""
+            self._finish_running_composer()
             return
         if rendered.transcript and rendered.severity == "user_visible":
             self._print_rendered_block(rendered.transcript_role, rendered.transcript)
@@ -143,6 +144,7 @@ class TerminalSession:
         self._stream_started = False
         self._stream_buffer = ""
         self._stream_markdown_buffer.reset()
+        self.answer_renderer.reset()
         self._final_answer_rendered = False
         self._last_status = ""
         self._running_started_at = time.monotonic()
@@ -154,9 +156,7 @@ class TerminalSession:
         except Exception as exc:
             self.error_console.print(f"[bold red]오류:[/] {exc}")
         finally:
-            self._running_started_at = None
-            self.stdout.write("\n")
-            self.stdout.flush()
+            self._finish_running_composer()
 
     async def _run_turn(self, prompt: str) -> None:
         if self._turn_runner_accepts_approval:
@@ -198,6 +198,7 @@ class TerminalSession:
         if result.clear_transcript:
             self._clear_screen()
         if result.message:
+            self.answer_renderer.reset()
             self._print_assistant_block(result.message)
         if result.exit_requested:
             return 0
@@ -209,19 +210,18 @@ class TerminalSession:
 
     def _print_user_prompt(self, prompt: str) -> None:
         self._prepare_body_output()
-        self.console.print(f"[dim]▌[/] {prompt}")
-        self.console.print("[dim]" + "─" * min(74, max(20, self.console.width - 4)) + "[/]")
+        # One blank line separates turns; Codex shows the submitted prompt with a
+        # dim "›" marker rather than fencing it with a full-width rule.
+        self.console.print()
+        self.console.print(f"[dim]›[/] [dim]{prompt}[/]")
 
     def _print_assistant_block(self, text: str) -> None:
         self._prepare_body_output()
-        self.console.print("[bold]allCode[/]")
         self.answer_renderer.render(text)
         self.console.print()
 
     def _print_assistant_stream_chunk(self, text: str) -> None:
         self._prepare_body_output()
-        if not self._final_answer_rendered:
-            self.console.print("[bold]allCode[/]")
         self.answer_renderer.render(text)
 
     def _print_rendered_block(self, role: str, text: str) -> None:
@@ -268,6 +268,17 @@ class TerminalSession:
                 spinner_index=self._spinner_index,
             )
         )
+
+    def _finish_running_composer(self) -> None:
+        if self._running_started_at is None:
+            return
+        self._running_started_at = None
+        if self.screen.interactive:
+            self.screen.clear_input_panel()
+            self.input_editor.render_runtime_frame(activity=None)
+        else:
+            self.stdout.write("\n")
+        self.stdout.flush()
 
     @staticmethod
     def _is_terminal(stream: TextIO) -> bool:

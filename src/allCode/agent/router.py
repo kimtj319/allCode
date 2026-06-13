@@ -46,6 +46,7 @@ class RoutingDecision(CoreModel):
     requires_shell: bool = False
     requires_validation: bool = False
     requires_external_knowledge: bool = False
+    intent_frame: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("confidence")
     @classmethod

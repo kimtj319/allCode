@@ -22,6 +22,26 @@ def test_router_korean_spaced_read_only_overrides_modify_term() -> None:
     assert "mutate_file" not in decision.tool_capabilities
 
 
+def test_router_korean_without_modification_phrase_overrides_prior_generation_context() -> None:
+    decision = RuleBasedRouter().classify(
+        "방금 생성한 tmp/example.py의 주요 명령 구조를 코드 수정 없이 짧게 설명해줘."
+    )
+
+    assert decision.kind == "inspect"
+    assert decision.read_only_requested is True
+    assert decision.requires_mutation is False
+    assert decision.target_hint == "tmp/example.py"
+    assert "mutate_file" not in decision.tool_capabilities
+
+
+def test_router_stdlib_without_dependency_phrase_can_still_modify() -> None:
+    decision = RuleBasedRouter().classify("외부 패키지 없이 작은 CLI를 구현해줘.")
+
+    assert decision.read_only_requested is False
+    assert decision.kind == "modify"
+    assert decision.requires_mutation is True
+
+
 def test_router_detects_modify_and_validation() -> None:
     decision = RuleBasedRouter().classify("Implement the parser fix and run tests")
 

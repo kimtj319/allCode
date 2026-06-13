@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import re
 from typing import Literal
 
 from allCode.core.models import Message
@@ -49,13 +50,27 @@ def detect_response_language(prompt: str) -> ResponseLanguage:
     callers. This only controls explanatory prose.
     """
 
-    text = prompt or ""
+    text = language_detection_text(prompt)
     hangul = sum(1 for char in text if "\uac00" <= char <= "\ud7a3")
     if hangul:
         # Korean prompts often include ASCII paths and identifiers. One Hangul
         # phrase is enough to keep user-facing prose Korean.
         return "ko"
     return "en"
+
+
+def language_detection_text(text: str) -> str:
+    """Return prose-like text for coarse language checks.
+
+    Code fences and dense identifiers are stripped so code-heavy prompts or
+    answers do not accidentally override the user's natural-language choice.
+    """
+
+    without_fences = re.sub(r"```.*?```", " ", text or "", flags=re.DOTALL)
+    without_inline_code = re.sub(r"`[^`]+`", " ", without_fences)
+    without_paths = re.sub(r"\b\S+[/\\]\S+\b", " ", without_inline_code)
+    without_identifiers = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", " ", without_paths)
+    return without_identifiers
 
 
 def response_language_from_messages(messages: Sequence[Message]) -> ResponseLanguage:

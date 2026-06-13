@@ -6,6 +6,7 @@ import re
 import shlex
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import Field
 
@@ -17,6 +18,7 @@ ApprovalAction = Literal["approve_once", "deny", "allow_session"]
 
 class ApprovalDecision(CoreModel):
     allowed: bool
+    approval_id: str = Field(default_factory=lambda: uuid4().hex)
     requires_approval: bool = False
     reason: str = ""
     preview: str = ""
@@ -25,6 +27,7 @@ class ApprovalDecision(CoreModel):
 
 
 class ApprovalRequest(CoreModel):
+    approval_id: str = Field(default_factory=lambda: uuid4().hex)
     tool_name: str
     decision: ApprovalDecision
     preview: str = ""

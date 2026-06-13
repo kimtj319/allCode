@@ -8,10 +8,10 @@ from allCode.tools.builtin.source_overview import SourceOverviewTool
 from allCode.tools.builtin.source_probe import SourceProbeTool
 from allCode.tools.builtin.tree import ListTreeTool
 from allCode.tools.builtin.web import web_tools
-from allCode.tools.web_provider import WebSearchProvider
+from allCode.tools.web_provider import WebFetchProvider, WebSearchProvider
 
 
-def builtin_tools(*, web_search_provider: WebSearchProvider | None = None) -> list:
+def builtin_tools(*, web_search_provider: WebSearchProvider | None = None, web_fetch_provider: WebFetchProvider | None = None) -> list:
     return [
         *file_tools(),
         SearchFilesTool(),
@@ -21,5 +21,5 @@ def builtin_tools(*, web_search_provider: WebSearchProvider | None = None) -> li
         SourceProbeTool(),
         RunCommandTool(),
         RunTestsTool(),
-        *web_tools(web_search_provider),
+        *web_tools(web_search_provider, web_fetch_provider),
     ]

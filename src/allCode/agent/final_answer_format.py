@@ -8,6 +8,24 @@ from collections.abc import Sequence
 
 from allCode.core.result import CompletionEvidence
 
+KOREAN_COUNT_WORDS = {
+    "한": 1,
+    "하나": 1,
+    "두": 2,
+    "둘": 2,
+    "세": 3,
+    "셋": 3,
+    "네": 4,
+    "넷": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+    "열": 10,
+}
+KOREAN_COUNT_WORD_PATTERN = "|".join(sorted(KOREAN_COUNT_WORDS, key=len, reverse=True))
+
 
 def apply_output_format_gate(
     final_answer: str,
@@ -38,6 +56,8 @@ def apply_output_format_gate(
     bullet_count = _requested_bullet_count(prompt)
     if bullet_count is not None:
         return _limit_bullets(final_answer, bullet_count)
+    if brevity_requested(prompt):
+        return _brief_answer(final_answer)
     return final_answer
 
 
@@ -62,6 +82,9 @@ def _requested_count(prompt: str, *, unit_patterns: tuple[str, ...]) -> int | No
                 return max(1, min(20, int(match.group("count"))))
             except ValueError:
                 return None
+        word_match = re.search(rf"(?P<count>{KOREAN_COUNT_WORD_PATTERN})\s*{unit}", text, flags=re.IGNORECASE)
+        if word_match:
+            return KOREAN_COUNT_WORDS.get(word_match.group("count"))
     if any(re.search(rf"한\s*{unit}", text, flags=re.IGNORECASE) for unit in unit_patterns):
         return 1
     return None
@@ -86,6 +109,18 @@ def _limit_bullets(text: str, count: int) -> str:
     if len(lines) < count:
         return text
     return "\n".join(f"- {line}" for line in lines[:count]).strip()
+
+
+def _brief_answer(text: str) -> str:
+    if _extract_markdown_table(text):
+        return text
+    lines = _brief_content_lines(text)
+    if len(lines) > 4:
+        return "\n".join(lines[:4]).strip()
+    units = _sentence_units(text)
+    if len(units) > 3:
+        return " ".join(units[:3]).strip()
+    return text
 
 
 def _json_only_answer(text: str) -> str:
@@ -133,6 +168,18 @@ def _content_lines(text: str) -> list[str]:
     return lines
 
 
+def _brief_content_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or re.fullmatch(r"#{1,6}\s+.+", stripped):
+            continue
+        if re.fullmatch(r"\*\*[^*]+\*\*", stripped) or re.fullmatch(r"__[^_]+__", stripped):
+            continue
+        lines.append(stripped)
+    return lines
+
+
 def _strip_markdown_structure(line: str) -> str:
     stripped = line.strip()
     if not stripped:
@@ -176,7 +223,63 @@ def _requested_bullet_count(prompt: str) -> int | None:
                 return max(1, min(20, int(match.group("count"))))
             except ValueError:
                 return None
+    korean_word_pattern = (
+        rf"(?P<count>{KOREAN_COUNT_WORD_PATTERN})\s*(?:개|가지|항목|줄)?\s*"
+        r"(?:bullet|bullets|bullet points|items|목록|항목|불릿|리스트)"
+    )
+    word_match = re.search(korean_word_pattern, text, flags=re.IGNORECASE)
+    if word_match:
+        value = KOREAN_COUNT_WORDS.get(word_match.group("count"))
+        return max(1, min(20, value)) if value is not None else None
     return 1 if re.search(r"한\s*(?:개\s*)?(?:bullet|목록|항목|불릿)", text, flags=re.IGNORECASE) else None
+
+
+def brevity_requested(prompt: str) -> bool:
+    text = str(prompt or "")
+    lowered = text.lower()
+    compact = re.sub(r"\s+", "", lowered)
+    if _brevity_negated(text):
+        return False
+    korean_markers = (
+        "짧게",
+        "간단히",
+        "간단하게",
+        "간략히",
+        "간략하게",
+        "간결하게",
+        "짧은답변",
+    )
+    if any(marker in compact for marker in korean_markers):
+        return True
+    english_patterns = (
+        r"\bbriefly\b",
+        r"\bconcise(?:ly)?\b",
+        r"\bshort answer\b",
+        r"\bkeep it short\b",
+        r"\bkeep (?:the )?answer short\b",
+    )
+    return any(re.search(pattern, lowered) for pattern in english_patterns)
+
+
+def _brevity_negated(text: str) -> bool:
+    compact = re.sub(r"\s+", "", str(text or "").lower())
+    korean_negations = (
+        "짧게하지마",
+        "짧게하지말",
+        "짧게말고",
+        "간단히말고",
+        "간단하게말고",
+        "간략히말고",
+        "간결하게말고",
+    )
+    if any(marker in compact for marker in korean_negations):
+        return True
+    english_negations = (
+        r"\bdo not (?:be )?(?:brief|concise)\b",
+        r"\bdon't (?:be )?(?:brief|concise)\b",
+        r"\bnot (?:brief|concise|short)\b",
+    )
+    return any(re.search(pattern, str(text or "").lower()) for pattern in english_negations)
 
 
 def _json_requested(prompt: str) -> bool:

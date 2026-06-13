@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import Field
 
 from allCode.agent.prompt_constraints import PromptConstraints
+from allCode.agent.intent_frame import build_intent_frame
 from allCode.agent.router import RouteKind, RoutingDecision, ToolCapability, WorkflowHint
 from allCode.core.models import CoreModel
 
@@ -210,19 +211,29 @@ def validate_route(
     if repairs:
         flags.add("route_validated")
 
+    base_updates = {
+        "kind": kind,
+        "target_hint": target_hint,
+        "tool_capabilities": capabilities,
+        "workflow_hint": workflow_hint,
+        "flags": flags,
+        "read_only_requested": read_only_requested,
+        "requires_tools": requires_tools,
+        "requires_mutation": requires_mutation,
+        "requires_shell": requires_shell,
+        "requires_validation": requires_validation,
+        "requires_external_knowledge": requires_external,
+    }
+    frame = build_intent_frame(
+        route.model_copy(update=base_updates),
+        constraints=constraints,
+        local_workspace_request=local_workspace_request,
+        target_hint=target_hint,
+    )
     normalized = route.model_copy(
         update={
-            "kind": kind,
-            "target_hint": target_hint,
-            "tool_capabilities": capabilities,
-            "workflow_hint": workflow_hint,
-            "flags": flags,
-            "read_only_requested": read_only_requested,
-            "requires_tools": requires_tools,
-            "requires_mutation": requires_mutation,
-            "requires_shell": requires_shell,
-            "requires_validation": requires_validation,
-            "requires_external_knowledge": requires_external,
+            **base_updates,
+            "intent_frame": frame.model_dump(mode="json"),
         }
     )
     return normalized, RouteValidationReport(repairs=repairs)

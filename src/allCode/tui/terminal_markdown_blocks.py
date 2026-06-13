@@ -1,0 +1,477 @@
+"""Compact Markdown block rendering for the terminal-native UI."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Iterable
+
+from rich import box
+from rich.console import Console, RenderableType
+from rich.markdown import Markdown
+from rich.padding import Padding
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.text import Text
+
+from allCode.tui.terminal_width import display_width
+
+_FENCE_START_RE = re.compile(r"^```([A-Za-z0-9_+.-]*)\s*$")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_ORDERED_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.*)$")
+_UNORDERED_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
+_INLINE_RE = re.compile(r"(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)")
+
+
+@dataclass(frozen=True)
+class MarkdownBlock:
+    kind: str
+    lines: list[str]
+    language: str = ""
+
+
+def render_compact_markdown(
+    console: Console,
+    source: str,
+    *,
+    emitted: bool = False,
+    last_offset: bool = False,
+) -> tuple[bool, bool]:
+    """Render common Markdown blocks with Codex-like, restrained block spacing.
+
+    Block-level elements (code, table, quote, heading) get one blank line of
+    breathing room; paragraphs and lists stay tight. ``emitted``/``last_offset``
+    carry state across streamed chunks so spacing is consistent without inserting
+    spurious breaks inside a paragraph that streamed in pieces.
+    """
+
+    for block in _parse_blocks(source):
+        space_before = block.kind in {"code", "table", "quote", "heading"}
+        space_after = block.kind in {"code", "table", "quote"}
+        if space_before and emitted and not last_offset:
+            console.print()
+        _render_block(console, block)
+        if space_after:
+            console.print()
+        last_offset = space_after
+        emitted = True
+    return emitted, last_offset
+
+
+def _render_block(console: Console, block: MarkdownBlock) -> None:
+    try:
+        if block.kind == "code":
+            _render_code(console, block)
+        elif block.kind == "table":
+            _render_table(console, block.lines)
+        elif block.kind == "quote":
+            _render_quote(console, block.lines)
+        elif block.kind == "heading":
+            _render_heading(console, block.lines[0])
+        elif block.kind == "list":
+            _render_list(console, block.lines)
+        else:
+            _print_renderable_compact(console, Markdown("\n".join(block.lines)))
+    except Exception:
+        _print_renderable_compact(console, Markdown("\n".join(block.lines)))
+
+
+def _parse_blocks(source: str) -> list[MarkdownBlock]:
+    lines = source.splitlines()
+    blocks: list[MarkdownBlock] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            index += 1
+            continue
+        fence_match = _FENCE_START_RE.match(line.strip())
+        if fence_match:
+            block, index = _consume_code_block(lines, index, fence_match.group(1))
+            blocks.append(block)
+            continue
+        if _is_table_start(lines, index):
+            block, index = _consume_table(lines, index)
+            blocks.append(block)
+            continue
+        if _is_quote_line(line):
+            block, index = _consume_quote(lines, index)
+            blocks.append(block)
+            continue
+        heading_match = _HEADING_RE.match(line)
+        if heading_match:
+            blocks.append(MarkdownBlock(kind="heading", lines=[heading_match.group(2)]))
+            index += 1
+            continue
+        if _is_list_line(line):
+            block, index = _consume_list(lines, index)
+            blocks.append(block)
+            continue
+        block, index = _consume_generic(lines, index)
+        blocks.append(block)
+    return blocks
+
+
+def _is_list_line(line: str) -> bool:
+    return bool(_ORDERED_RE.match(line) or _UNORDERED_RE.match(line))
+
+
+def _consume_list(lines: list[str], start: int) -> tuple[MarkdownBlock, int]:
+    items: list[str] = []
+    index = start
+    while index < len(lines) and lines[index].strip() and _is_list_line(lines[index]):
+        items.append(lines[index])
+        index += 1
+    return MarkdownBlock(kind="list", lines=items), index
+
+
+def _consume_code_block(lines: list[str], start: int, language: str) -> tuple[MarkdownBlock, int]:
+    body: list[str] = []
+    index = start + 1
+    while index < len(lines):
+        if lines[index].strip() == "```":
+            return MarkdownBlock(kind="code", lines=body, language=language.strip()), index + 1
+        body.append(lines[index])
+        index += 1
+    return MarkdownBlock(kind="code", lines=body, language=language.strip()), index
+
+
+def _consume_table(lines: list[str], start: int) -> tuple[MarkdownBlock, int]:
+    table_lines = [lines[start], lines[start + 1]]
+    index = start + 2
+    while index < len(lines) and _is_table_continuation(lines[index], table_lines[-1]):
+        table_lines.append(lines[index])
+        index += 1
+    return MarkdownBlock(kind="table", lines=table_lines), index
+
+
+def _consume_quote(lines: list[str], start: int) -> tuple[MarkdownBlock, int]:
+    quote_lines: list[str] = []
+    index = start
+    while index < len(lines):
+        if _is_quote_line(lines[index]):
+            quote_lines.append(lines[index])
+            index += 1
+            continue
+        if not lines[index].strip():
+            # A blank line only stays inside the quote if another quote line
+            # follows; trailing blanks end the quote (otherwise they render as a
+            # stray empty "│" line).
+            look = index + 1
+            while look < len(lines) and not lines[look].strip():
+                look += 1
+            if look < len(lines) and _is_quote_line(lines[look]):
+                quote_lines.append(">")
+                index += 1
+                continue
+        break
+    return MarkdownBlock(kind="quote", lines=quote_lines), index
+
+
+def _consume_generic(lines: list[str], start: int) -> tuple[MarkdownBlock, int]:
+    block_lines: list[str] = []
+    index = start
+    while index < len(lines):
+        if not lines[index].strip():
+            break
+        if block_lines and (
+            _FENCE_START_RE.match(lines[index].strip())
+            or _is_table_start(lines, index)
+            or _is_quote_line(lines[index])
+            or _is_list_line(lines[index])
+        ):
+            break
+        block_lines.append(lines[index])
+        index += 1
+    return MarkdownBlock(kind="generic", lines=block_lines), index
+
+
+def _render_code(console: Console, block: MarkdownBlock) -> None:
+    code = "\n".join(block.lines).rstrip("\n")
+    if not code:
+        return
+    if block.language:
+        body: RenderableType = Syntax(
+            code,
+            block.language,
+            theme="ansi_dark",
+            background_color="default",
+            word_wrap=False,
+            padding=0,
+        )
+    else:
+        body = Text(code)
+    # Indent the whole block two columns so fenced code reads as a distinct block
+    # against prose that starts at column 0 (Codex-style affordance), while
+    # keeping syntax highlighting and compact spacing.
+    console.print(Padding(body, (0, 0, 0, 2)))
+
+
+def _render_table(console: Console, lines: list[str]) -> None:
+    if _table_is_malformed(lines):
+        headers = _parse_table_row(lines[0]) if lines else []
+        _render_malformed_table_fallback(console, headers, lines[2:])
+        return
+    rows = [_parse_table_row(line) for line in lines]
+    if len(rows) < 2:
+        _print_renderable_compact(console, Markdown("\n".join(lines)))
+        return
+    headers = rows[0]
+    body_rows = [row for row in rows[2:] if any(cell.strip() for cell in row)]
+    if not headers or not body_rows:
+        _print_renderable_compact(console, Markdown("\n".join(lines)))
+        return
+    normalized_rows = [_fit_row(row, len(headers)) for row in body_rows]
+    if _table_is_too_wide(headers, normalized_rows, console.width):
+        _render_table_fallback(console, headers, normalized_rows)
+        return
+    # Codex separates the header with a heavy rule and uses no vertical/outer
+    # borders. Row separators are omitted to avoid clutter on small tables.
+    table = Table(
+        box=box.SIMPLE_HEAVY,
+        show_edge=False,
+        pad_edge=False,
+        padding=(0, 1),
+        header_style="bold",
+    )
+    for header in headers:
+        table.add_column(_strip_inline_markup(header.strip()))
+    for row in normalized_rows:
+        table.add_row(*[_inline_markup(cell.strip()) for cell in row])
+    console.print(table)
+
+
+def _render_table_fallback(console: Console, headers: list[str], rows: list[list[str]]) -> None:
+    for row in rows:
+        parts = []
+        for header, cell in zip(headers, row, strict=False):
+            if cell.strip():
+                parts.append(f"{header.strip()}: {cell.strip()}")
+        if parts:
+            console.print(Text("• " + " · ".join(parts)))
+
+
+def _render_malformed_table_fallback(console: Console, headers: list[str], body_lines: list[str]) -> None:
+    header_prefix = " / ".join(header.strip() for header in headers if header.strip())
+    if header_prefix:
+        console.print(Text(header_prefix, style="bold"))
+    for line in _readable_lines_from_malformed_table(body_lines):
+        console.print(Text("• " + line))
+
+
+def _readable_lines_from_malformed_table(lines: list[str]) -> list[str]:
+    text = "\n".join(lines)
+    text = re.sub(r"\s*\|\s*\|\s*", "\n", text)
+    readable: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        expanded = _readable_lines_from_malformed_row(line)
+        for item in expanded:
+            if item and not _is_separator_text(item):
+                readable.append(item)
+    return readable
+
+
+def _readable_lines_from_malformed_row(line: str) -> list[str]:
+    line = line.strip("|").strip()
+    if not line or _is_separator_text(line):
+        return []
+    if "|" not in line:
+        return [_compact_table_text(line)]
+
+    cells = [_compact_table_text(cell) for cell in _parse_table_row(line)]
+    cells = [cell for cell in cells if cell and not _is_separator_text(cell)]
+    if not cells:
+        return []
+    if len(cells) == 1:
+        return cells
+
+    label = cells[0].rstrip(":")
+    details = [cell for cell in cells[1:] if cell]
+    if not details:
+        return [label]
+    return [f"{label}: {' · '.join(details)}"]
+
+
+def _compact_table_text(text: str) -> str:
+    text = text.strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s*\|\s*", " · ", text)
+    text = _strip_leading_list_marker(text)
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    return text
+
+
+def _strip_leading_list_marker(line: str) -> str:
+    stripped = line.strip()
+    for marker in ("• ", "- ", "* "):
+        if stripped.startswith(marker):
+            return stripped[len(marker) :].strip()
+    return stripped
+
+
+def _render_quote(console: Console, lines: Iterable[str]) -> None:
+    for raw_line in lines:
+        text = raw_line.strip()
+        if text.startswith(">"):
+            text = text[1:]
+            if text.startswith(" "):
+                text = text[1:]
+        prefix = Text("│ ", style="dim")
+        prefix.append_text(_inline_markup(text, base_style="dim"))
+        console.print(prefix)
+
+
+def _render_heading(console: Console, text: str) -> None:
+    heading = _inline_markup(text.strip(), base_style="bold")
+    heading.stylize("bold")
+    console.print(heading)
+
+
+def _render_list(console: Console, lines: list[str]) -> None:
+    for line in lines:
+        ordered = _ORDERED_RE.match(line)
+        if ordered:
+            indent, number, content = ordered.group(1), ordered.group(2), ordered.group(3)
+            prefix = Text(f"{indent}{number}. ")
+            prefix.append_text(_inline_markup(content))
+            console.print(prefix)
+            continue
+        unordered = _UNORDERED_RE.match(line)
+        if unordered:
+            indent, content = unordered.group(1), unordered.group(2)
+            prefix = Text(f"{indent}• ")
+            prefix.append_text(_inline_markup(content))
+            console.print(prefix)
+            continue
+        console.print(_inline_markup(line.strip()))
+
+
+def _strip_inline_markup(text: str) -> str:
+    return _inline_markup(text).plain
+
+
+def _inline_markup(text: str, *, base_style: str = "") -> Text:
+    """Render inline bold/italic/code spans so cells and list items don't leak
+    raw Markdown punctuation like backticks."""
+
+    result = Text(style=base_style)
+    for part in _INLINE_RE.split(text):
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**") and len(part) > 4:
+            result.append(part[2:-2], style="bold")
+        elif part.startswith("`") and part.endswith("`") and len(part) > 2:
+            result.append(part[1:-1], style="cyan")
+        elif part.startswith("*") and part.endswith("*") and len(part) > 2:
+            result.append(part[1:-1], style="italic")
+        else:
+            result.append(part)
+    return result
+
+
+def _print_renderable_compact(console: Console, renderable: RenderableType) -> None:
+    with console.capture() as capture:
+        console.print(renderable)
+    output = _trim_blank_rendered_lines(capture.get())
+    if output:
+        console.file.write(output)
+        if not output.endswith("\n"):
+            console.file.write("\n")
+        console.file.flush()
+
+
+def _trim_blank_rendered_lines(output: str) -> str:
+    lines = output.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _is_quote_line(line: str) -> bool:
+    return line.lstrip().startswith(">")
+
+
+def _is_table_start(lines: list[str], index: int) -> bool:
+    return index + 1 < len(lines) and _is_table_row(lines[index]) and _is_table_separator(lines[index + 1])
+
+
+def _is_table_row(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
+
+
+def _is_loose_table_row(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.count("|") >= 2
+
+
+def _is_table_continuation(line: str, previous_line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _is_loose_table_row(stripped):
+        return True
+    if "|" in stripped:
+        return True
+    previous = previous_line.strip()
+    return previous.startswith("|") and not previous.endswith("|") and stripped.startswith(("• ", "- ", "* "))
+
+
+def _is_table_separator(line: str) -> bool:
+    if not _is_table_row(line):
+        return False
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return bool(cells) and all(cell and "-" in cell and set(cell) <= {"-", ":", " "} for cell in cells)
+
+
+def _table_is_malformed(lines: list[str]) -> bool:
+    body = lines[2:]
+    return any(not _is_table_row(line) or "| |" in line for line in body)
+
+
+def _is_separator_text(text: str) -> bool:
+    compact = text.replace(" ", "")
+    return bool(compact) and set(compact) <= {"-", ":", "|"}
+
+
+def _parse_table_row(line: str) -> list[str]:
+    stripped = line.strip().strip("|")
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in stripped:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _fit_row(row: list[str], width: int) -> list[str]:
+    if len(row) == width:
+        return row
+    if len(row) > width:
+        return row[:width]
+    return row + [""] * (width - len(row))
+
+
+def _table_is_too_wide(headers: list[str], rows: list[list[str]], console_width: int) -> bool:
+    if console_width < 36:
+        return True
+    columns = list(zip(headers, *rows, strict=False))
+    estimated = sum(max(display_width(cell.strip()) for cell in column) for column in columns)
+    estimated += max(0, len(headers) - 1) * 2
+    return estimated > max(20, console_width - 4)

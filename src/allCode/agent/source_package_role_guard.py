@@ -57,10 +57,6 @@ def package_role_retry_candidates(messages: list[Message], *, language: Response
     return f"Observed high-priority package role candidates: {joined}."
 
 
-def package_role_paths(messages: list[Message]) -> list[str]:
-    return [entry.path for entry in package_role_entries(messages)]
-
-
 def package_role_entries(messages: list[Message]) -> list[PackageRoleEntry]:
     paths: list[str] = []
     entries: list[PackageRoleEntry] = []

@@ -47,6 +47,9 @@ class EventRenderer:
     def _render_turn_started(self, event: AgentEvent) -> RenderedEvent:
         return RenderedEvent(status=messages.MODEL_REQUEST_STATUS, spinner=True, severity=event.severity)
 
+    def _render_routing_decided(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status=messages.ROUTING_STATUS, spinner=True, severity=event.severity)
+
     def _render_model_request_prepared(self, event: AgentEvent) -> RenderedEvent:
         return RenderedEvent(status=messages.MODEL_REQUEST_STATUS, spinner=True, severity=event.severity)
 
@@ -167,6 +170,20 @@ class EventRenderer:
         status = event.data.get("status", "")
         return RenderedEvent(transcript=f"{step}: {status}", transcript_role="status", status=str(status), severity="user_visible")
 
+    def _render_generation_workflow_started(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status=messages.WORKFLOW_STATUS, spinner=True, severity=event.severity)
+
+    def _render_generation_workflow_finished(self, event: AgentEvent) -> RenderedEvent:
+        status = str(event.data.get("status") or "")
+        if status == "failed":
+            return RenderedEvent(
+                transcript="생성 워크플로우 검증을 완료하지 못했습니다.",
+                transcript_role="status",
+                status=messages.FINAL_GATE_STATUS,
+                severity="user_visible",
+            )
+        return RenderedEvent(status=messages.FINAL_REPORT_STATUS, severity="status_only")
+
     def _render_approval_requested(self, event: AgentEvent) -> RenderedEvent:
         return RenderedEvent(
             transcript=messages.APPROVAL_REQUIRED_TITLE,
@@ -174,6 +191,20 @@ class EventRenderer:
             status=messages.APPROVAL_STATUS,
             severity=event.severity,
         )
+
+    def _render_approval_resolved(self, event: AgentEvent) -> RenderedEvent:
+        allowed = event.data.get("allowed")
+        action = str(event.data.get("action") or "")
+        if allowed is True:
+            return RenderedEvent(status=messages.WORKING_STATUS, severity="status_only")
+        if action in {"deny", "denied"} or allowed is False:
+            return RenderedEvent(
+                transcript=messages.APPROVAL_DENIED_STATUS,
+                transcript_role="status",
+                status=messages.APPROVAL_DENIED_STATUS,
+                severity="user_visible",
+            )
+        return RenderedEvent(status=messages.APPROVAL_STATUS, severity="status_only")
 
     def _render_tool_loop_detected(self, event: AgentEvent) -> RenderedEvent:
         return RenderedEvent(
@@ -196,6 +227,35 @@ class EventRenderer:
         else:
             status = messages.RECOVERY_STATUS
         return RenderedEvent(status=status, spinner=not blocked, severity=event.severity)
+
+    def _render_phase_transitioned(self, event: AgentEvent) -> RenderedEvent:
+        phase = str(event.data.get("phase") or "")
+        if "validation" in phase:
+            status = messages.VALIDATION_STATUS
+        elif "repair" in phase:
+            status = messages.REPAIR_STATUS
+        elif "final" in phase:
+            status = messages.FINAL_REPORT_STATUS
+        else:
+            status = messages.WORKING_STATUS
+        return RenderedEvent(status=status, spinner=True, severity=event.severity)
+
+    def _render_validation_action_injected(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status=messages.VALIDATION_STATUS, spinner=True, severity=event.severity)
+
+    def _render_tool_call_suppressed(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status=messages.FINAL_GATE_STATUS, spinner=False, severity=event.severity)
+
+    def _render_tool_call_schema_denied(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(
+            transcript="현재 단계에서 허용되지 않은 도구 호출을 실행하지 않았습니다.",
+            transcript_role="status",
+            status=messages.FINAL_GATE_STATUS,
+            severity="user_visible",
+        )
+
+    def _render_event_dropped(self, event: AgentEvent) -> RenderedEvent:
+        return RenderedEvent(status="일부 내부 이벤트 생략됨", severity=event.severity)
 
     def _render_final_answer_ready(self, event: AgentEvent) -> RenderedEvent:
         final_answer = getattr(event, "final_answer", event.message)

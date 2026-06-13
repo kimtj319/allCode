@@ -15,6 +15,7 @@ ApprovalAction = Literal["approve_once", "deny", "allow_session"]
 
 class ApprovalPanelState(CoreModel):
     visible: bool = False
+    approval_id: str = ""
     reason: str = ""
     preview: str = ""
     risk: str = "low"
@@ -27,6 +28,7 @@ class ApprovalPanelState(CoreModel):
         view = approval_preview_from_payload(data, fallback_preview=str(data.get("preview", "")))
         return cls(
             visible=True,
+            approval_id=str(data.get("approval_id", "")),
             reason=str(data.get("reason", event.message)),
             preview=view.preview,
             risk=str(data.get("risk", "medium")),

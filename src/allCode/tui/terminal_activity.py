@@ -35,6 +35,10 @@ def _label_for_status(status: str) -> str:
         return "Working"
     if normalized == messages.MODEL_REQUEST_STATUS:
         return "Sending request"
+    if normalized == messages.ROUTING_STATUS:
+        return "Planning"
+    if normalized == messages.WORKFLOW_STATUS:
+        return "Executing plan"
     if normalized in {messages.MODEL_WAITING_STATUS, messages.SLOW_STREAM_STATUS}:
         return "Waiting for model"
     if normalized == messages.MODEL_CONTINUING_STATUS:

@@ -61,8 +61,8 @@ class ApprovalConfig(StrictConfigModel):
 
 
 class WebConfig(StrictConfigModel):
-    backend: Literal["disabled", "http_json", "searxng"] = "disabled"
-    search_url: str | None = None
+    backend: Literal["disabled", "http_json", "searxng", "duckduckgo_html"] = "duckduckgo_html"
+    search_url: str | None = "https://html.duckduckgo.com/html/"
     api_key_env: str | None = None
     timeout_seconds: int = 15
     default_language: str = "ko-KR"
@@ -104,3 +104,32 @@ class AppConfig(StrictConfigModel):
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     source_intelligence: SourceIntelligenceConfig = Field(default_factory=SourceIntelligenceConfig)
+
+
+class ConfigFileSource(StrictConfigModel):
+    path: str
+    loaded: bool = False
+    source_type: Literal["user", "project", "launch"]
+
+
+class DotenvSource(StrictConfigModel):
+    path: str
+    loaded_keys: list[str] = Field(default_factory=list)
+
+
+class ConfigSourceReport(StrictConfigModel):
+    """Redacted report of how runtime configuration was resolved."""
+
+    config_files: list[ConfigFileSource] = Field(default_factory=list)
+    dotenv_files: list[DotenvSource] = Field(default_factory=list)
+    env_overrides: list[str] = Field(default_factory=list)
+    cli_overrides: list[str] = Field(default_factory=list)
+    workspace_root: str
+    model_name: str
+    base_url: str | None = None
+    api_key_env: str
+    api_key_present: bool = False
+    approval_mode: str
+    web_backend: str
+    web_search_host: str | None = None
+    launch_config_fallback_used: bool = False

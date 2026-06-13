@@ -56,9 +56,5 @@ class MarkdownStreamState:
             stable = min(stable, holdback)
         else:
             self.table_holdback_start = None
-        if self.open_fence:
-            fence_start = self.raw_source.rfind("```")
-            if fence_start >= 0:
-                stable = min(stable, fence_start)
         self.stable_source_len = max(0, stable)
         self.mutable_tail_start = self.stable_source_len

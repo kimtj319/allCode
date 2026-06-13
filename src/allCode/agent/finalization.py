@@ -341,15 +341,60 @@ def _apply_web_unavailable_wording(
     *,
     language: str,
 ) -> str:
-    unavailable = bool(evidence.web_unavailable_queries) or any(
-        message.role == "tool" and message.metadata.get("error_type") == "web_search_unavailable"
-        for message in messages
-    )
+    if _has_successful_web_evidence(messages, evidence):
+        return final_answer
+    unavailable_messages = _web_unavailable_messages(messages)
+    unavailable = bool(evidence.web_unavailable_queries) or bool(unavailable_messages)
     if not unavailable or _answer_already_mentions_web_unavailable(final_answer):
         return final_answer
+    if not unavailable_messages or any(_web_backend_disabled(message) for message in unavailable_messages):
+        if language == "en":
+            return final_answer.rstrip() + "\n\nThe web search backend is not configured."
+        return final_answer.rstrip() + "\n\n현재 웹 검색 backend가 설정되어 있지 않습니다."
     if language == "en":
-        return final_answer.rstrip() + "\n\nThe web search backend is not configured."
-    return final_answer.rstrip() + "\n\n현재 웹 검색 backend가 설정되어 있지 않습니다."
+        return (
+            final_answer.rstrip()
+            + "\n\nWeb search is enabled, but the backend did not return usable evidence for this request."
+        )
+    return final_answer.rstrip() + "\n\n웹 검색은 활성화되어 있지만 이번 요청에서 사용할 수 있는 근거를 가져오지 못했습니다."
+
+
+def _has_successful_web_evidence(messages: Sequence[Message], evidence: CompletionEvidence) -> bool:
+    if evidence.web_evidence_count > 0:
+        return True
+    return any(
+        message.role == "tool"
+        and message.metadata.get("evidence_kind") == "web_evidence"
+        and _metadata_evidence_count(message.metadata) > 0
+        for message in messages
+    )
+
+
+def _web_unavailable_messages(messages: Sequence[Message]) -> list[Message]:
+    return [
+        message
+        for message in messages
+        if message.role == "tool"
+        and (
+            message.metadata.get("error_type") in {"web_search_unavailable", "web_fetch_unavailable"}
+            or message.metadata.get("evidence_kind") in {"web_unavailable", "web_error", "web_no_results"}
+        )
+    ]
+
+
+def _web_backend_disabled(message: Message) -> bool:
+    health = message.metadata.get("web_health")
+    if not isinstance(health, dict):
+        return False
+    backend = str(health.get("backend") or "").lower()
+    return backend == "disabled" or health.get("configured") is False
+
+
+def _metadata_evidence_count(metadata: dict[str, object]) -> int:
+    try:
+        return int(metadata.get("evidence_count") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _answer_already_mentions_web_unavailable(final_answer: str) -> bool:

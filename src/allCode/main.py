@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TextIO
 
 from allCode.config.manager import ConfigError, ConfigManager, ConfigOverrides
+from allCode.config.schema import ConfigSourceReport
 from allCode.config.defaults import DEFAULT_CONFIG_DIR
 from allCode.headless import run_headless_sync
 from allCode.llm.factory import uses_live_llm
@@ -33,6 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model")
     parser.add_argument("--base-url")
     parser.add_argument("--approval", choices=["ask", "auto", "rules"])
+    parser.add_argument(
+        "--diagnose",
+        "--check",
+        action="store_true",
+        dest="diagnose",
+        help="Print redacted runtime configuration diagnostics and exit.",
+    )
     parser.add_argument("--textual", action="store_true", help="Use the optional Textual TUI instead of the Codex-like terminal UI.")
     parser.add_argument("--plain-terminal", action="store_true", help="Compatibility alias for the default terminal-native UI.")
     return parser
@@ -50,7 +58,7 @@ def main(
 
     try:
         args = parser.parse_args(list(argv) if argv is not None else None)
-        config = ConfigManager().load(
+        load_result = ConfigManager().load_with_report(
             ConfigOverrides(
                 config_path=args.config,
                 workspace=args.workspace,
@@ -59,6 +67,10 @@ def main(
                 approval=args.approval,
             )
         )
+        config = load_result.config
+        if args.diagnose:
+            _write_diagnostics(load_result.report, stdout)
+            return 0
         if args.headless is not None:
             prompt = args.headless or sys.stdin.read()
             return run_headless_sync(prompt, config=config, out=stdout, err=stderr)
@@ -102,6 +114,33 @@ def _validate_interactive_model_config(config) -> None:
             "Model API key is not configured. "
             f"Set {config.model.api_key_env} or add it to the project .env before running allCode."
         )
+
+
+def _write_diagnostics(report: ConfigSourceReport, out: TextIO) -> None:
+    out.write("allCode configuration diagnostics\n")
+    out.write(f"- workspace: {report.workspace_root}\n")
+    out.write(f"- model: {report.model_name}\n")
+    out.write(f"- base_url: {report.base_url or 'default'}\n")
+    out.write(f"- api_key_env: {report.api_key_env} ({'set' if report.api_key_present else 'not set'})\n")
+    out.write(f"- approval: {report.approval_mode}\n")
+    out.write(f"- web: {report.web_backend}")
+    if report.web_search_host:
+        out.write(f" · {report.web_search_host}")
+    out.write("\n")
+    out.write("- config files:\n")
+    for source in report.config_files:
+        status = "loaded" if source.loaded else "missing"
+        suffix = " · launch fallback" if source.source_type == "launch" and report.launch_config_fallback_used else ""
+        out.write(f"  - {source.source_type}: {source.path} ({status}{suffix})\n")
+    if report.dotenv_files:
+        out.write("- dotenv files:\n")
+        for source in report.dotenv_files:
+            keys = ", ".join(source.loaded_keys) if source.loaded_keys else "no new ALLCODE_ keys"
+            out.write(f"  - {source.path}: {keys}\n")
+    if report.env_overrides:
+        out.write("- env override groups: " + ", ".join(report.env_overrides) + "\n")
+    if report.cli_overrides:
+        out.write("- cli overrides: " + ", ".join(report.cli_overrides) + "\n")
 
 
 def _slash_handler(config, *, session_log_path: Path | None = None) -> SlashCommandHandler:

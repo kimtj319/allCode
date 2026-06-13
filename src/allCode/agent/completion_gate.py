@@ -58,6 +58,8 @@ def build_completion_evidence(
     not_found_targets = list(base_evidence.not_found_targets if base_evidence is not None else [])
     validation_failure_symbols = list(base_evidence.validation_failure_symbols if base_evidence is not None else [])
     policy_denied_tools = list(base_evidence.policy_denied_tools if base_evidence is not None else [])
+    web_evidence_queries = list(base_evidence.web_evidence_queries if base_evidence is not None else [])
+    web_evidence_count = int(base_evidence.web_evidence_count if base_evidence is not None else 0)
     web_unavailable_queries = list(base_evidence.web_unavailable_queries if base_evidence is not None else [])
     grounding_required = bool(base_evidence.grounding_required if base_evidence is not None else False)
     project_manifest = base_evidence.project_manifest if base_evidence is not None else None
@@ -106,6 +108,8 @@ def build_completion_evidence(
         not_found_targets=not_found_targets,
         validation_failure_symbols=validation_failure_symbols,
         policy_denied_tools=policy_denied_tools,
+        web_evidence_queries=web_evidence_queries,
+        web_evidence_count=web_evidence_count,
         web_unavailable_queries=web_unavailable_queries,
         project_manifest=project_manifest,
         document_manifest=document_manifest,

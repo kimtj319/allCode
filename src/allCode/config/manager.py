@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import ValidationError
@@ -31,7 +32,7 @@ from allCode.config.defaults import (
     PROJECT_CONFIG_RELATIVE_PATH,
 )
 from allCode.config.env_file import load_project_env
-from allCode.config.schema import AppConfig
+from allCode.config.schema import AppConfig, ConfigFileSource, ConfigSourceReport, DotenvSource
 
 
 class ConfigError(RuntimeError):
@@ -59,6 +60,12 @@ class ConfigOverrides:
         return data
 
 
+@dataclass(frozen=True)
+class ConfigLoadResult:
+    config: AppConfig
+    report: ConfigSourceReport
+
+
 class ConfigManager:
     """Single entrypoint for allCode configuration."""
 
@@ -80,24 +87,57 @@ class ConfigManager:
         return os.environ
 
     def load(self, overrides: ConfigOverrides | None = None) -> AppConfig:
+        return self.load_with_report(overrides).config
+
+    def load_with_report(self, overrides: ConfigOverrides | None = None) -> ConfigLoadResult:
         cli = overrides or ConfigOverrides()
         merged = AppConfig().model_dump(mode="python")
+        config_sources: list[ConfigFileSource] = []
+        dotenv_sources: list[DotenvSource] = []
 
         user_config_path = self._select_user_config_path(cli.config_path)
-        self._deep_merge(merged, self._load_yaml_if_present(user_config_path))
+        user_data = self._load_yaml_if_present(user_config_path)
+        config_sources.append(ConfigFileSource(path=str(user_config_path), loaded=bool(user_data), source_type="user"))
+        self._deep_merge(merged, user_data)
 
         project_root = self._project_root_for_config(merged, cli)
         project_config_path = project_root / PROJECT_CONFIG_RELATIVE_PATH
-        self._deep_merge(merged, self._load_yaml_if_present(project_config_path))
-        self._load_project_env(project_root)
+        project_data = self._load_yaml_if_present(project_config_path)
+        config_sources.append(ConfigFileSource(path=str(project_config_path), loaded=bool(project_data), source_type="project"))
+        self._deep_merge(merged, project_data)
+        launch_config_used = False
+        if not project_data and self._launch_config_fallback_allowed(cli):
+            launch_config_path = Path.cwd() / PROJECT_CONFIG_RELATIVE_PATH
+            if not _same_path(launch_config_path, project_config_path):
+                launch_data = self._load_yaml_if_present(launch_config_path)
+                config_sources.append(
+                    ConfigFileSource(path=str(launch_config_path), loaded=bool(launch_data), source_type="launch")
+                )
+                if launch_data:
+                    self._deep_merge(merged, launch_data)
+                    launch_config_used = True
+        dotenv_sources.extend(self._load_project_env(project_root))
 
-        self._deep_merge(merged, self._env_overrides())
-        self._deep_merge(merged, cli.to_nested_dict())
+        env_overrides = self._env_overrides()
+        self._deep_merge(merged, env_overrides)
+        cli_overrides = cli.to_nested_dict()
+        self._deep_merge(merged, cli_overrides)
 
         try:
-            return AppConfig.model_validate(merged)
+            config = AppConfig.model_validate(merged)
         except ValidationError as exc:
             raise ConfigError(f"Invalid allCode configuration: {exc}") from exc
+        return ConfigLoadResult(
+            config=config,
+            report=self._build_report(
+                config,
+                config_sources=config_sources,
+                dotenv_sources=dotenv_sources,
+                env_overrides=sorted(env_overrides.keys()),
+                cli_overrides=_nested_override_keys(cli_overrides),
+                launch_config_used=launch_config_used,
+            ),
+        )
 
     def _select_user_config_path(self, cli_config_path: str | None) -> Path:
         if cli_config_path:
@@ -135,8 +175,22 @@ class ConfigManager:
             raise ConfigError(f"Config file {path} must contain a mapping")
         return loaded
 
-    def _load_project_env(self, project_root: Path) -> None:
-        load_project_env(project_root / ".env", self._mutable_environ(), override=False)
+    def _load_project_env(self, project_root: Path) -> list[DotenvSource]:
+        environ = self._mutable_environ()
+        sources: list[DotenvSource] = []
+        project_env = project_root / ".env"
+        loaded = load_project_env(project_env, environ, override=False)
+        if project_env.exists():
+            sources.append(DotenvSource(path=str(project_env), loaded_keys=sorted(loaded.keys())))
+        if self._environ is not None:
+            return sources
+        cwd_env = Path.cwd() / ".env"
+        if _same_path(project_env, cwd_env):
+            return sources
+        loaded = load_project_env(cwd_env, environ, override=False)
+        if cwd_env.exists():
+            sources.append(DotenvSource(path=str(cwd_env), loaded_keys=sorted(loaded.keys())))
+        return sources
 
     def _mutable_environ(self) -> MutableMapping[str, str]:
         if self._environ is not None:
@@ -178,6 +232,36 @@ class ConfigManager:
             data.setdefault("source_intelligence", {})["lsp_timeout_ms"] = env[ENV_LSP_TIMEOUT_MS]
         return data
 
+    def _launch_config_fallback_allowed(self, cli: ConfigOverrides) -> bool:
+        return self._environ is None and not cli.config_path and not self.environ.get(ENV_CONFIG_PATH)
+
+    def _build_report(
+        self,
+        config: AppConfig,
+        *,
+        config_sources: list[ConfigFileSource],
+        dotenv_sources: list[DotenvSource],
+        env_overrides: list[str],
+        cli_overrides: list[str],
+        launch_config_used: bool,
+    ) -> ConfigSourceReport:
+        api_key_env = config.model.api_key_env
+        return ConfigSourceReport(
+            config_files=config_sources,
+            dotenv_files=dotenv_sources,
+            env_overrides=env_overrides,
+            cli_overrides=cli_overrides,
+            workspace_root=config.workspace.root,
+            model_name=config.model.model_name,
+            base_url=_display_url(config.model.base_url),
+            api_key_env=api_key_env,
+            api_key_present=bool(self.environ.get(api_key_env)),
+            approval_mode=config.approval.mode,
+            web_backend=config.web.backend,
+            web_search_host=_display_url(config.web.search_url),
+            launch_config_fallback_used=launch_config_used,
+        )
+
     @classmethod
     def _deep_merge(cls, target: dict[str, Any], source: Mapping[str, Any]) -> None:
         for key, value in source.items():
@@ -189,3 +273,34 @@ class ConfigManager:
 
 def _truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except OSError:
+        return left.expanduser().absolute() == right.expanduser().absolute()
+
+
+def _nested_override_keys(data: Mapping[str, Any], *, prefix: str = "") -> list[str]:
+    keys: list[str] = []
+    for key, value in data.items():
+        name = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, Mapping):
+            keys.extend(_nested_override_keys(value, prefix=name))
+        else:
+            keys.append(name)
+    return sorted(keys)
+
+
+def _display_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        return value
+    host = parsed.netloc
+    if "@" in host:
+        host = host.rsplit("@", 1)[-1]
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{host}{path}"

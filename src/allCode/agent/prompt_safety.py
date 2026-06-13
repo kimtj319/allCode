@@ -7,6 +7,16 @@ from collections.abc import Sequence
 
 READ_ONLY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
+        r"(?:코드\s*|파일\s*)?(?:수정|변경|편집|삭제)"
+        r"(?:은|는|을|를|도)?\s*(?:없이|하지\s*않고|하지않고)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"파일\s*(?:변경|수정|삭제)"
+        r"(?:은|는|을|를|도)?\s*(?:없이|하지\s*않고|하지않고)",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"(?:코드\s*)?(?:파일\s*)?(?:수정|변경|편집|삭제|작성|생성)"
         r"(?:은|는|이|가|도|만)?\s*(?:절대\s*)?(?:엄격히\s*)?"
         r"(?:금지|불가|하지\s*마|하지마|하지\s*말|하지말|마라|않)",
@@ -67,7 +77,14 @@ _READ_ONLY_NEGATION_TOKENS = (
 def read_only_pattern_matched(prompt: str) -> bool:
     """Return true when the prompt contains a generic no-mutation constraint."""
 
-    return any(pattern.search(prompt) for pattern in READ_ONLY_PATTERNS) or read_only_clause_matched(prompt)
+    matched = any(pattern.search(prompt) for pattern in READ_ONLY_PATTERNS) or read_only_clause_matched(prompt)
+    if matched and read_only_scope_exception_matched(prompt):
+        return False
+    return matched
+
+
+def read_only_scope_exception_matched(prompt: str) -> bool:
+    return _scoped_non_mutation_exception(prompt) and not _strong_read_only_marker(prompt)
 
 
 def read_only_clause_matched(prompt: str) -> bool:
@@ -118,6 +135,41 @@ def scoped_output_mutation_allowed(prompt: str) -> bool:
 
 def _contains_any(text: str, tokens: Sequence[str]) -> bool:
     return any(token.lower().replace(" ", "") in text for token in tokens)
+
+
+def _scoped_non_mutation_exception(prompt: str) -> bool:
+    compact = re.sub(r"\s+", "", prompt).lower()
+    scope_markers = (
+        "수정하지않을파일",
+        "변경하지않을파일",
+        "건드리지않을파일",
+        "수정하지않는파일",
+        "변경하지않는파일",
+    )
+    exclusion_markers = ("제외", "빼고", "나머지")
+    mutation_markers = ("수정해줘", "변경해줘", "고쳐줘", "추가해줘", "수정해주세요", "변경해주세요")
+    return (
+        any(marker in compact for marker in scope_markers)
+        and any(marker in compact for marker in exclusion_markers)
+        and any(marker in compact for marker in mutation_markers)
+    )
+
+
+def _strong_read_only_marker(prompt: str) -> bool:
+    compact = re.sub(r"\s+", "", prompt).lower()
+    return any(
+        marker in compact
+        for marker in (
+            "수정금지",
+            "변경금지",
+            "파일변경금지",
+            "파일수정금지",
+            "엄격히금지",
+            "절대수정",
+            "절대변경",
+            "파일생성금지",
+        )
+    )
 
 
 def append_marker_if_matched(matched: list[str], marker: str, *, condition: bool) -> None:

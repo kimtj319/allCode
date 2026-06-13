@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from allCode.core.models import CoreModel
-from allCode.tui.transcript_cells import TranscriptCell, assistant_cell
+from allCode.tui.transcript_cells import TranscriptCell, assistant_cell, streaming_assistant_cell
 
 
 class TranscriptState(CoreModel):
@@ -23,7 +23,7 @@ class TranscriptState(CoreModel):
 
     def ensure_active_assistant(self) -> TranscriptCell:
         if self.active_cell is None:
-            self.active_cell = assistant_cell("").model_copy(update={"kind": "assistant_stream", "transient": True})
+            self.active_cell = streaming_assistant_cell("")
         return self.active_cell
 
     def append_active_delta(self, delta: str) -> None:

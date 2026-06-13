@@ -20,10 +20,12 @@ def path_hints(prompt: str) -> list[str]:
     paths: list[str] = []
     for match in PATH_PATTERN.finditer(prompt):
         value = match.group("path").lstrip("@")
+        if not prompt_path_hint_allowed(value, prompt=prompt, span=match.span("path")):
+            continue
         if value not in paths:
             paths.append(value)
     first = extract_prompt_path(prompt)
-    if first and first not in paths:
+    if first and first not in paths and prompt_path_hint_allowed(first, prompt=prompt):
         paths.insert(0, first)
     lowered = prompt.lower()
     for directory in COMMON_WORKSPACE_DIRS:
@@ -32,6 +34,56 @@ def path_hints(prompt: str) -> list[str]:
         if re.search(rf"(?<![A-Za-z0-9_.-]){re.escape(directory)}(?![A-Za-z0-9_.-])", lowered):
             paths.append(directory)
     return paths
+
+
+def prompt_path_hint_allowed(path: str, *, prompt: str, span: tuple[int, int] | None = None) -> bool:
+    normalized = path.strip().strip("`").replace("\\", "/")
+    while normalized.startswith("@"):
+        normalized = normalized[1:]
+    if not normalized:
+        return False
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized.startswith(("/", "../")):
+        return True
+    first = normalized.split("/", 1)[0]
+    name = normalized.rsplit("/", 1)[-1]
+    if "." in name and not name.endswith("."):
+        return True
+    if name.lower() in _ALLOWED_EXTENSIONLESS_PATH_NAMES:
+        return True
+    if first in COMMON_WORKSPACE_DIRS or first in _OUTPUT_DIRECTORY_ROOTS:
+        return True
+    if span is not None and _directory_context_near(prompt, span):
+        return True
+    return False
+
+
+def _directory_context_near(prompt: str, span: tuple[int, int]) -> bool:
+    start, end = span
+    before = prompt[max(0, start - 24) : start].lower()
+    after = prompt[end : min(len(prompt), end + 24)].lower()
+    context = before + " " + after
+    english_markers = (" under", " inside", " in ", " directory", " folder", " path")
+    korean_markers = ("아래", "하위", "내부", "안에", "디렉터리", "디렉토리", "폴더", "경로")
+    return any(marker in context for marker in english_markers) or any(marker in context for marker in korean_markers)
+
+
+_OUTPUT_DIRECTORY_ROOTS = frozenset({"output", "dist", "build", "examples", "apps", "packages"})
+_ALLOWED_EXTENSIONLESS_PATH_NAMES = frozenset(
+    {
+        "readme",
+        "license",
+        "copying",
+        "notice",
+        "makefile",
+        "dockerfile",
+        "procfile",
+        "justfile",
+        "rakefile",
+        "gemfile",
+    }
+)
 
 
 def directory_output_hint(paths: list[str], *, prompt: str, mutation_requested: bool) -> bool:

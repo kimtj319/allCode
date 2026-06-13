@@ -18,6 +18,39 @@ def test_prompt_constraints_detects_korean_do_not_modify_sentence() -> None:
     assert constraints.validation_requested_hint is True
 
 
+def test_prompt_constraints_detects_korean_without_modification_phrase() -> None:
+    constraints = PromptConstraintExtractor().extract(
+        "방금 생성한 tmp/example.py의 주요 명령 구조를 코드 수정 없이 짧게 설명해줘."
+    )
+
+    assert constraints.read_only_requested is True
+    assert constraints.mutation_requested_hint is False
+    assert constraints.path_hints == ["tmp/example.py"]
+
+
+def test_prompt_constraints_does_not_treat_dependency_without_as_read_only() -> None:
+    constraints = PromptConstraintExtractor().extract("외부 패키지 없이 작은 CLI를 구현해줘.")
+
+    assert constraints.stdlib_only_requested is True
+    assert constraints.read_only_requested is False
+    assert constraints.mutation_requested_hint is True
+
+
+def test_prompt_constraints_does_not_treat_file_creation_without_as_read_only_modify_blocker() -> None:
+    constraints = PromptConstraintExtractor().extract("파일 생성 없이 기존 코드만 수정해줘.")
+
+    assert constraints.read_only_requested is False
+    assert constraints.mutation_requested_hint is True
+
+
+def test_prompt_constraints_does_not_treat_excluded_non_mutation_scope_as_global_read_only() -> None:
+    constraints = PromptConstraintExtractor().extract("수정하지 않을 파일은 제외하고 app.py를 변경해주세요.")
+
+    assert constraints.read_only_requested is False
+    assert constraints.mutation_requested_hint is True
+    assert constraints.path_hints == ["app.py"]
+
+
 def test_prompt_constraints_read_only_pattern_overrides_mutation_hint() -> None:
     constraints = PromptConstraintExtractor().extract("src 내 코드를 정리해줘. 코드 수정은 엄격히 금지한다")
 
@@ -116,6 +149,14 @@ def test_prompt_constraints_detects_unstable_business_knowledge_without_workspac
     assert constraints.workspace_evidence_requested is False
 
 
+def test_prompt_constraints_detects_explicit_korean_web_evidence_request() -> None:
+    constraints = PromptConstraintExtractor().extract("웹 근거를 사용해서 OpenAI와 SearXNG를 설명해줘.")
+
+    assert constraints.external_knowledge_hint is True
+    assert constraints.no_external_network is False
+    assert constraints.workspace_evidence_requested is False
+
+
 def test_prompt_constraints_suppresses_external_for_general_principle_scope() -> None:
     constraints = PromptConstraintExtractor().extract(
         "RAG 시스템에서 latency, cost trade-off를 최신 수치가 아니라 일반 원칙 중심으로 설명해줘."
@@ -146,6 +187,25 @@ def test_prompt_constraints_distinguishes_answer_only_code_artifact_from_workspa
     assert constraints.code_artifact_hint is True
     assert constraints.workspace_evidence_requested is False
     assert constraints.path_hints == []
+
+
+def test_prompt_constraints_do_not_treat_slash_separated_commands_as_paths() -> None:
+    constraints = PromptConstraintExtractor().extract(
+        "현재 작업공간에 Python 표준 라이브러리만 사용하는 notes CLI 미니 프로젝트를 만들어줘. "
+        "요구사항: notes_cli.py, tests/test_notes_cli.py를 만들고 add/list 명령과 JSON 파일 저장을 지원해."
+    )
+
+    assert constraints.path_hints == ["notes_cli.py", "tests/test_notes_cli.py", "tests"]
+    assert constraints.mutation_requested_hint is True
+    assert constraints.project_generation_hint is True
+
+
+def test_prompt_constraints_keep_extensionless_directory_path_when_context_says_directory() -> None:
+    constraints = PromptConstraintExtractor().extract(
+        "./output/jsonl_viewer 안에 표준 라이브러리만 사용하는 Python 패키지형 CLI를 생성해줘."
+    )
+
+    assert constraints.primary_target_hint == "./output/jsonl_viewer"
 
 
 def test_prompt_constraints_treats_existing_file_ban_with_output_scope_as_mutation() -> None:

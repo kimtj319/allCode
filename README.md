@@ -81,9 +81,13 @@ python -m pip install -r requirements.txt
 - `ALLCODE_API_KEY_ENV`: API key를 담고 있는 다른 환경 변수명.
 - `ALLCODE_WORKSPACE`: workspace root.
 - `ALLCODE_APPROVAL_MODE`: `ask`, `auto`, `rules`.
-- `ALLCODE_WEB_SEARCH_URL`: provider-neutral HTTP JSON web search endpoint.
+- `ALLCODE_WEB_SEARCH_BACKEND`: `duckduckgo_html`, `searxng`, `http_json`,
+  `disabled`. 기본값은 별도 토큰이 필요 없는 `duckduckgo_html`입니다.
+- `ALLCODE_WEB_SEARCH_URL`: web search endpoint. `duckduckgo_html` 기본값은
+  `https://html.duckduckgo.com/html/`입니다.
 - `ALLCODE_WEB_SEARCH_API_KEY_ENV`: web search endpoint token을 담은 환경 변수명.
 - `ALLCODE_WEB_SEARCH_TIMEOUT`: web search timeout seconds.
+- `ALLCODE_WEB_SEARCH_LANGUAGE`: SearXNG backend에서 사용할 기본 언어.
 
 config 파일에는 API key 값을 저장하지 않고, API key가 들어 있는 환경 변수명만
 저장합니다.
@@ -269,9 +273,13 @@ python -m pytest tests/tty
   rendering을 제공합니다. Codex와 완전히 동일한 editor 기능이나 diff review
   UX는 아직 구현 범위 밖입니다.
 - Textual UI는 선택형 fallback UI입니다. 기본 UX 기준은 terminal-native UI입니다.
-- web search는 `web.search_url`이 설정된 HTTP JSON provider가 있을 때만 live
-  search를 수행합니다. `web_fetch`는 MVP에서 실제 URL fetch가 아니라 호출자가
-  주입한 page content를 evidence bundle로 정규화합니다.
+- web search는 기본적으로 `duckduckgo_html` backend가 활성화되어 live search를
+  시도합니다. `searxng` 또는 `http_json` backend로 교체할 수 있고, 명시적으로
+  `disabled`를 설정하면 검색을 끌 수 있습니다. 네트워크 차단 환경이나 검색
+  결과 파싱 실패 시에는 raw HTML을 출력하지 않고 unavailable/error evidence로
+  처리합니다.
+- `web_fetch`는 backend가 `disabled`가 아닐 때 실제 URL fetch를 시도하며, HTML은
+  script/style/markup을 제거한 evidence bundle로 정규화합니다.
 - 기본 `approval.mode=ask`에서는 file mutation과 일반 shell command가
   approval_required 결과로 중단됩니다. 자동 코딩/검증 smoke에는
   `--approval auto` 또는 session allow rule이 필요할 수 있습니다.

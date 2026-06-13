@@ -40,11 +40,6 @@ def read_file_code_summaries(results: list[ToolResult], *, max_files: int = 6) -
     return summaries
 
 
-def summarize_code(*, path: str, content: str) -> CodeStructureSummary:
-    analysis = SourceIntelligenceService().analyze_text(path=path, text=_strip_evidence_bundle(content))
-    return _summary_from_analysis(analysis)
-
-
 def _summary_from_analysis(analysis: SourceFileAnalysis) -> CodeStructureSummary:
     classes: list[str] = []
     functions: list[str] = []

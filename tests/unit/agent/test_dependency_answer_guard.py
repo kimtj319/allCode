@@ -110,6 +110,87 @@ def test_dependency_guard_allows_stdlib_and_local_package_imports() -> None:
     assert violation is None
 
 
+def test_dependency_guard_allows_explicit_local_module_file_imports() -> None:
+    answer = "\n".join(
+        [
+            "`config.py`",
+            "```python",
+            "from config import Settings",
+            "import argparse",
+            "```",
+        ]
+    )
+
+    violation = dependency_answer_violation(answer=answer, routing=_route())
+
+    assert violation is None
+
+
+def test_dependency_guard_does_not_allow_known_third_party_via_local_file_comment() -> None:
+    answer = "\n".join(
+        [
+            "```python",
+            "# file: requests.py",
+            "import requests",
+            "```",
+        ]
+    )
+
+    violation = dependency_answer_violation(answer=answer, routing=_route())
+
+    assert violation is not None
+    assert violation.reason == "dependency_constraint_third_party_package"
+
+
+def test_dependency_guard_does_not_allow_unknown_import_from_url_file_reference() -> None:
+    answer = "\n".join(
+        [
+            "참고 URL: https://example.com/libs/my_helper.py",
+            "```python",
+            "import my_helper",
+            "```",
+        ]
+    )
+
+    violation = dependency_answer_violation(answer=answer, routing=_route())
+
+    assert violation is not None
+    assert violation.reason == "dependency_constraint_non_stdlib_import"
+
+
+def test_dependency_guard_does_not_treat_pyc_or_backup_as_local_module() -> None:
+    answer = "\n".join(
+        [
+            "`config.pyc`",
+            "```python",
+            "import config",
+            "```",
+        ]
+    )
+
+    violation = dependency_answer_violation(answer=answer, routing=_route())
+
+    assert violation is not None
+    assert violation.reason == "dependency_constraint_non_stdlib_import"
+
+
+def test_dependency_guard_ignores_relative_imports_and_allows_dynamic_stdlib_imports() -> None:
+    answer = "\n".join(
+        [
+            "```python",
+            "from .helper import run",
+            "import importlib",
+            "module = importlib.import_module('os')",
+            "other = __import__('sys')",
+            "```",
+        ]
+    )
+
+    violation = dependency_answer_violation(answer=answer, routing=_route())
+
+    assert violation is None
+
+
 def test_dependency_guard_detects_non_python_install_commands() -> None:
     npm_violation = dependency_answer_violation(answer="npm install cheerio", routing=_route())
     cargo_violation = dependency_answer_violation(answer="cargo add anyhow", routing=_route())

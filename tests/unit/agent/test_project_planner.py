@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 
 from allCode.agent.project_planner import ModelProjectPlanner
+from allCode.agent.project_plan_quality import project_plan_quality_errors
+from allCode.agent.task_plan import ApiObligation, PlannedFile, ProjectPlan
 from allCode.core.models import Message
 from allCode.llm.settings import ModelSettings
 from tests.helpers.fake_llm import FakeLLMClient
@@ -287,3 +289,126 @@ def test_model_project_planner_normalizes_flat_python_package_layout() -> None:
     assert "__init__.py" not in paths
     assert "cli.py" not in paths
     assert plan.validation_commands[0].cwd == "output/flat-cli"
+
+
+def test_model_project_planner_filters_command_like_file_paths() -> None:
+    llm = FakeLLMClient.text(
+        """
+        {
+          "target_root": "sample_tool",
+          "language": "python",
+          "files": [
+            {
+              "path": "src/sample_tool/main.py",
+              "purpose": "entrypoint",
+              "stage": "implementation",
+              "content": "def main():\\n    return 0\\n",
+              "required": true
+            },
+            {
+              "path": "tests/test_main.py",
+              "purpose": "tests",
+              "stage": "tests",
+              "content": "from sample_tool.main import main\\n\\ndef test_main():\\n    assert main() == 0\\n",
+              "required": true
+            },
+            {
+              "path": "add/list",
+              "purpose": "add/list commands",
+              "stage": "implementation",
+              "content": "# command names are not file artifacts\\n",
+              "required": true
+            },
+            {
+              "path": "Makefile",
+              "purpose": "build commands",
+              "stage": "implementation",
+              "content": "test:\\n\\tpython -m pytest\\n",
+              "required": true
+            },
+            {
+              "path": "bin/run-service",
+              "purpose": "executable entrypoint script",
+              "stage": "implementation",
+              "content": "#!/usr/bin/env sh\\npython -m sample_tool.main\\n",
+              "required": true
+            }
+          ],
+          "validation_commands": [],
+          "tasks": []
+        }
+        """
+    )
+
+    async def scenario():
+        return await ModelProjectPlanner(
+            llm_client=llm,
+            settings=ModelSettings(model_name="fake", api_key_env="FAKE_API_KEY"),
+        ).create_plan("Create a notes CLI with add/list commands.", target_hint="sample_tool")
+
+    plan = asyncio.run(scenario())
+
+    assert plan is not None
+    paths = {file.path for file in plan.files}
+    assert "src/sample_tool/main.py" in paths
+    assert "tests/test_main.py" in paths
+    assert "Makefile" in paths
+    assert "bin/run-service" in paths
+    assert "add/list" not in paths
+
+
+def test_project_plan_quality_gate_requires_tests_for_api_obligations() -> None:
+    plan = ProjectPlan(
+        target_root="sample_tool",
+        language="python",
+        files=[
+            PlannedFile(
+                path="src/sample_tool/store.py",
+                purpose="public API",
+                stage="implementation",
+                content="class TaskStore:\n    def add(self, title):\n        return title\n",
+            )
+        ],
+        api_obligations=[
+            ApiObligation(path="src/sample_tool/store.py", symbol="TaskStore"),
+            ApiObligation(path="src/sample_tool/store.py", symbol="TaskStore.add"),
+        ],
+    )
+
+    errors = project_plan_quality_errors(plan, "Create a tested task store package.")
+
+    assert "api obligations have no planned test coverage" in errors
+    assert any("omits validation commands" in error for error in errors)
+
+
+def test_project_plan_quality_gate_accepts_obligation_covered_plan() -> None:
+    plan = ProjectPlan(
+        target_root="sample_tool",
+        language="python",
+        files=[
+            PlannedFile(
+                path="src/sample_tool/store.py",
+                purpose="public API",
+                stage="implementation",
+                content="class TaskStore:\n    def add(self, title):\n        return title\n",
+            ),
+            PlannedFile(
+                path="tests/test_store.py",
+                purpose="behavior tests",
+                stage="tests",
+                content=(
+                    "from sample_tool.store import TaskStore\n\n"
+                    "def test_add():\n"
+                    "    store = TaskStore()\n"
+                    "    assert store.add('a') == 'a'\n"
+                ),
+            ),
+        ],
+        validation_commands=[{"command": "python -m pytest", "cwd": "sample_tool"}],
+        api_obligations=[
+            ApiObligation(path="src/sample_tool/store.py", symbol="TaskStore"),
+            ApiObligation(path="src/sample_tool/store.py", symbol="TaskStore.add"),
+        ],
+    )
+
+    assert project_plan_quality_errors(plan, "Create a tested task store package.") == []

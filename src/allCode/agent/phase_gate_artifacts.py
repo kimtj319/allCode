@@ -10,6 +10,7 @@ from allCode.agent.artifact_detection import (
     prompt_requests_documents as _prompt_requests_documents,
     prompt_requests_tests as _prompt_requests_tests,
 )
+from allCode.agent.prompt_constraint_detection import prompt_path_hint_allowed
 from allCode.core.path_patterns import extract_prompt_paths
 from allCode.core.result import CompletionEvidence, RequestedArtifact
 
@@ -32,6 +33,8 @@ def ensure_requested_artifacts(
     mutation_route = routing is not None and getattr(routing, "requires_mutation", False)
     if mutation_route:
         for path in extract_prompt_paths(prompt):
+            if not prompt_path_hint_allowed(path, prompt=prompt):
+                continue
             kind = _artifact_kind_for_path(path, workspace_root=workspace_root)
             _add_requested_artifact(
                 evidence,

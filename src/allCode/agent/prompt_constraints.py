@@ -38,6 +38,7 @@ from allCode.agent.prompt_constraint_terms import (
 from allCode.agent.prompt_safety import (
     append_marker_if_matched,
     has_any_term,
+    read_only_scope_exception_matched,
     read_only_clause_matched,
     read_only_pattern_matched,
     scoped_output_mutation_allowed,
@@ -114,7 +115,12 @@ class PromptConstraintExtractor:
         read_only_pattern = read_only_pattern_matched(prompt)
         read_only_clause = read_only_clause_matched(prompt)
         scoped_mutation_allowed = scoped_output_mutation_allowed(prompt)
-        read_only_requested = (has_any(self.READ_ONLY_TERMS) or read_only_pattern) and not scoped_mutation_allowed
+        read_only_term = has_any(self.READ_ONLY_TERMS)
+        read_only_requested = (
+            (read_only_term or read_only_pattern)
+            and not scoped_mutation_allowed
+            and not read_only_scope_exception_matched(prompt)
+        )
         append_marker_if_matched(matched, "read_only_pattern", condition=read_only_pattern)
         append_marker_if_matched(matched, "read_only_clause", condition=read_only_clause)
         append_marker_if_matched(matched, "scoped_output_mutation_allowed", condition=scoped_mutation_allowed)

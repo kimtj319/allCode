@@ -174,25 +174,6 @@ def build_phase_tool_gate(
     return PhaseToolGate()
 
 
-def validation_repair_phase_gate(
-    evidence: CompletionEvidence,
-    *,
-    workspace_root: str,
-    repair_context_read_paths: set[str] | None = None,
-) -> PhaseToolGate:
-    """Build the repair gate used by validation control tests and round runner."""
-
-    from allCode.agent.phase_gate_repair import validation_repair_gate
-
-    return validation_repair_gate(
-        phase="repair_mutation_required",
-        evidence=evidence,
-        workspace_root=workspace_root,
-        reason="validation failed and a repair mutation is required before revalidation",
-        repair_context_read_paths=repair_context_read_paths,
-    )
-
-
 def _recent_source_paths(evidence: CompletionEvidence) -> list[str]:
     paths: list[str] = []
     for path in [*evidence.created_files, *evidence.changed_files]:

@@ -19,10 +19,8 @@ def update_completion_evidence(result: ToolResult, evidence: CompletionEvidence,
         _record_source_overview_result(result, evidence, workspace_root=workspace_root)
     if result.name == "read_file":
         _record_read_result(result, evidence, workspace_root=workspace_root)
-    if result.name == "web_search" and result.error_type == "web_search_unavailable":
-        query = str(result.metadata.get("query") or "")
-        if query and query not in evidence.web_unavailable_queries:
-            evidence.web_unavailable_queries.append(query)
+    if result.name in {"web_search", "web_fetch"}:
+        _record_web_result(result, evidence)
     _record_validation_result(result, evidence)
     satisfy_requested_artifacts(evidence, workspace_root=workspace_root)
     if not result.ok:
@@ -60,6 +58,30 @@ def _record_search_result(result: ToolResult, evidence: CompletionEvidence) -> N
         path = str(match.get("path") or "")
         if path and path not in evidence.search_candidate_paths:
             evidence.search_candidate_paths.append(path)
+
+
+def _record_web_result(result: ToolResult, evidence: CompletionEvidence) -> None:
+    query_or_url = str(result.metadata.get("query") or result.metadata.get("url") or "")
+    if result.ok and result.metadata.get("evidence_kind") == "web_evidence":
+        count = _positive_int(result.metadata.get("evidence_count"))
+        if count:
+            evidence.web_evidence_count += count
+        if query_or_url and query_or_url not in evidence.web_evidence_queries:
+            evidence.web_evidence_queries.append(query_or_url)
+        return
+    if result.error_type in {"web_search_unavailable", "web_fetch_unavailable"} or result.metadata.get(
+        "evidence_kind"
+    ) in {"web_unavailable", "web_error", "web_no_results"}:
+        if query_or_url and query_or_url not in evidence.web_unavailable_queries:
+            evidence.web_unavailable_queries.append(query_or_url)
+
+
+def _positive_int(value: object) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(parsed, 0)
 
 
 def _record_inventory_result(result: ToolResult, evidence: CompletionEvidence) -> None:

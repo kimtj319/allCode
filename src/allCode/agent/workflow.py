@@ -9,6 +9,7 @@ from allCode.agent.completion_checker import CompletionChecker
 from allCode.agent.final_reporter import FinalReporter
 from allCode.agent.language import detect_response_language
 from allCode.agent.project_planner import ModelProjectPlanner
+from allCode.agent.project_plan_quality import project_plan_quality_errors
 from allCode.agent.router import RoutingDecision, RuleBasedRouter
 from allCode.agent.task_plan import ProjectPlan
 from allCode.agent.task_loop_digest import TaskLoopDigest, build_task_loop_digest
@@ -380,6 +381,8 @@ class GenerationWorkflow:
 
 
 def _model_plan_acceptable(plan: ProjectPlan, prompt: str) -> bool:
+    if project_plan_quality_errors(plan, prompt):
+        return False
     if plan.language.lower() != "python" or not _featureful_python_cli_prompt(prompt):
         return True
     source_symbols = set().union(*planned_public_api_symbols(plan).values()) if plan.files else set()

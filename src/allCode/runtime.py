@@ -23,7 +23,7 @@ from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.approval import ApprovalHandler, ApprovalManager
 from allCode.tools.registry import ToolRegistry
-from allCode.tools.web_provider import provider_from_config
+from allCode.tools.web_provider import fetch_provider_from_config, provider_from_config
 
 EventHandler = Callable[[AgentEvent], Awaitable[None]]
 TurnRunner = Callable[[str, EventHandler, ApprovalHandler | None], Awaitable[None]]
@@ -134,6 +134,7 @@ def runtime_tool_registry(config: AppConfig) -> ToolRegistry:
     return ToolRegistry(
         builtin_tools(
             web_search_provider=provider_from_config(config.web),
+            web_fetch_provider=fetch_provider_from_config(config.web),
         )
     )
 

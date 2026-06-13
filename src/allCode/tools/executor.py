@@ -236,6 +236,7 @@ class ToolExecutor:
         if self._approval_handler is not None:
             action = await self._approval_handler(
                 ApprovalRequest(
+                    approval_id=decision.approval_id,
                     tool_name=call.name,
                     decision=decision,
                     preview=decision.preview,

@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Sequence
 
+from allCode.agent.project_plan_paths import looks_like_planned_file_path
 from allCode.agent.task_plan import ApiObligation, PlannedFile, ProjectPlan, ValidationCommand
 from allCode.agent.workflow_report_artifact import ensure_requested_report_artifact
 from allCode.core.models import Message
@@ -190,6 +191,8 @@ def _sanitize_plan(plan: ProjectPlan, *, prompt: str = "", target_hint: str | No
         path = _safe_relative_path(planned_file.path)
         if path is None:
             return None
+        if not looks_like_planned_file_path(path, purpose=planned_file.purpose):
+            continue
         for root in (target_root, original_root):
             if root != "." and path.startswith(f"{root}/"):
                 path = path[len(root) + 1 :]

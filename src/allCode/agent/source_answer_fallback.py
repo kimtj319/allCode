@@ -34,8 +34,11 @@ def _render_ko(brief, *, user_prompt: str) -> str:
     lines = [
         "## 소스 분석 요약",
         "",
-        "관찰된 도구 근거만 기준으로 소스 분석을 정리합니다.",
+        "관찰된 도구 근거만 기준으로 소스 분석을 정리합니다. 아래 내용은 확인한 범위, 대표 파일, 패키지 역할, 실행 흐름을 분리한 구조 요약입니다.",
     ]
+    overview = _architecture_overview_line(brief, language="ko")
+    if overview:
+        lines.extend(["", overview])
     if brief.observed_paths:
         lines.extend(["", "### 관찰한 사실", "", "확인한 범위:"])
         lines.extend(f"- `{path}`" for path in brief.observed_paths[:10])
@@ -70,6 +73,10 @@ def _render_ko(brief, *, user_prompt: str) -> str:
         lines.extend(f"- {flow}" for flow in brief.inferred_flows[:8])
     if brief.package_roles or brief.entrypoints:
         lines.extend(["", "### 추론한 역할", ""])
+        role_table = _role_table(brief, language="ko")
+        if role_table:
+            lines.extend(role_table)
+            lines.append("")
         for role in brief.package_roles[:12]:
             lines.append(f"- `{role.path}`: {role.role}")
         if brief.entrypoints:
@@ -95,8 +102,11 @@ def _render_en(brief, *, user_prompt: str) -> str:
     lines = [
         "## Source Analysis Summary",
         "",
-        "This summary is based only on observed tool evidence.",
+        "This summary is based only on observed tool evidence. It separates checked scope, representative files, package roles, execution flow, and limitations.",
     ]
+    overview = _architecture_overview_line(brief, language="en")
+    if overview:
+        lines.extend(["", overview])
     if brief.observed_paths:
         lines.extend(["", "### Observed Facts", "", "Checked scope:"])
         lines.extend(f"- `{path}`" for path in brief.observed_paths[:10])
@@ -131,6 +141,10 @@ def _render_en(brief, *, user_prompt: str) -> str:
         lines.extend(f"- {flow}" for flow in brief.inferred_flows[:8])
     if brief.package_roles or brief.entrypoints:
         lines.extend(["", "### Inferred Roles", ""])
+        role_table = _role_table(brief, language="en")
+        if role_table:
+            lines.extend(role_table)
+            lines.append("")
         for role in brief.package_roles[:12]:
             lines.append(f"- `{role.path}`: {role.role}")
         if brief.entrypoints:
@@ -349,6 +363,40 @@ def _dedupe(items: list[str]) -> list[str]:
         if item and item not in seen:
             seen.append(item)
     return seen
+
+
+def _architecture_overview_line(brief, *, language: ResponseLanguage) -> str:
+    role_count = len(brief.package_roles)
+    representative_count = len(brief.representative_files)
+    flow_count = len(brief.inferred_flows)
+    if not any((role_count, representative_count, flow_count)):
+        return ""
+    if language == "ko":
+        return (
+            f"직접/간접 근거 기준으로 역할 영역 {role_count}개, 대표 파일 {representative_count}개, "
+            f"실행 흐름 단서 {flow_count}개를 확인했습니다."
+        )
+    return (
+        f"Observed evidence supports {role_count} role area(s), {representative_count} representative file(s), "
+        f"and {flow_count} execution-flow clue(s)."
+    )
+
+
+def _role_table(brief, *, language: ResponseLanguage) -> list[str]:
+    roles = brief.package_roles[:8]
+    if len(roles) < 2:
+        return []
+    if language == "ko":
+        rows = ["| 영역 | 추론 역할 |", "| --- | --- |"]
+    else:
+        rows = ["| Area | Inferred Role |", "| --- | --- |"]
+    for role in roles:
+        rows.append(f"| `{_escape_table(role.path)}` | {_escape_table(role.role)} |")
+    return rows
+
+
+def _escape_table(value: str) -> str:
+    return str(value or "").replace("|", "\\|")
 
 
 def _observed_flow_analysis_ko(brief) -> list[str]:

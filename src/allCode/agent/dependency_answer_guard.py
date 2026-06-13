@@ -6,6 +6,7 @@ import ast
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 from allCode.agent.prompt_constraint_terms import COMMON_WORKSPACE_DIRS
@@ -26,6 +27,19 @@ THIRD_PARTY_TERMS = (
     "sqlalchemy",
     "httpx",
     "aiohttp",
+)
+KNOWN_EXTERNAL_IMPORT_NAMES = frozenset(
+    {
+        *THIRD_PARTY_TERMS,
+        "bs4",
+        "boto3",
+        "paramiko",
+        "redis",
+        "beautifulsoup4",
+        "dotenv",
+        "jinja2",
+        "yaml",
+    }
 )
 
 INSTALL_PATTERNS = (
@@ -354,8 +368,45 @@ def _local_package_roots(answer: str) -> set[str]:
         if root in workspace_dirs and len(parts) > 1:
             root = parts[1]
         if root:
-            roots.add(root.replace("-", "_"))
+            _add_local_root(roots, root)
+    for module in _python_file_module_candidates(answer):
+        _add_local_root(roots, module)
     return roots
+
+
+def _python_file_module_candidates(answer: str) -> Iterable[str]:
+    for line in str(answer or "").splitlines():
+        if "://" in line:
+            continue
+        for match in re.finditer(r"(?<![A-Za-z0-9_.-])(?P<path>(?:[A-Za-z0-9_.-]+/)*[A-Za-z_][A-Za-z0-9_-]*\.py)(?![A-Za-z0-9_.-])", line):
+            path = match.group("path").strip().strip("`").replace("\\", "/")
+            if not _looks_like_local_python_file(path):
+                continue
+            name = Path(path).stem if "/" in path else path.removesuffix(".py")
+            if name and name != "__init__":
+                yield name
+
+
+def _looks_like_local_python_file(path: str) -> bool:
+    if not path.endswith(".py") or path.endswith((".pyc", ".pyo")):
+        return False
+    if "/" not in path:
+        return True
+    first = path.split("/", 1)[0]
+    if first in {".", ".."}:
+        return True
+    if first in COMMON_WORKSPACE_DIRS:
+        return True
+    return "." not in first
+
+
+def _add_local_root(roots: set[str], root: str) -> None:
+    normalized = root.strip().replace("-", "_")
+    if not normalized or not normalized.isidentifier():
+        return
+    if normalized.lower() in KNOWN_EXTERNAL_IMPORT_NAMES:
+        return
+    roots.add(normalized)
 
 
 def _term_is_rejected_or_negated(lowered_line: str, *, start: int, end: int) -> bool:

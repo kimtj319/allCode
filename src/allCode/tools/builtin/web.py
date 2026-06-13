@@ -11,7 +11,9 @@ from allCode.core.models import ToolCall, ToolResult
 from allCode.tools.base import ToolContext, ToolDefinition
 from allCode.tools.web_provider import (
     DisabledWebSearchProvider,
+    DisabledWebFetchProvider,
     WebEvidence,
+    WebFetchProvider,
     WebSearchProvider,
     WebSearchUnavailable,
 )
@@ -82,35 +84,61 @@ class WebSearchTool:
 
 
 class WebFetchTool:
-    definition = ToolDefinition(
-        name="web_fetch",
-        description="Return a structured evidence bundle from supplied page content.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "url": {"type": "string"},
-                "title": {"type": "string"},
-                "content": {"type": "string"},
+    def __init__(self, provider: WebFetchProvider | None = None) -> None:
+        self._provider = provider or DisabledWebFetchProvider()
+        self.definition = ToolDefinition(
+            name="web_fetch",
+            description="Collect a sanitized structured evidence bundle from a web page URL or supplied page content.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "max_chars": {"type": "integer", "minimum": 500, "maximum": 12000},
+                },
+                "required": ["url"],
+                "additionalProperties": True,
             },
-            "required": ["url"],
-            "additionalProperties": True,
-        },
-        read_only=True,
-        group="web",
-    )
+            read_only=True,
+            group="web",
+        )
 
     async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
         url = str(call.arguments["url"])
         content = str(call.arguments.get("content", ""))
         if not content:
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                ok=False,
-                error="web_fetch requires injected page content in this MVP.",
-                error_type="ExternalFetchUnavailable",
-                metadata={"url": url, "evidence_bundle": []},
-            )
+            if _network_suppressed(context.user_prompt) or context.environment.get("ALLCODE_NO_NETWORK"):
+                return _fetch_unavailable_result(
+                    call,
+                    url,
+                    reason="web_fetch was skipped because external network access is disabled for this turn.",
+                    health=WebHealth(backend="blocked", last_error_type="no_external_network", offline=True),
+                )
+            try:
+                evidence = await self._provider.fetch(url, max_chars=_max_chars(call.arguments.get("max_chars")))
+            except WebSearchUnavailable as exc:
+                return _fetch_unavailable_result(
+                    call,
+                    url,
+                    reason=str(exc),
+                    health=_provider_health(self._provider, last_error_type="web_fetch_unavailable"),
+                )
+            except Exception as exc:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    ok=False,
+                    error=f"web_fetch provider failed: {exc}",
+                    error_type=exc.__class__.__name__,
+                    metadata={
+                        "url": url,
+                        "evidence_kind": "web_error",
+                        "evidence_bundle": [],
+                        "web_health": health_payload(_provider_health(self._provider, last_error_type=exc.__class__.__name__)),
+                    },
+                )
+            return _fetch_bundle_result(call, evidence)
         evidence = {"title": str(call.arguments.get("title", "")), "url": url, "snippet": content[:500]}
         return ToolResult(
             call_id=call.id,
@@ -121,8 +149,8 @@ class WebFetchTool:
         )
 
 
-def web_tools(provider: WebSearchProvider | None = None) -> list:
-    return [WebSearchTool(provider), WebFetchTool()]
+def web_tools(provider: WebSearchProvider | None = None, fetch_provider: WebFetchProvider | None = None) -> list:
+    return [WebSearchTool(provider), WebFetchTool(fetch_provider)]
 
 
 def _top_n(value) -> int:
@@ -131,6 +159,14 @@ def _top_n(value) -> int:
     except (TypeError, ValueError):
         return 5
     return min(max(parsed, 1), 10)
+
+
+def _max_chars(value) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 5000
+    return min(max(parsed, 500), 12000)
 
 
 def _bundle_from_results(results: list, *, top_n: int) -> list[WebEvidence]:
@@ -180,6 +216,28 @@ def _bundle_result(call: ToolCall, query: str, bundle: list[WebEvidence]) -> Too
     )
 
 
+def _fetch_bundle_result(call: ToolCall, evidence: WebEvidence) -> ToolResult:
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        ok=True,
+        content=f"Collected page evidence for: {evidence.url}",
+        metadata={
+            "url": evidence.url,
+            "evidence_kind": "web_evidence",
+            "evidence_count": 1,
+            "evidence_bundle": [evidence.model_dump(mode="json")],
+            "web_health": health_payload(WebHealth(configured=True, backend="web_fetch", supports_json=False)),
+            "observation": {
+                "kind": "web",
+                "target": evidence.url,
+                "summary": "Collected 1 web page evidence item",
+                "risk": "low",
+            },
+        },
+    )
+
+
 def _unavailable_result(call: ToolCall, query: str, *, reason: str, health: WebHealth) -> ToolResult:
     unavailable = {
         "backend": health.backend,
@@ -196,6 +254,31 @@ def _unavailable_result(call: ToolCall, query: str, *, reason: str, health: WebH
         error_type="web_search_unavailable",
         metadata={
             "query": query,
+            "backend": health.backend,
+            "evidence_kind": "web_unavailable",
+            "unavailable": unavailable,
+            "evidence_bundle": [],
+            "web_health": health_payload(health),
+        },
+    )
+
+
+def _fetch_unavailable_result(call: ToolCall, url: str, *, reason: str, health: WebHealth) -> ToolResult:
+    unavailable = {
+        "backend": health.backend,
+        "url": url,
+        "reason": reason,
+        "next_step": "Configure ALLCODE_WEB_SEARCH_BACKEND and ALLCODE_WEB_SEARCH_URL.",
+    }
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        ok=False,
+        content="",
+        error=reason,
+        error_type="web_fetch_unavailable",
+        metadata={
+            "url": url,
             "backend": health.backend,
             "evidence_kind": "web_unavailable",
             "unavailable": unavailable,

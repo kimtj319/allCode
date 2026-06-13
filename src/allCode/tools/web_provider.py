@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import os
 import hashlib
+import re
+from html import unescape
+from html.parser import HTMLParser
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 
@@ -38,6 +41,14 @@ class WebSearchProvider(Protocol):
         raise NotImplementedError("web search providers must implement search")
 
 
+class WebFetchProvider(Protocol):
+    def health(self) -> WebHealth:
+        raise NotImplementedError("web fetch providers may expose health metadata")
+
+    async def fetch(self, url: str, *, max_chars: int = 5000) -> WebEvidence:
+        raise NotImplementedError("web fetch providers must implement fetch")
+
+
 class DisabledWebSearchProvider:
     def health(self) -> WebHealth:
         return WebHealth(
@@ -50,6 +61,20 @@ class DisabledWebSearchProvider:
     async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
         _ = query, top_n
         raise WebSearchUnavailable("web_search backend is disabled. Configure ALLCODE_WEB_SEARCH_BACKEND and ALLCODE_WEB_SEARCH_URL.")
+
+
+class DisabledWebFetchProvider:
+    def health(self) -> WebHealth:
+        return WebHealth(
+            configured=False,
+            backend="disabled",
+            supports_json=False,
+            last_error_type="web_fetch_unavailable",
+        )
+
+    async def fetch(self, url: str, *, max_chars: int = 5000) -> WebEvidence:
+        _ = url, max_chars
+        raise WebSearchUnavailable("web_fetch backend is disabled. Configure ALLCODE_WEB_SEARCH_BACKEND and ALLCODE_WEB_SEARCH_URL.")
 
 
 class HttpWebSearchProvider:
@@ -92,6 +117,118 @@ class HttpWebSearchProvider:
             response = await client.post(self._endpoint, json=payload, headers=headers)
             response.raise_for_status()
             return parse_web_evidence(response.json(), top_n=top_n)
+
+
+class HttpWebFetchProvider:
+    """Small HTTP fetch provider that returns sanitized text evidence."""
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: int = 15,
+        http_client: httpx.AsyncClient | None = None,
+        backend: str = "http_fetch",
+    ) -> None:
+        self._timeout_seconds = timeout_seconds
+        self._http_client = http_client
+        self._backend = backend
+
+    def health(self) -> WebHealth:
+        return WebHealth(configured=True, backend=self._backend, supports_json=False)
+
+    async def fetch(self, url: str, *, max_chars: int = 5000) -> WebEvidence:
+        if self._http_client is not None:
+            response = await self._http_client.get(url)
+            return self._parse_response(url, response, max_chars=max_chars)
+        async with httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=True) as client:
+            response = await client.get(url)
+            return self._parse_response(url, response, max_chars=max_chars)
+
+    def _parse_response(self, url: str, response: httpx.Response, *, max_chars: int) -> WebEvidence:
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        text = response.text
+        if "html" in content_type.lower() or "<html" in text.lower():
+            title, snippet = sanitize_html_to_text(text, max_chars=max_chars)
+        else:
+            title = ""
+            snippet = _collapse_ws(text)[:max_chars]
+        return WebEvidence(
+            title=title,
+            url=str(response.url) or url,
+            snippet=snippet,
+            source="web_fetch",
+            display_domain=_display_domain(str(response.url) or url),
+            snippet_hash=_snippet_hash(snippet),
+            retrieved_at=_utc_timestamp(),
+            rank=1,
+        )
+
+
+class DuckDuckGoHtmlSearchProvider:
+    """No-key HTML search provider that normalizes results into evidence."""
+
+    def __init__(
+        self,
+        *,
+        search_url: str = "https://html.duckduckgo.com/html/",
+        timeout_seconds: int = 15,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._search_url = search_url
+        self._timeout_seconds = timeout_seconds
+        self._http_client = http_client
+
+    def health(self) -> WebHealth:
+        return WebHealth(
+            configured=bool(self._search_url),
+            backend="duckduckgo_html",
+            search_url_host=host_from_url(self._search_url),
+            supports_json=False,
+        )
+
+    async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
+        params = {"q": query}
+        headers = {"User-Agent": "allCode/0.1 (+https://github.com/kimtj319/allCode)"}
+        if self._http_client is not None:
+            response = await self._http_client.get(self._search_url, params=params, headers=headers)
+            return self._parse_response(response, top_n=top_n)
+        async with httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=True) as client:
+            response = await client.get(self._search_url, params=params, headers=headers)
+            return self._parse_response(response, top_n=top_n)
+
+    def _parse_response(self, response: httpx.Response, *, top_n: int) -> list[WebEvidence]:
+        response.raise_for_status()
+        lowered_text = response.text.lower()
+        if "anomaly-modal" in lowered_text or "unfortunately, bots use duckduckgo too" in lowered_text:
+            raise WebSearchUnavailable("DuckDuckGo HTML search returned an anti-bot challenge instead of search results.")
+        parser = _DuckDuckGoHTMLParser(base_url=str(response.url))
+        parser.feed(response.text)
+        parser.close()
+        evidence: list[WebEvidence] = []
+        for row in parser.results:
+            title = _collapse_ws(row.get("title", ""))
+            url = _normalize_duckduckgo_url(row.get("url", ""))
+            snippet = _collapse_ws(row.get("snippet", ""))[:800]
+            if not title or not url:
+                continue
+            evidence.append(
+                WebEvidence(
+                    title=title,
+                    url=url,
+                    snippet=snippet,
+                    source="duckduckgo_html",
+                    display_domain=_display_domain(url),
+                    snippet_hash=_snippet_hash(snippet),
+                    retrieved_at=_utc_timestamp(),
+                    rank=len(evidence) + 1,
+                )
+            )
+            if len(evidence) >= top_n:
+                break
+        if not evidence:
+            raise WebSearchUnavailable("DuckDuckGo HTML search returned no parseable evidence.")
+        return evidence
 
 
 class SearxngSearchProvider:
@@ -148,6 +285,11 @@ class SearxngSearchProvider:
 def provider_from_config(config: WebConfig) -> WebSearchProvider:
     if config.backend == "disabled" or not config.search_url:
         return DisabledWebSearchProvider()
+    if config.backend == "duckduckgo_html":
+        return DuckDuckGoHtmlSearchProvider(
+            search_url=config.search_url,
+            timeout_seconds=config.timeout_seconds,
+        )
     if config.backend == "searxng":
         return SearxngSearchProvider(
             search_url=config.search_url,
@@ -160,6 +302,12 @@ def provider_from_config(config: WebConfig) -> WebSearchProvider:
         api_key_env=config.api_key_env,
         timeout_seconds=config.timeout_seconds,
     )
+
+
+def fetch_provider_from_config(config: WebConfig) -> WebFetchProvider:
+    if config.backend == "disabled":
+        return DisabledWebFetchProvider()
+    return HttpWebFetchProvider(timeout_seconds=config.timeout_seconds, backend=f"{config.backend}_fetch")
 
 
 def parse_web_evidence(payload: Any, *, top_n: int = 5) -> list[WebEvidence]:
@@ -208,6 +356,17 @@ def _display_domain(url: str) -> str | None:
     return parsed.netloc or None
 
 
+def _normalize_duckduckgo_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.path == "/l/" and parsed.query:
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        if target:
+            return unquote(target)
+    return url
+
+
 def _snippet_hash(snippet: str) -> str | None:
     if not snippet:
         return None
@@ -218,3 +377,101 @@ def _utc_timestamp() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def sanitize_html_to_text(html: str, *, max_chars: int = 5000) -> tuple[str, str]:
+    parser = _TextHTMLParser()
+    parser.feed(html)
+    parser.close()
+    title = _collapse_ws(parser.title)
+    text = _collapse_ws(" ".join(parser.parts))
+    return title, text[: max(0, max_chars)]
+
+
+def _collapse_ws(value: str) -> str:
+    collapsed = re.sub(r"\s+", " ", unescape(value or "")).strip()
+    return re.sub(r"\s+([.,;:!?])", r"\1", collapsed)
+
+
+class _TextHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.title = ""
+        self._ignored_depth = 0
+        self._in_title = False
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        _ = attrs
+        lowered = tag.lower()
+        if lowered in {"script", "style", "noscript", "svg", "canvas"}:
+            self._ignored_depth += 1
+            return
+        if lowered == "title":
+            self._in_title = True
+            return
+        if lowered in {"p", "br", "li", "section", "article", "h1", "h2", "h3"}:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.lower()
+        if lowered in {"script", "style", "noscript", "svg", "canvas"} and self._ignored_depth:
+            self._ignored_depth -= 1
+            return
+        if lowered == "title":
+            self._in_title = False
+            return
+        if lowered in {"p", "li", "section", "article", "h1", "h2", "h3"}:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored_depth:
+            return
+        cleaned = _collapse_ws(data)
+        if not cleaned:
+            return
+        if self._in_title:
+            self.title = f"{self.title} {cleaned}".strip()
+            return
+        self.parts.append(cleaned)
+
+
+class _DuckDuckGoHTMLParser(HTMLParser):
+    def __init__(self, *, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.results: list[dict[str, str]] = []
+        self._current: dict[str, str] | None = None
+        self._capture: str = ""
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = {str(key).lower(): str(value or "") for key, value in attrs}
+        classes = set(attributes.get("class", "").split())
+        if tag.lower() == "a" and "result__a" in classes:
+            self._flush_current()
+            href = attributes.get("href", "")
+            self._current = {"url": urljoin(self.base_url, href), "title": "", "snippet": ""}
+            self._capture = "title"
+            return
+        if self._current is not None and "result__snippet" in classes:
+            self._capture = "snippet"
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._capture == "title":
+            self._capture = ""
+
+    def handle_data(self, data: str) -> None:
+        if self._current is None or not self._capture:
+            return
+        key = self._capture
+        self._current[key] = f"{self._current.get(key, '')} {data}".strip()
+
+    def close(self) -> None:
+        self._flush_current()
+        super().close()
+
+    def _flush_current(self) -> None:
+        if self._current and (self._current.get("title") or self._current.get("url")):
+            self.results.append(self._current)
+        self._current = None
+        self._capture = ""
