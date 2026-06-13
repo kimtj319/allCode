@@ -37,7 +37,7 @@ PhaseName = Literal[
     "repair_exhausted",
 ]
 
-INSPECTION_TOOLS = {"read_file", "search_files", "list_directory"}
+INSPECTION_TOOLS = {"read_file", "search_files", "list_directory", "list_tree", "glob_files"}
 MUTATION_TOOLS = {"patch_file", "write_file"}
 VALIDATION_TOOLS = {"run_tests"}
 RELATED_TEST_DISCOVERY_TOOLS = {"search_files", "glob_files", "list_tree", "source_overview"}
@@ -162,7 +162,10 @@ def build_phase_tool_gate(
                 patch_ambiguous_files=ambiguous_files,
                 preferred_next_tools=["write_file"],
             )
-        allowed = {"read_file", *MUTATION_TOOLS} if inspection_budget_available else set(MUTATION_TOOLS)
+        # While inspection budget remains, allow the full read-only navigation set
+        # (not just read_file) so the model can locate every layer of a cross-cutting
+        # change before editing; once the budget is spent, lock to mutation.
+        allowed = {*INSPECTION_TOOLS, *MUTATION_TOOLS} if inspection_budget_available else set(MUTATION_TOOLS)
         return PhaseToolGate(
             phase="mutation_required",
             allowed_tool_names=allowed,

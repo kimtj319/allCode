@@ -58,8 +58,11 @@ class RoundRunner:
         tool_call_processor: ToolCallProcessor,
         stream_collector: ModelStreamCollector,
         max_rounds: int = 12,
-        inspect_action_budget: int = 5,
-        inspect_round_budget: int = 4,
+        # Multi-file, cross-cutting changes need to read several layers (config ->
+        # store -> service -> cli) before editing, so give the loop enough
+        # inspection room before it locks to mutation-only.
+        inspect_action_budget: int = 7,
+        inspect_round_budget: int = 6,
     ) -> None:
         self._event_bus = event_bus
         self._prompt_builder = prompt_builder
@@ -117,9 +120,13 @@ class RoundRunner:
                 action_budget=effective_inspect_action_budget,
                 round_budget=effective_inspect_round_budget,
             )
+            # Lock to mutation-only once the inspection budget is spent, or after
+            # several mutation nudges. A small threshold (2) prematurely blocked
+            # reads needed to understand a multi-file, cross-cutting change before
+            # editing; the inspection budget remains the primary backstop.
             lock_to_mutation = runtime.mutation_action_pending and (
                 not runtime.validation_repair_pending
-                and (not inspection_budget_available or recovery.mutation_action_requests >= 2)
+                and (not inspection_budget_available or recovery.mutation_action_requests >= 4)
             )
             phase_gate = build_phase_tool_gate(
                 prompt=turn_input.user_prompt,
