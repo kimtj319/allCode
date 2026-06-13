@@ -106,7 +106,9 @@ def final_answer_request_text(language: ResponseLanguage) -> str:
             "왜 막혔는지, 안전한 다음 단계가 무엇인지 명시하세요. "
             "소스 구조 분석에서는 source_overview의 주요 package role을 누락하지 말고, "
             "probe/read로 확인한 항목과 overview 기반 추론 항목을 구분하세요. "
-            "파일 경로, 명령어, 코드 식별자는 원문 그대로 유지하세요."
+            "파일 경로, 명령어, 코드 식별자는 원문 그대로 유지하세요. "
+            "답변은 간결하고 사실 위주로 작성하세요. 이모지·장식용 머리글·홍보성 표현"
+            "('자유롭게 확장해 보세요' 같은 권유 문구)을 쓰지 말고, 한 일과 결과만 담백하게 전달하세요."
         )
     return (
         "Write the final answer as user-visible assistant content, grounded in the observed tool results. "
@@ -115,7 +117,9 @@ def final_answer_request_text(language: ResponseLanguage) -> str:
         "explicitly say what was checked, why it is blocked, and what safe next step is available. "
         "For source-structure analysis, do not omit major package roles from source_overview; "
         "distinguish probe/read observations from overview-based inferences. "
-        "Preserve file paths, commands, and code identifiers exactly."
+        "Preserve file paths, commands, and code identifiers exactly. "
+        "Keep the answer concise and factual. Do not use emoji, decorative section banners, "
+        "or promotional phrasing (e.g. \"feel free to extend it\"); report only what you did and the result."
     )
 
 
