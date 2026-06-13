@@ -23,15 +23,37 @@ class MemoryStore:
         self.items_path = self.project_root / ".allCode" / "memory" / "items.jsonl"
         self.global_memory_path = self.global_config_dir / "ALLCODE.md"
         self.state_global_memory_path = (global_memory_path or DEFAULT_GLOBAL_MEMORY_PATH).expanduser()
+        # Standard project-instruction files used by other agents (Codex/Claude
+        # Code); loaded verbatim as a single project instruction for interop.
+        self.agents_instruction_paths = [
+            self.project_root / "AGENTS.md",
+            self.project_root / "CLAUDE.md",
+        ]
 
     async def load_active_items(self, *, cwd: Path) -> list[MemoryItem]:
         items: list[MemoryItem] = []
         items.extend(self._read_markdown(self.state_global_memory_path, scope="global"))
         items.extend(self._read_markdown(self.global_memory_path, scope="global"))
         items.extend(self._read_markdown(self.project_memory_path, scope="project"))
+        for path in self.agents_instruction_paths:
+            items.extend(self._read_instruction_file(path, scope="project"))
         items.extend(self._read_directory_memories(cwd))
         items.extend(self._read_structured_items())
         return [item for item in items if item.approved]
+
+    def _read_instruction_file(self, path: Path, *, scope, max_chars: int = 6000) -> list[MemoryItem]:
+        """Read a standard agent-instruction file (AGENTS.md/CLAUDE.md) as one item."""
+        if not path.exists() or not path.is_file():
+            return []
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return []
+        if not text:
+            return []
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip() + "\n[truncated]"
+        return [MemoryItem(scope=scope, kind="instruction", text=text, evidence=[str(path)])]
 
     async def add_item(self, item: MemoryItem) -> None:
         self.items_path.parent.mkdir(parents=True, exist_ok=True)
