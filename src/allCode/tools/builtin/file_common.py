@@ -79,16 +79,71 @@ def apply_exact_patches(content: str, patches: Any) -> str:
                 search_preview=search[:240],
             )
         count = updated.count(search)
-        if count != 1:
-            error_type = "patch_not_found" if count == 0 else "patch_ambiguous"
-            raise PatchApplicationError(
-                f"patch search must match exactly once, matched {count} times",
-                error_type=error_type,
-                match_count=count,
-                search_preview=search[:240],
-            )
-        updated = updated.replace(search, replace, 1)
+        if count == 1:
+            updated = updated.replace(search, replace, 1)
+            continue
+        if count == 0:
+            # The model's search block often differs only in leading/trailing
+            # whitespace. Fall back to a line-based match (whitespace-flexible)
+            # and reapply the file's own indentation to the replacement.
+            flexible = _apply_flexible_patch(updated, search, replace)
+            if flexible is not None:
+                updated = flexible
+                continue
+        error_type = "patch_not_found" if count == 0 else "patch_ambiguous"
+        raise PatchApplicationError(
+            f"patch search must match exactly once, matched {count} times",
+            error_type=error_type,
+            match_count=count,
+            search_preview=search[:240],
+        )
     return updated
+
+
+def _leading_ws(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _apply_flexible_patch(content: str, search: str, replace: str) -> str | None:
+    """Whitespace-flexible single-match fallback for apply_exact_patches.
+
+    Matches the search block against file lines ignoring per-line leading/trailing
+    whitespace, but only when exactly one contiguous run matches. The replacement
+    is re-indented by the difference between the file's matched indentation and
+    the search block's indentation so the result stays correctly indented.
+    Returns None when there is no unique match (caller then raises).
+    """
+    file_lines = content.split("\n")
+    search_lines = search.split("\n")
+    while search_lines and search_lines[-1] == "":
+        search_lines = search_lines[:-1]
+    if not search_lines:
+        return None
+    span = len(search_lines)
+    norm_search = [line.strip() for line in search_lines]
+    matches = [
+        index
+        for index in range(0, len(file_lines) - span + 1)
+        if [line.strip() for line in file_lines[index : index + span]] == norm_search
+    ]
+    if len(matches) != 1:
+        return None
+    start = matches[0]
+    window = file_lines[start : start + span]
+    # Indentation delta from the first line that has content on both sides.
+    indent_delta = ""
+    for file_line, search_line in zip(window, search_lines):
+        if file_line.strip() and search_line.strip():
+            file_indent, search_indent = _leading_ws(file_line), _leading_ws(search_line)
+            if file_indent.startswith(search_indent):
+                indent_delta = file_indent[len(search_indent) :]
+            break
+    replace_lines = replace.split("\n")
+    while replace_lines and replace_lines[-1] == "":
+        replace_lines = replace_lines[:-1]
+    adjusted = [(indent_delta + line) if line.strip() else line for line in replace_lines]
+    new_lines = file_lines[:start] + adjusted + file_lines[start + span :]
+    return "\n".join(new_lines)
 
 
 def _low_context_large_replacement(search: str, replace: str) -> bool:
