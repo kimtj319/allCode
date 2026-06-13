@@ -36,6 +36,26 @@ is not a formal benchmark score.
 
 Overall current estimate: 91-92%.
 
+## 2026-06-13 Codex-benchmarked session (TUI + analysis + modify)
+
+Direct cross-checks against the real Codex CLI (gpt-5.5) and agy on this repo:
+
+- TUI rendering: ~80% → ~97% (turn marker `•`+indent, `›` prompt, `━` table rule,
+  breathing `•` spinner, plain code blocks; see `plan/58`).
+- Project analysis (③): codex-rated 30% → 70% after fixing exploration targeting
+  (`.gitignore`-aware, code-first, entrypoint spine), removing scaffolding leak,
+  and relaxing the broad-analysis guard so the model authors the answer
+  (`plan/59`). Remaining 70→95 is body-level depth — largely bounded by the
+  wise-lloa-max model summarizing at import level (~5% detailed coverage).
+- Modification (④): harness now lets a modify turn read all layers before
+  mutating (`plan/60`), but wise-lloa-max did not emit patch_file/write_file for a
+  cross-cutting change that Codex completed — a model edit-emission limit.
+
+Key finding: with harness issues fixed, a meaningful part of the remaining
+Codex-parity gap on analysis/modification is the underlying model
+(vLLM wise-lloa-max vs Codex gpt-5.5), not allCode's harness. Harness limits and
+model limits should be tracked separately.
+
 ## Current Top Gaps
 
 1. External knowledge/web synthesis: agy can perform live web-backed report
