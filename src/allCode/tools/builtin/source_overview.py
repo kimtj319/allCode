@@ -23,7 +23,7 @@ from allCode.tools.builtin.source_overview_roles import (
 )
 from allCode.tools.builtin.source_query_relevance import path_query_relevance_score, query_relevance_tokens
 from allCode.tools.builtin.source_ranking import representative_reads_with_metadata
-from allCode.workspace.indexer import DEFAULT_IGNORE_DIRS, SOURCE_EXTENSIONS, WorkspaceIndex, WorkspaceIndexer
+from allCode.workspace.indexer import CODE_EXTENSIONS, DEFAULT_IGNORE_DIRS, SOURCE_EXTENSIONS, WorkspaceIndex, WorkspaceIndexer
 from allCode.workspace.roots import WorkspaceRoots
 
 class SourceOverviewTool:
@@ -189,12 +189,25 @@ def _select_balanced_records(records: list, *, limit: int, query: str = "") -> l
         return []
     query_tokens = query_relevance_tokens(query)
     ordered = sorted(records, key=lambda record: record.relative_path)
-    source_records = [record for record in ordered if Path(record.path).suffix.lower() in SOURCE_EXTENSIONS]
-    other_records = [record for record in ordered if record not in source_records]
-    selected = _round_robin_by_group(source_records, limit=limit, query_tokens=query_tokens)
+    code_records: list = []
+    doc_records: list = []
+    other_records: list = []
+    for record in ordered:
+        suffix = Path(record.path).suffix.lower()
+        if suffix in CODE_EXTENSIONS:
+            code_records.append(record)
+        elif suffix in SOURCE_EXTENSIONS:
+            doc_records.append(record)
+        else:
+            other_records.append(record)
+    # Architecture overviews should center on real code: fill the budget from the
+    # largest code packages first, then top up with docs/config/data only if room
+    # remains. This keeps generated/scratch trees from diluting the core source.
+    selected = _round_robin_by_group(code_records, limit=limit, query_tokens=query_tokens)
     if len(selected) < limit:
         selected_paths = {record.relative_path for record in selected}
-        for record in [*source_records, *other_records]:
+        doc_fill = _round_robin_by_group(doc_records, limit=limit - len(selected), query_tokens=query_tokens)
+        for record in [*doc_fill, *other_records]:
             if record.relative_path in selected_paths:
                 continue
             selected.append(record)
@@ -213,7 +226,12 @@ def _round_robin_by_group(records: list, *, limit: int, query_tokens: set[str] |
         bucket.sort(key=lambda record: _record_priority(record.relative_path, query_tokens=query_tokens))
     selected: list = []
     seen: set[str] = set()
-    group_keys = sorted(grouped)
+    # Restrict the round-robin to the densest groups so a project with many small
+    # scattered directories (generated outputs, fixtures) cannot crowd out the few
+    # large packages that actually define the architecture. The cap scales with the
+    # budget so each kept group still contributes several files.
+    max_groups = max(8, limit // 3)
+    group_keys = sorted(grouped, key=lambda key: (-len(grouped[key]), key))[:max_groups]
     while len(selected) < limit and group_keys:
         progressed = False
         for key in group_keys:

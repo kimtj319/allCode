@@ -107,6 +107,28 @@ def render_source_analysis_brief(brief: SourceAnalysisBrief, *, language: Respon
     return "\n".join(lines)
 
 
+def render_source_flow_section(brief: SourceAnalysisBrief, *, language: ResponseLanguage) -> str:
+    """User-facing execution-flow / module-interaction sections only.
+
+    Unlike ``render_source_analysis_brief`` (which is the model-context evidence
+    brief and intentionally carries answer-synthesis instructions, a confidence
+    responsibility matrix, and scaffolding headers), this renders just the
+    human-readable flow so a fallback answer never leaks model-facing scaffolding.
+    """
+
+    lines: list[str] = []
+    if brief.inferred_flows:
+        header = "Key execution flow:" if language == "en" else "핵심 실행 흐름:"
+        lines.extend([header, *[f"- {flow}" for flow in brief.inferred_flows[:8]]])
+    if brief.cross_module_edges:
+        header = "Module interactions:" if language == "en" else "모듈 간 연결:"
+        if lines:
+            lines.append("")
+        lines.append(header)
+        lines.extend(f"- `{edge.source}` --{edge.kind}--> `{edge.target}`" for edge in brief.cross_module_edges[:10])
+    return "\n".join(lines)
+
+
 def render_compact_source_analysis_brief(brief: SourceAnalysisBrief, *, language: ResponseLanguage) -> str:
     """Render evidence without section scaffolding for strict user output formats."""
 

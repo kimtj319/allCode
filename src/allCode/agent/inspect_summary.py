@@ -8,10 +8,10 @@ from pathlib import Path
 from allCode.agent.finalization_helpers import last_tool_results
 from allCode.agent.inspect_targets import explicit_target_paths, target_observed
 from allCode.agent.language import ResponseLanguage, normalize_response_language
+from allCode.agent.source_analysis_rendering import render_source_flow_section
 from allCode.agent.source_answer_synthesis import (
     build_source_analysis_brief,
     probe_evidence_lines,
-    render_source_analysis_brief,
 )
 from allCode.agent.source_structure import CodeStructureSummary, read_file_code_summaries
 from allCode.core.models import Message
@@ -78,8 +78,9 @@ def grounded_inspect_summary(
             lines.extend(["", "Main classes/functions:", *[f"- {line}" for line in symbol_lines]])
         if wiring_lines:
             lines.extend(["", "Dependency/wiring clues:", *[f"- {line}" for line in wiring_lines]])
-        if brief.inferred_flows or brief.cross_module_edges or brief.representative_files:
-            lines.extend(["", render_source_analysis_brief(brief, language=language)])
+        flow_section = render_source_flow_section(brief, language=language)
+        if flow_section:
+            lines.extend(["", flow_section])
         if suggested_reads:
             lines.extend(["", "Suggested follow-up files:", *[f"- {path}" for path in suggested_reads[:6]]])
         lines.extend(
@@ -112,8 +113,9 @@ def grounded_inspect_summary(
         lines.extend(["", "주요 클래스/함수:", *[f"- {line}" for line in symbol_lines]])
     if wiring_lines:
         lines.extend(["", "의존성/연결 흐름:", *[f"- {line}" for line in wiring_lines]])
-    if brief.inferred_flows or brief.cross_module_edges or brief.representative_files:
-        lines.extend(["", render_source_analysis_brief(brief, language=language)])
+    flow_section = render_source_flow_section(brief, language=language)
+    if flow_section:
+        lines.extend(["", flow_section])
     if suggested_reads:
         lines.extend(["", "추가로 확인하면 좋은 파일:", *[f"- `{path}`" for path in suggested_reads[:6]]])
     lines.extend(

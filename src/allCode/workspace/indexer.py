@@ -10,8 +10,26 @@ from pydantic import Field
 from allCode.core.models import CoreModel
 from allCode.workspace.roots import WorkspaceRoots
 
-DEFAULT_IGNORE_DIRS = {".git", ".venv", "node_modules", "dist", "build", "target", "__pycache__"}
+DEFAULT_IGNORE_DIRS = {
+    # version control
+    ".git", ".hg", ".svn",
+    # python envs / build / packaging
+    ".venv", "venv", "__pycache__", "dist", "build", "target", ".eggs", ".tox",
+    # tooling caches
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", "htmlcov", ".coverage",
+    # editors / js
+    ".idea", ".vscode", "node_modules", ".next", ".nuxt",
+    # this agent's own runtime state (config/sessions/memory inbox); not project source
+    ".allCode", ".allcode",
+}
 SOURCE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".java", ".go", ".rs", ".md", ".toml", ".yaml", ".yml", ".json"}
+# Executable code (as opposed to docs/config/data); used to focus architecture
+# analysis on actual source rather than markdown/config/generated data files.
+CODE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs",
+    ".java", ".kt", ".go", ".rs", ".rb", ".php", ".cs",
+    ".c", ".cc", ".cpp", ".h", ".hpp", ".swift", ".scala", ".sh",
+}
 
 
 class FileRecord(CoreModel):
