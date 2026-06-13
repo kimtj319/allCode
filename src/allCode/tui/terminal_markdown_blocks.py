@@ -9,8 +9,6 @@ from typing import Iterable
 from rich import box
 from rich.console import Console, RenderableType
 from rich.markdown import Markdown
-from rich.padding import Padding
-from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -209,21 +207,10 @@ def _render_code(console: Console, block: MarkdownBlock) -> None:
     code = "\n".join(block.lines).rstrip("\n")
     if not code:
         return
-    if block.language:
-        body: RenderableType = Syntax(
-            code,
-            block.language,
-            theme="ansi_dark",
-            background_color="default",
-            word_wrap=False,
-            padding=0,
-        )
-    else:
-        body = Text(code)
-    # Indent the whole block two columns so fenced code reads as a distinct block
-    # against prose that starts at column 0 (Codex-style affordance), while
-    # keeping syntax highlighting and compact spacing.
-    console.print(Padding(body, (0, 0, 0, 2)))
+    # Codex renders fenced code as plain text (no syntax highlighting) at the same
+    # body indent as the rest of the answer; the answer renderer adds that indent,
+    # and the code's own internal indentation is preserved as-is.
+    console.print(Text(code))
 
 
 def _render_table(console: Console, lines: list[str]) -> None:
