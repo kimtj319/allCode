@@ -76,6 +76,7 @@ class CompletionChecker:
                 completion_evidence=completion_evidence,
             )
         )
+        errors.extend(_test_function_errors(target_root, plan))
         errors.extend(_test_coverage_errors(target_root, plan, validation_passed=completion_evidence.validation_passed is True))
         errors.extend(_documentation_reference_errors(target_root, plan))
         errors.extend(cli_documentation_reference_errors(target_root, plan))
@@ -147,6 +148,40 @@ def _python_syntax_errors(target_root: Path, relative_paths: list[str]) -> list[
         except OSError as exc:
             errors.append(f"python syntax error in {relative_path}: unable to read source ({exc.strerror or exc})")
     return errors
+
+
+def _test_function_errors(target_root: Path, plan: ProjectPlan) -> list[str]:
+    """Fail when a required Python test file authors no actual test functions.
+
+    A "no tests ran" pytest result (exit 5) is treated leniently elsewhere so an
+    edit to a project without a suite is not blocked forever. But when the plan
+    obligates a test file and that file defines zero ``test*`` functions — e.g.
+    the model copied the implementation into the test file — the validation pass
+    is hollow. Catch it here so a generation turn cannot report success without
+    the tests it was required to author.
+    """
+    errors: list[str] = []
+    for relative_path, content in _actual_test_files(target_root, plan):
+        if Path(relative_path).suffix.lower() != ".py":
+            continue
+        if not _has_python_test_functions(content):
+            errors.append(
+                f"required test file defines no test functions: {relative_path} "
+                "(author at least one test_* function so validation exercises real tests)"
+            )
+    return errors
+
+
+def _has_python_test_functions(content: str) -> bool:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # Syntax errors are reported separately; do not double-flag here.
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+            return True
+    return False
 
 
 def _test_coverage_errors(target_root: Path, plan: ProjectPlan, *, validation_passed: bool = False) -> list[str]:
