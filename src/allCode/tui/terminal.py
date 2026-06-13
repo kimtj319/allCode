@@ -78,6 +78,8 @@ class TerminalSession:
         self._final_answer_rendered = False
         self._running_started_at: float | None = None
         self._spinner_index = 0
+        self._composer_render_at = 0.0
+        self._composer_status: str | None = None
         self.answer_renderer = TerminalAnswerRenderer(self.console)
         self._turn_runner_accepts_approval = self._accepts_approval_handler(turn_runner)
 
@@ -284,11 +286,22 @@ class TerminalSession:
     def _render_running_composer(self, status: str | None = None) -> None:
         if self._running_started_at is None:
             return
+        now = time.monotonic()
+        effective_status = status or self._last_status or messages.WORKING_STATUS
+        # Throttle spinner-only repaints to ~30fps. During streaming this method
+        # is invoked per model-text delta (often many per second); repainting the
+        # whole composer pane each time floods the terminal with redundant
+        # erase/redraw sequences. A status change always repaints immediately so
+        # phase transitions stay responsive.
+        if effective_status == self._composer_status and (now - self._composer_render_at) < 0.033:
+            return
         self._spinner_index += 1
-        elapsed = max(0, int(time.monotonic() - self._running_started_at))
+        self._composer_render_at = now
+        self._composer_status = effective_status
+        elapsed = max(0, int(now - self._running_started_at))
         self.input_editor.render_runtime_frame(
             activity=ActivityProps(
-                status=status or self._last_status or messages.WORKING_STATUS,
+                status=effective_status,
                 running=True,
                 elapsed_seconds=elapsed,
                 spinner_index=self._spinner_index,
