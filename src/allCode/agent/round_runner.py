@@ -22,6 +22,7 @@ from allCode.agent.round_inspection_budget import (
     required_source_probe_count,
 )
 from allCode.agent.inspect_summary import grounded_inspect_summary, has_inspect_summary_evidence
+from allCode.agent.modify_fallback import has_modify_plan_evidence, modify_change_plan_fallback
 from allCode.agent.round_repair_state import round_state_snapshot, update_repair_flags
 from allCode.agent.round_response_handler import RoundResponseHandler
 from allCode.agent.round_runtime import RoundRuntime
@@ -385,6 +386,19 @@ class RoundRunner:
                     response_language=response_language(turn_input.user_prompt),
                 ),
                 error="max_rounds_reached",
+            )
+        if (
+            (getattr(routing, "requires_mutation", False) or getattr(routing, "kind", "") == "modify")
+            and has_modify_plan_evidence(completion_evidence)
+        ):
+            return LoopOutcome(
+                status="partial",
+                answer=modify_change_plan_fallback(
+                    prompt=turn_input.user_prompt,
+                    evidence=completion_evidence,
+                    language=response_language(turn_input.user_prompt),
+                ),
+                error="max_rounds_reached_without_file_change",
             )
         return LoopOutcome(
             status="partial",

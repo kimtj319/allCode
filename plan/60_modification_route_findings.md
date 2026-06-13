@@ -44,3 +44,22 @@ wise-lloa-max의 edit-emission 한계 자체는 harness로 극복 불가.
   가리지 않도록 부분 성공으로 표기.
 - 모델 역량 의존도가 높은 축(③ 심층 분석, ④ 수정)은 harness 상한과 모델 상한을
   분리해 평가해야 함. 벤치마크 목표(Codex=gpt-5.5) 대비 격차에는 모델 격차가 포함됨.
+
+## 추가 검증 (2026-06-13, 2차)
+
+- **단일 파일·명시 타겟 수정은 성공**: `config.py max_tasks 100→500`을 allCode가
+  정확히 적용(EXIT 0). → modify harness 자체는 정상. 앞선 크로스커팅 실패는 모델
+  한계.
+- **모델 변동성**: 크로스커팅 프롬프트 재실행 시, 어떤 회차는 edit를 전혀 안 함
+  (탐색만), 다른 회차는 `service.py`의 `add_task`에 빈 제목 검증(ValueError +
+  한국어 메시지)을 **올바른 계층에 정확히** 추가. 즉 edit 품질은 좋으나 emit
+  신뢰성이 모델 의존적.
+- **graceful degradation 구현**: modify 턴이 파일을 확인했으나 변경을 못 한 채
+  종료하면, 빈 block-reason 실패 대신 관찰 근거 기반 변경 계획(미적용 명시)을
+  partial로 반환(`agent/modify_fallback.py`, `loop.py` 단일 chokepoint +
+  `round_runner.py` max_rounds 경로). 전체 775 passed.
+- **다음 갭(validation-stuck)**: 테스트가 없는 프로젝트에서 modify가 올바른 변경을
+  적용해도 validation 요건(run_tests)이 "no tests ran"으로 실패해 완료가 막힘.
+  Codex(workspace-write)는 검증에 막히지 않고 수정 완료. → 테스트 부재 시 modify의
+  validation 처리를 완화(변경 자체로 부분 완료 인정 또는 "테스트 없음" 명시)하는
+  것이 다음 이터레이션 과제.

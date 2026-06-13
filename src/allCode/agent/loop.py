@@ -27,6 +27,8 @@ from allCode.agent.stream_collector import ModelStreamCollector
 from allCode.agent.tool_call_processor import ToolCallProcessor
 from allCode.agent.tool_targets import ToolTargetRecorder
 from allCode.agent.turn_completion import LoopOutcome, finalize_completion
+from allCode.agent.modify_fallback import has_modify_plan_evidence, modify_change_plan_fallback
+from allCode.agent.round_runner_helpers import response_language
 from allCode.agent.workflow import GenerationWorkflow
 from allCode.agent.workflow_routing import should_use_generation_workflow
 from allCode.core.event_bus import AsyncEventBus, EventBus
@@ -264,6 +266,24 @@ class AgentLoop:
                     completion_evidence,
                     routing,
                     force_mutation_action=force_mutation_action,
+                )
+            # Graceful degradation: a modify turn that inspected the code but never
+            # produced a file change would otherwise return a bare block-reason
+            # failure. Replace it with a grounded change plan (clearly not applied)
+            # regardless of which exit path the loop took.
+            if (
+                outcome.status != "success"
+                and (getattr(routing, "requires_mutation", False) or getattr(routing, "kind", "") == "modify")
+                and has_modify_plan_evidence(completion_evidence)
+            ):
+                outcome = LoopOutcome(
+                    status=outcome.status,
+                    answer=modify_change_plan_fallback(
+                        prompt=turn_input.user_prompt,
+                        evidence=completion_evidence,
+                        language=response_language(turn_input.user_prompt),
+                    ),
+                    error=outcome.error or "max_rounds_reached_without_file_change",
                 )
             finalized = finalize_completion(
                 turn_input=turn_input,
