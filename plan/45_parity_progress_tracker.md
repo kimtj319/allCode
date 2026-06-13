@@ -243,3 +243,30 @@ python tests/quality/evaluate_parity.py \
     `__main__.py`), README, requirements, and `15 passed`.
   - Result: allCode generation succeeds but remains less modular and less
     test-dense than agy.
+
+## 2026-06-13 (세션: 4축 harness 마감 라운드)
+
+축별 Test→Audit→Identify→Plan→Implement 루프를 한 차례씩 더 돌고, 모델-상한과
+harness-상한을 분리해 평가.
+
+- **축 ④ 수정**: `loop.py`에 **edit 후 자동 검증** 추가 — 모델이 파일을 바꾸고도
+  run_tests를 안 부르면 harness가 탐지된 validation_command를 1회 실행해 Codex류로
+  턴을 닫음. FakeLLM(편집만, 검증 호출 없음) + no-tests 프로젝트에서 결정론적으로
+  `status=success`/`validation_passed=True` 확인. no-edit 회차는 graceful
+  change-plan(exit 0)로 처리됨도 실모델로 재확인. (commit `9799fee`)
+- **축 ① 구현**: allCode와 codex 모두 동일 CLI todo 앱을 기능적으로 동등하게 구현
+  (add/list/done+JSON, 스모크 통과). 격차는 (A)완료 보고의 이모지·홍보성 산문,
+  (B)codex는 테스트도 작성. (A)를 `language.py final_answer_request_text`(ko/en)에
+  간결·plain·무이모지 지침으로 교정 → 재실행 보고서 이모지 0개·산문 제거 확인.
+  (B)는 모델 행동/과설계 trade-off로 보류. (commit `17e3990`, plan/61)
+- **축 ② Q&A**: 비웹 일반 질문(리스트 vs 튜플)에 allCode가 무이모지·구조적 비교
+  표+간결 요약으로 답 → Codex식 plain 스타일 부합, 품질 격차 없음. 웹 검색은
+  백엔드 미구성(환경/설정 사안)으로 별도.
+- **축 ③ 분석**: 이전 라운드의 harness 개선(탐색/스캐폴딩/guard) 이후 남은 격차는
+  본문 수준 심층 서술 → 하부 모델 역량 의존.
+
+**누계 판단**: 4축 모두에서 harness가 제어 가능한 레버는 대부분 소진(탐색 여유,
+mutation-lock 완화, no-tests 완화, graceful change-plan, edit 후 자동검증,
+간결·plain 답변 스타일). 남은 Codex 대비 격차는 (a)하부 모델 역량(wise-lloa-max
+vs gpt-5.5: 구현 시 테스트 동반·크로스커팅 edit emission·본문 심층도)과
+(b)웹 백엔드 미구성에 집중 — 둘 다 harness 튜닝 범위 밖. 무회귀 775 passed 유지.
