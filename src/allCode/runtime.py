@@ -137,6 +137,7 @@ def runtime_tool_registry(config: AppConfig) -> ToolRegistry:
         builtin_tools(
             web_search_provider=provider_from_config(config.web),
             web_fetch_provider=fetch_provider_from_config(config.web),
+            shell_sandbox=config.workspace.shell_sandbox,
         )
     )
     mcp_tools, _manager = load_mcp_tools(config)

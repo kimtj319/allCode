@@ -12,6 +12,7 @@ from allCode.core.event_bus import EventBus
 from allCode.core.models import ToolCall, ToolResult
 from allCode.tools.base import ToolContext, ToolDefinition
 from allCode.tools.builtin.file_ops import resolve_under_root
+from allCode.tools.builtin.shell_sandbox import sandbox_command
 from allCode.workspace.project_locator import ProjectLocator
 
 MAX_STREAM_CHARS = 20_000
@@ -42,8 +43,11 @@ class RunCommandTool:
         group="shell",
     )
 
+    def __init__(self, *, shell_sandbox: str = "off") -> None:
+        self._shell_sandbox = shell_sandbox
+
     async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
-        return await run_shell_call(call, context, validation=False)
+        return await run_shell_call(call, context, validation=False, sandbox_mode=self._shell_sandbox)
 
 
 class RunTestsTool:
@@ -63,11 +67,16 @@ class RunTestsTool:
         group="shell",
     )
 
+    def __init__(self, *, shell_sandbox: str = "off") -> None:
+        self._shell_sandbox = shell_sandbox
+
     async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
-        return await run_shell_call(call, context, validation=True)
+        return await run_shell_call(call, context, validation=True, sandbox_mode=self._shell_sandbox)
 
 
-async def run_shell_call(call: ToolCall, context: ToolContext, *, validation: bool) -> ToolResult:
+async def run_shell_call(
+    call: ToolCall, context: ToolContext, *, validation: bool, sandbox_mode: str = "off"
+) -> ToolResult:
     try:
         cwd_arg = str(call.arguments.get("cwd", "."))
         cwd = resolve_under_root(context.workspace.root, cwd_arg)
@@ -87,6 +96,9 @@ async def run_shell_call(call: ToolCall, context: ToolContext, *, validation: bo
                 metadata={"cwd": str(cwd), "validation_command": validation},
             )
         execution_command = _portable_command(command)
+        sandboxed = sandbox_command(execution_command, workspace_root=Path(context.workspace.root), mode=sandbox_mode)
+        if sandboxed is not None:
+            execution_command = sandboxed
         timeout = int(call.arguments.get("timeout_seconds", 180 if validation else 60))
         env = _allowed_environment(context.environment)
         if validation:

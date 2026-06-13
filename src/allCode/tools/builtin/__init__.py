@@ -11,7 +11,12 @@ from allCode.tools.builtin.web import web_tools
 from allCode.tools.web_provider import WebFetchProvider, WebSearchProvider
 
 
-def builtin_tools(*, web_search_provider: WebSearchProvider | None = None, web_fetch_provider: WebFetchProvider | None = None) -> list:
+def builtin_tools(
+    *,
+    web_search_provider: WebSearchProvider | None = None,
+    web_fetch_provider: WebFetchProvider | None = None,
+    shell_sandbox: str = "off",
+) -> list:
     return [
         *file_tools(),
         SearchFilesTool(),
@@ -19,7 +24,7 @@ def builtin_tools(*, web_search_provider: WebSearchProvider | None = None, web_f
         ListTreeTool(),
         SourceOverviewTool(),
         SourceProbeTool(),
-        RunCommandTool(),
-        RunTestsTool(),
+        RunCommandTool(shell_sandbox=shell_sandbox),
+        RunTestsTool(shell_sandbox=shell_sandbox),
         *web_tools(web_search_provider, web_fetch_provider),
     ]
