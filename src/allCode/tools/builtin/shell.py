@@ -114,13 +114,29 @@ async def run_shell_call(call: ToolCall, context: ToolContext, *, validation: bo
         stdout = stdout_bytes.decode(errors="replace")
         stderr = stderr_bytes.decode(errors="replace")
         ok = process.returncode == 0
+        # A validation/test command that finds no tests to run (e.g. pytest exit
+        # code 5 in a project without a test suite) is not a real failure: the
+        # change is applied and there is nothing to validate. Treat it as
+        # satisfied-by-absence so a legitimate edit is not blocked forever, but
+        # flag it so the report can note that no tests existed.
+        combined = f"{stdout}\n{stderr}".lower()
+        # Only pytest's clean "no tests collected" signal (exit code 5 / "no tests
+        # ran"), NOT a collection error like ImportError (exit 2, which also prints
+        # "collected 0 items / 1 error"). A collection error is a real failure.
+        no_tests = (
+            bool(validation)
+            and not ok
+            and process.returncode != 2
+            and (process.returncode == 5 or "no tests ran" in combined)
+        )
+        effective_ok = ok or no_tests
         return ToolResult(
             call_id=call.id,
             name=call.name,
-            ok=ok,
+            ok=effective_ok,
             content=_truncate(stdout),
-            error=None if ok else _truncate(stderr or stdout),
-            error_type=None if ok else "CommandFailed",
+            error=None if effective_ok else _truncate(stderr or stdout),
+            error_type=None if effective_ok else "CommandFailed",
             metadata={
                 "command": command,
                 "executed_command": execution_command,
@@ -131,7 +147,8 @@ async def run_shell_call(call: ToolCall, context: ToolContext, *, validation: bo
                 "full_stdout_chars": len(stdout),
                 "full_stderr_chars": len(stderr),
                 "validation_command": validation,
-                "validation_passed": ok if validation else None,
+                "validation_passed": effective_ok if validation else None,
+                "no_tests_collected": no_tests,
             },
         )
     except Exception as exc:
