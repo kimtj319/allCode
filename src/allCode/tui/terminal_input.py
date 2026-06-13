@@ -207,7 +207,7 @@ class TerminalInputEditor:
                 input_lines=view.lines,
                 cursor_row=view.cursor_row,
                 cursor_col=view.cursor_col,
-                overlay=self._completion_overlay(),
+                overlay=self._overlay_for(area),
                 footer=FooterProps(
                     mode="composer_has_draft" if area.text else "composer_empty",
                     status_line=self.footer,
@@ -238,6 +238,15 @@ class TerminalInputEditor:
             visual_lines.extend(chunks)
         return InputRenderState(lines=visual_lines or [""], cursor_row=cursor_row, cursor_col=cursor_col)
 
+    def _overlay_for(self, area: TerminalTextArea) -> OverlayView | None:
+        # An active Tab-cycle completion takes precedence; otherwise show a live
+        # slash-command menu as the user types (Codex-style), without modifying
+        # the draft text.
+        completion = self._completion_overlay()
+        if completion is not None:
+            return completion
+        return self._slash_menu_overlay(area)
+
     def _completion_overlay(self) -> OverlayView | None:
         state = self._completion_state
         if state is None:
@@ -245,4 +254,18 @@ class TerminalInputEditor:
         items: list[OverlayItem] = []
         for index, candidate in enumerate(state.candidates[:5]):
             items.append(OverlayItem(label=candidate.label, description=candidate.description, selected=index == state.selected))
+        return OverlayView(kind="completion", items=items)
+
+    def _slash_menu_overlay(self, area: TerminalTextArea) -> OverlayView | None:
+        text = area.text
+        if "\n" in text or not text.startswith("/"):
+            return None
+        query = text.strip().lower()
+        commands = self.completer.registry.all()
+        matches = [command for command in commands if command.name.lower().startswith(query)]
+        if not matches:
+            matches = self.completer.registry.filter(query)
+        if not matches:
+            return None
+        items = [OverlayItem(label=command.name, description=command.description) for command in matches[:6]]
         return OverlayView(kind="completion", items=items)
