@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pydantic import Field
 
 from allCode.core.events import AgentEvent
 from allCode.core.models import CoreModel
@@ -114,12 +113,6 @@ class EventRenderer:
         )
 
     def _render_source_overview_collected(self, event: AgentEvent) -> RenderedEvent:
-        target = str(event.data.get("target") or "workspace")
-        file_count = _compact_count(event.data.get("file_count"), "files")
-        symbol_count = _compact_count(event.data.get("symbol_count"), "symbols")
-        truncated = " · truncated" if event.data.get("truncated") else ""
-        metrics = " · ".join(part for part in (file_count, symbol_count) if part)
-        suffix = f" · {metrics}" if metrics else ""
         return RenderedEvent(
             transcript="",
             transcript_role="status",

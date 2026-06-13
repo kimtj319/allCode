@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from allCode.tui.terminal_activity import ActivityProps, TerminalActivityRenderer
 from allCode.tui.terminal_footer import FooterProps, TerminalFooterRenderer

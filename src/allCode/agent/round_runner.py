@@ -1,7 +1,6 @@
 """Model round execution and recovery orchestration."""
 
 from __future__ import annotations
-from collections.abc import Sequence
 
 from allCode.agent.finalization_helpers import blocked_summary
 from allCode.agent.context_condensation import condense_messages_for_model
@@ -41,7 +40,7 @@ from allCode.agent.web_finalization import (
 )
 from allCode.core.event_bus import EventBus
 from allCode.core.events import ModelStreamStarted, RecoveryStateUpdated
-from allCode.core.models import Message, ToolResult, TurnInput, TurnState
+from allCode.core.models import ToolResult, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence
 from allCode.llm.response_parser import ResponseParser
 

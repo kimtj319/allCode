@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from allCode.workspace.source_intelligence import SourceFileAnalysis, SourceImport, SourceReference
+from allCode.workspace.source_intelligence import SourceFileAnalysis, SourceImport
 
 COMMON_SOURCE_PREFIXES = ("src", "lib")
 

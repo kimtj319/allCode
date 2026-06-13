@@ -10,7 +10,7 @@ from allCode.agent.validation_repair import rank_repair_targets
 from allCode.core.result import CompletionEvidence, RepairTarget
 
 if TYPE_CHECKING:
-    from allCode.agent.phase_gate import PhaseName, PhaseToolGate
+    pass
 
 
 def validation_repair_gate(

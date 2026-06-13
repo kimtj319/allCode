@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
 
 from allCode.core.result import CompletionEvidence
 

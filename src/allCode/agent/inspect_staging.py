@@ -12,7 +12,6 @@ from pydantic import Field
 from allCode.agent.inspect_targets import (
     dedupe_targets,
     explicit_target_paths,
-    looks_path_like,
     normalize_target,
     target_matches_path,
     target_observed,
@@ -302,14 +301,6 @@ def _int_value(value, *, default: int) -> int:
         return default
 
 
-def _target_observed(target: str, inspected: set[str]) -> bool:
-    return target_observed(target, inspected)
-
-
-def _paths_overlap(path: str, target: str) -> bool:
-    return target_matches_path(target, path)
-
-
 def _has_file_target(targets: Sequence[str]) -> bool:
     return any(_is_file_target(target) for target in targets)
 
@@ -318,14 +309,6 @@ def _is_file_target(target: str) -> bool:
     cleaned = target.strip().strip("`").replace("\\", "/")
     name = Path(cleaned).name
     return name in WELL_KNOWN_EXTENSIONLESS_FILES or bool(re.search(r"\.[A-Za-z0-9]{1,16}$", cleaned))
-
-
-def _explicit_target_paths(prompt: str) -> list[str]:
-    return explicit_target_paths(prompt)
-
-
-def _looks_path_like(value: str) -> bool:
-    return looks_path_like(value)
 
 
 def _dedupe(values: Sequence[str]) -> list[str]:

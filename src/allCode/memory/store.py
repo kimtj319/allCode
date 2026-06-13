@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from allCode.config.defaults import DEFAULT_GLOBAL_MEMORY_PATH
