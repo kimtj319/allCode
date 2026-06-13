@@ -10,6 +10,7 @@ from typing import Any, TextIO
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.text import Text
 
 from allCode.core.events import AgentEvent
 from allCode.tui import messages
@@ -136,6 +137,8 @@ class TerminalSession:
             return
         if rendered.transcript and rendered.severity == "user_visible":
             self._print_rendered_block(rendered.transcript_role, rendered.transcript)
+            if rendered.diff:
+                self._print_diff(rendered.diff)
         elif rendered.status and rendered.severity != "debug_only":
             self._print_status(rendered.status)
 
@@ -235,6 +238,29 @@ class TerminalSession:
             self._render_running_composer()
             return
         self._print_assistant_block(text)
+
+    def _print_diff(self, diff: str, *, max_lines: int = 80) -> None:
+        # Render a file edit as a colored unified diff (Codex-style): green for
+        # additions, red for removals, dim cyan for hunk headers. Indented two
+        # columns so it reads as detail under the "• tool" summary row.
+        if not diff.strip():
+            return
+        self._prepare_body_output()
+        lines = diff.splitlines()
+        for raw in lines[:max_lines]:
+            text = Text("  ")
+            if raw.startswith("@@"):
+                text.append(raw, style="cyan")
+            elif raw.startswith("+"):
+                text.append(raw, style="green")
+            elif raw.startswith("-"):
+                text.append(raw, style="red")
+            else:
+                text.append(raw, style="dim")
+            self.console.print(text)
+        if len(lines) > max_lines:
+            self.console.print(Text(f"  ... {len(lines) - max_lines} more diff lines ...", style="dim"))
+        self._render_running_composer()
 
     def _print_status(self, status: str) -> None:
         if not status:

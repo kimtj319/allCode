@@ -18,6 +18,7 @@ class RenderedEvent(CoreModel):
     foldable: bool = False
     fold_title: str = ""
     fold_full_text: str = ""
+    diff: str = ""
     severity: str = "status_only"
 
 
@@ -108,6 +109,7 @@ class EventRenderer:
             foldable=entry.foldable,
             fold_title=entry.fold_title,
             fold_full_text=entry.fold_full_text,
+            diff=entry.diff,
             severity="user_visible",
         )
 
