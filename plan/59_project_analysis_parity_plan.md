@@ -197,6 +197,35 @@ python -m pytest
   fallback 내용이 정확·구조적이라 실사용 품질은 codex/agy에 근접. Phase 3(guard가
   양질의 모델 prose를 과도 거부하지 않도록 정합)는 후속 선택 과제.
 
+## 구현 결과 (2026-06-13, 3차 — Phase 3 guard 정합)
+
+세션 로그로 fallback 강제 원인(모델 답변이 `source_answer_guard`에 거부)을 확정:
+
+- retry1: `missing_priority_package_roles`(config/telemetry 누락) — 관찰된 전
+  패키지 언급을 요구. codex/agy도 전 패키지를 다루므로 완전성 요건은 정당 →
+  완화하지 않음(관련 strict 테스트 3개 유지).
+- retry2(변동): `unobserved_path_claim`(모델이 관찰 패키지 내 실제 파일
+  `prompt_builder.py`를 언급했으나 probe되지 않아 거부) / `mismatched_anchor`.
+
+안전한 수정만 적용(`source_answer_guard.py`):
+
+- `_unobserved_path_claim`: 관찰 경로의 path-suffix(축약 경로 `builtin/foo.py`)와
+  **관찰된 패키지 디렉터리 하위 파일**을 허용(`_path_is_observed`). 라인/앵커
+  주장은 여전히 probe 근거 요구(환각 차단 유지).
+- `observed_paths`에 source_overview가 표면화한 경로(패키지 디렉터리·대표 파일)
+  포함. (전체 `python -m pytest` 775 passed)
+
+판단: source_answer_guard는 풍부한 아키텍처 산문에 대해 여러 strict 검사를 차례로
+트립시키는 구조라, 모델 산문 통과를 위해 앵커/심볼 guard까지 완화하면 환각 유입
+위험이 큼. 반면 **deterministic fallback 내용이 이미 정확·완전·깔끔**(전 패키지
+역할표 + 실제 edge, codex/agy에 내용상 견줄 만함)하므로, 안전한 path-claim 보강만
+유지하고 공격적 guard 완화는 하지 않음. 좁고 잘 앵커된 분석 답변은 모델 산문으로
+통과하고, 광역 아키텍처 분석은 고품질 fallback으로 안정 출력됨.
+
+축 ③ 종합: 깨짐(스캐폴딩 누출)·오탐색(노이즈/문서 latch) 모두 해소, 출력이
+codex/agy의 계층 아키텍처 요약에 내용·구조상 근접. 남은 미세 갭은 "모델 산문 vs
+구조적 fallback" 문체 차이.
+
 ## 남은 리스크
 
 - source-analysis 서브시스템(다수 파일)이 크다. 합성 정리 시 기존 evidence/guard

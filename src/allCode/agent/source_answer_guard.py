@@ -295,6 +295,20 @@ def _source_anchor_map(
                         short = symbol.rsplit(".", 1)[-1]
                         symbol_set.add(short)
                         observed_symbols.add(short)
+    # A source_overview surfaces package directories and representative files; for
+    # an architecture summary, naming a module inside an observed package is
+    # legitimate even when that exact file was not separately probed. Add those
+    # overview paths so path-claim checks accept them (line/anchor claims still
+    # require probe evidence and are unaffected).
+    for result in tool_results_from_messages(messages):
+        observation = result.metadata.get("observation")
+        if not result.ok or not isinstance(observation, dict) or observation.get("kind") != "source_overview":
+            continue
+        for key in ("source_overview_paths", "overview_paths", "representative_reads", "suggested_reads", "package_representative_reads"):
+            for value in result.metadata.get(key, []) or []:
+                cleaned = _clean_path(str(value or ""))
+                if cleaned:
+                    observed_paths.add(cleaned)
     return anchors, symbols_by_path, observed_paths, observed_symbols
 
 
@@ -394,13 +408,29 @@ def _unobserved_path_claim(line: str, observed_paths: set[str]) -> SourceAnswerV
         return None
     for match in PATH_PATTERN.finditer(line):
         path = _clean_path(match.group("path"))
-        if not path or path in observed_paths:
+        if not path or _path_is_observed(path, observed_paths):
             continue
         return SourceAnswerViolation(
             reason="source_answer_unobserved_path_claim",
             excerpt=_compact(line),
         )
     return None
+
+
+def _path_is_observed(path: str, observed_paths: set[str]) -> bool:
+    """An abbreviated path (e.g. `builtin/foo.py` for an observed
+    `src/pkg/builtin/foo.py`) still refers to observed source, so accept any
+    claim that is a path-segment suffix of an observed path (or vice versa)."""
+
+    if path in observed_paths:
+        return True
+    for observed in observed_paths:
+        if observed.endswith(f"/{path}") or path.endswith(f"/{observed}"):
+            return True
+        # A module named inside an observed package directory.
+        if path.startswith(f"{observed}/"):
+            return True
+    return False
 
 
 def _unobserved_dotted_symbol_claim(line: str, observed_symbols: set[str]) -> SourceAnswerViolation | None:
