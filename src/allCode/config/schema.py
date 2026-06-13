@@ -98,12 +98,42 @@ class SourceIntelligenceConfig(StrictConfigModel):
         return value
 
 
+class MCPServerConfig(StrictConfigModel):
+    """A Model Context Protocol stdio server allCode launches and exposes as tools."""
+
+    name: str
+    command: str
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+    @field_validator("name", "command")
+    @classmethod
+    def require_non_empty(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("value must be non-empty")
+        return value.strip()
+
+
+class MCPConfig(StrictConfigModel):
+    servers: list[MCPServerConfig] = Field(default_factory=list)
+    startup_timeout_ms: int = 8000
+
+    @field_validator("startup_timeout_ms")
+    @classmethod
+    def require_positive_timeout(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("value must be greater than zero")
+        return value
+
+
 class AppConfig(StrictConfigModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     source_intelligence: SourceIntelligenceConfig = Field(default_factory=SourceIntelligenceConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
 
 class ConfigFileSource(StrictConfigModel):

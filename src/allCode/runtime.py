@@ -22,6 +22,7 @@ from allCode.memory.session_state_store import SessionStateStore
 from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.approval import ApprovalHandler, ApprovalManager
+from allCode.tools.mcp import load_mcp_tools
 from allCode.tools.registry import ToolRegistry
 from allCode.tools.web_provider import fetch_provider_from_config, provider_from_config
 
@@ -132,12 +133,20 @@ def make_tui_turn_runner(
 
 
 def runtime_tool_registry(config: AppConfig) -> ToolRegistry:
-    return ToolRegistry(
+    registry = ToolRegistry(
         builtin_tools(
             web_search_provider=provider_from_config(config.web),
             web_fetch_provider=fetch_provider_from_config(config.web),
         )
     )
+    mcp_tools, _manager = load_mcp_tools(config)
+    for tool in mcp_tools:
+        try:
+            registry.register(tool)
+        except ValueError:
+            # Name collision with a builtin or another MCP tool; skip the duplicate.
+            continue
+    return registry
 
 
 async def _persist_user_note_summary(config: AppConfig, session_id: str, note: str | None) -> None:
