@@ -32,3 +32,20 @@
 ## 결과
 - 전체 779 passed(+신규 테스트), ruff 클린(phase_gate 재노출 제외), 262모듈 클린 import.
 - 4개 시나리오(신규생성/구현·대형분석·수정·멀티턴·일반Q&A) 실 TTY 품질·UI 확인 완료.
+
+## Phase 3 추가 — 대형 프로젝트 분석 실 TTY 재검증 (2026-06-14)
+
+대상: allCode 자체 코드베이스(264파일/39k줄), workspace=레포 루트, 읽기 전용 분석
+("src/allCode 아키텍처 + 한 요청의 핵심 실행 흐름 설명").
+
+- **읽기 전용**: src/allCode 변경 0 ✓. 39s에 완료, source_overview 7회 + source_probe 24회.
+- **커버리지**: 8개 패키지(core/agent/tools/tui/llm/workspace/generation/memory) 전부 역할 서술.
+- **실행 흐름 정확**: `__main__ → main(config/argparse/headless vs TUI) → runtime(ContextBuilder+
+  AgentLoop, ModelRouter+LLMClient) → round_runner(PromptBuilder/툴게이트) → LLM(ParsedResponse)
+  → tools 레지스트리 → (대화형) tui → memory 세션요약`. 실제 아키텍처와 일치.
+- **근거**: 라인 앵커 12개(`__main__.py:3`, `main.py:12-22`, `runtime.py:8-11`,
+  `round_runner.py:5-15`, `response_parser.py:27-36`, `tui/runtime.py:15-27` 등).
+- **무환각**: "남은 한계·미확인 부분"에서 본문 미관찰 영역(AgentLoop.run, ModelRouter.route,
+  tools 레지스트리 내부 등)을 명시 — import/시그니처 근거와 본문 근거를 구분. UI 무이모지·
+  구조적. ✓
+- 남은 상한은 (모델-의존) 본문 수준 심층도이며, 그조차 정직하게 disclosure됨.
