@@ -152,7 +152,10 @@ class TerminalScreen:
             for line in frame.activity_lines:
                 if row >= self.height:
                     break
-                self._write_line(row, line.text, style=line.style)
+                if line.fg is not None and line.dim_suffix_at is not None:
+                    self._write_pulse_line(row, line.text, line.dim_suffix_at, line.fg)
+                else:
+                    self._write_line(row, line.text, style=line.style)
                 row += 1
             if frame.spacer_after_activity and row < self.height:
                 self._write_line(row, "")
@@ -240,6 +243,21 @@ class TerminalScreen:
         prefix = self._fg(self.theme.dim_fg) if style == "dim" else ""
         suffix = "\x1b[0m" if prefix else ""
         self.stdout.write(f"{prefix}{clip_display_width(text, self.width)}{suffix}")
+
+    def _write_pulse_line(self, row: int, text: str, split: int, fg: tuple[int, int, int]) -> None:
+        """Write an activity line whose leading "• <label>" breathes in `fg`
+        (bold) while the trailing "(Ns • esc to interrupt)" stays dim."""
+
+        if row > self.height:
+            return
+        clipped = clip_display_width(text, self.width)
+        split = max(0, min(split, len(clipped)))
+        head, tail = clipped[:split], clipped[split:]
+        red, green, blue = fg
+        self.stdout.write(f"\x1b[{row};1H\x1b[2K")
+        self.stdout.write(f"\x1b[1m\x1b[38;2;{red};{green};{blue}m{head}\x1b[0m")
+        if tail:
+            self.stdout.write(f"{self._fg(self.theme.dim_fg)}{tail}\x1b[0m")
 
     @staticmethod
     def _is_terminal(stream: TextIO) -> bool:

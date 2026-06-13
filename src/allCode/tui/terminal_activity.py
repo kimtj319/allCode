@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from allCode.tui import messages
 from allCode.tui.terminal_frame import StyledLine
 
-SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+# Codex does not cycle spinner glyphs; it shows a steady "•" and breathes the
+# brightness of the "• <label>" text through these greyscale levels (captured
+# from the real Codex CLI). The suffix "(Ns • esc to interrupt)" stays dim.
+_PULSE_LEVELS = (128, 138, 167, 202, 231, 242)
+_PULSE = _PULSE_LEVELS + tuple(reversed(_PULSE_LEVELS[1:-1]))  # ping-pong, period 10
+_SPINNER = "•"
 
 
 @dataclass(frozen=True)
@@ -19,14 +24,24 @@ class ActivityProps:
 
 
 class TerminalActivityRenderer:
-    """Build compact Codex-style activity lines."""
+    """Build compact Codex-style activity lines with a breathing "•" marker."""
 
     def render(self, props: ActivityProps) -> list[StyledLine]:
         if not props.running:
             return []
         label = _label_for_status(props.status)
-        frame = SPINNER_FRAMES[props.spinner_index % len(SPINNER_FRAMES)]
-        return [StyledLine(text=f"{frame} {label} ({props.elapsed_seconds}s · esc to interrupt)", style="dim")]
+        head = f"{_SPINNER} {label}"
+        suffix = f" ({props.elapsed_seconds}s • esc to interrupt)"
+        level = _PULSE[props.spinner_index % len(_PULSE)]
+        return [
+            StyledLine(
+                text=head + suffix,
+                style="dim",
+                fg=(level, level, level),
+                bold=True,
+                dim_suffix_at=len(head),
+            )
+        ]
 
 
 def _label_for_status(status: str) -> str:

@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 class StyledLine:
     text: str
     style: str = "normal"
+    # Optional Codex-style pulsing prefix: the first ``dim_suffix_at`` characters
+    # are drawn bold in ``fg`` (a breathing greyscale), the rest dim.
+    fg: tuple[int, int, int] | None = None
+    bold: bool = False
+    dim_suffix_at: int | None = None
 
 
 @dataclass(frozen=True)
