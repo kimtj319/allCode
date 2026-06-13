@@ -39,3 +39,19 @@
 - A(스펙 파일명 미준수), B(테스트 파일에 구현 복사)는 모델 행동. C 수정으로 B는 이제
   성공으로 마감되지 못하게 차단됨(검증 단계에서 실패 노출). A는 프롬프트의 명시 파일명을
   스캐폴드보다 우선하도록 유도하는 별도 과제.
+
+## A 수정 + 실 TTY 재검증 (2026-06-14)
+
+- **A 수정**: 생성 시 프롬프트 명시 파일명을 준수하도록 변경.
+  - `generation/strategy.py`에 `explicit_module_names(prompt)` 추가 — `breaker.py`,
+    `test_breaker.py` 같은 명시 `*.py`에서 구현/테스트 모듈 stem 추출(예약명 setup/__init__
+    등 제외).
+  - `generation/strategies/python.py`: 결정론적 스캐폴드가 `module`(기본 main)를 파일경로·
+    import·README·api_obligations·`repair_files`(계획에서 모듈명 복원)에 일관 반영.
+  - `agent/project_planner.py`: LLM 플래너의 planning context에 "Required exact filenames
+    … use verbatim" 추가 + 시스템 지시.
+- **실 TTY 재실행 결과**: `src/circuit_breaker/breaker.py`, `tests/test_breaker.py`로 정확히
+  생성(이전 main.py/test_main.py). `breaker.py`에 CircuitBreaker/CircuitBreakerOpenException/
+  3상태, `test_breaker.py`에 **실제 테스트 함수 5개**(4개 상태전이+데코레이터). `pytest`
+  **5 passed**(3초 sleep 포함). 즉 A·B·C 모두 해소된 정상 산출.
+- 무회귀 779 passed(전략 테스트 2건 추가).
