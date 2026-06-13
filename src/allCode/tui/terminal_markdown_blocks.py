@@ -16,6 +16,19 @@ from rich.text import Text
 
 from allCode.tui.terminal_width import display_width
 
+# Codex-style table: no outer/vertical borders, a segmented heavy rule under the
+# header, and a light rule between each row (gaps at column boundaries).
+_CODEX_TABLE_BOX = box.Box(
+    "    \n"  # top
+    "    \n"  # head
+    " ━  \n"  # head_row (heavy, gap at column junctions)
+    "    \n"  # mid
+    " ─  \n"  # row (light separator between data rows)
+    " ─  \n"  # foot_row
+    "    \n"  # foot
+    "    \n"  # bottom
+)
+
 _FENCE_START_RE = re.compile(r"^```([A-Za-z0-9_+.-]*)\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _ORDERED_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.*)$")
@@ -45,16 +58,22 @@ def render_compact_markdown(
     spurious breaks inside a paragraph that streamed in pieces.
     """
 
+    local_first = True
     for block in _parse_blocks(source):
-        space_before = block.kind in {"code", "table", "quote", "heading"}
         space_after = block.kind in {"code", "table", "quote"}
-        if space_before and emitted and not last_offset:
+        # Within one render call, separate consecutive blocks with a blank line to
+        # restore the source's vertical rhythm. Across streamed chunks (local_first
+        # on a fresh call) only offset blocks get a leading blank, so a paragraph
+        # that streamed in pieces is never split by a spurious blank.
+        offset_before = block.kind in {"code", "table", "quote", "heading"} and emitted
+        if (not local_first or offset_before) and not last_offset:
             console.print()
         _render_block(console, block)
         if space_after:
             console.print()
         last_offset = space_after
         emitted = True
+        local_first = False
     return emitted, last_offset
 
 
@@ -225,11 +244,12 @@ def _render_table(console: Console, lines: list[str]) -> None:
     if _table_is_too_wide(headers, normalized_rows, console.width):
         _render_table_fallback(console, headers, normalized_rows)
         return
-    # Codex separates the header with a heavy rule and uses no vertical/outer
-    # borders. Row separators are omitted to avoid clutter on small tables.
+    # Codex draws a segmented heavy rule under the header and a light rule between
+    # rows, with no vertical/outer borders.
     table = Table(
-        box=box.SIMPLE_HEAVY,
+        box=_CODEX_TABLE_BOX,
         show_edge=False,
+        show_lines=True,
         pad_edge=False,
         padding=(0, 1),
         header_style="bold",
