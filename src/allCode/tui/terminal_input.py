@@ -21,6 +21,10 @@ from allCode.tui.terminal_screen import TerminalScreen
 from allCode.tui.terminal_text_area import TerminalTextArea
 from allCode.tui.terminal_width import display_width, wrap_display_width
 
+# Display width of the composer prompt prefix ("› " / "  "), where the input
+# text and caret begin.
+_PROMPT_PREFIX_WIDTH = 2
+
 
 @dataclass
 class InputRenderState:
@@ -222,7 +226,11 @@ class TerminalInputEditor:
         visual_lines: list[str] = []
         cursor_position = area.cursor_position()
         cursor_row = 0
-        cursor_col = 3
+        # The prompt prefix ("› " on the first line, "  " on wrapped lines) is two
+        # display columns wide, so the text — and the cursor — start two columns
+        # in. Using 3 here put the caret one cell past the text end; for wide
+        # (CJK) input that gap is especially visible during IME composition.
+        cursor_col = _PROMPT_PREFIX_WIDTH
         for line_index, line in enumerate(area.lines()):
             chunks = wrap_display_width(line, width)
             if line_index == cursor_position.line:
@@ -234,7 +242,7 @@ class TerminalInputEditor:
                     wrapped_row = display_col // width
                     wrapped_column = display_col % width
                 cursor_row = len(visual_lines) + min(wrapped_row, len(chunks) - 1)
-                cursor_col = 3 + wrapped_column
+                cursor_col = _PROMPT_PREFIX_WIDTH + wrapped_column
             visual_lines.extend(chunks)
         return InputRenderState(lines=visual_lines or [""], cursor_row=cursor_row, cursor_col=cursor_col)
 
