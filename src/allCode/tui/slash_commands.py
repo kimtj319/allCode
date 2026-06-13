@@ -32,10 +32,12 @@ class SlashCommandHandler:
         registry: CommandRegistry | None = None,
         memory_backend: MemoryCommandBackend | None = None,
         status_backend: StatusCommandBackend | None = None,
+        workspace_root: str | None = None,
     ) -> None:
         self.registry = registry or CommandRegistry()
         self.memory_backend = memory_backend
         self.status_backend = status_backend
+        self.workspace_root = workspace_root
 
     async def handle(self, command: str) -> SlashCommandResult:
         normalized = " ".join(command.strip().split())
@@ -55,9 +57,17 @@ class SlashCommandHandler:
             if self.status_backend is None:
                 return SlashCommandResult(message="상태 명령 백엔드가 설정되지 않았습니다.")
             return SlashCommandResult(message=await self.status_backend.handle(normalized))
+        if normalized == "/undo":
+            return SlashCommandResult(message=self._undo())
         if normalized in {"/help", "/commands"}:
             return SlashCommandResult(message=self._help_text())
         return SlashCommandResult(message=f"알 수 없는 명령어입니다: {normalized}")
+
+    def _undo(self) -> str:
+        from allCode.workspace.git_ops import undo_last_allcode_commit
+
+        root = self.workspace_root or "."
+        return undo_last_allcode_commit(root).message
 
     def _help_text(self) -> str:
         return "\n".join(f"- {command.usage}: {command.description}" for command in self.registry.all())

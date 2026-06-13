@@ -157,4 +157,5 @@ def _slash_handler(config, *, session_log_path: Path | None = None) -> SlashComm
     return SlashCommandHandler(
         memory_backend=service,
         status_backend=RuntimeStatusCommandService(config=config, tools=tools, session_log_path=session_log_path),
+        workspace_root=str(project_root),
     )

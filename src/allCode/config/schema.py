@@ -132,6 +132,13 @@ class MCPConfig(StrictConfigModel):
         return value
 
 
+class GitConfig(StrictConfigModel):
+    # When true, allCode commits file changes after a successful turn (marked so
+    # /undo can revert only allCode's own commits). Off by default to avoid
+    # touching the user's history unexpectedly.
+    auto_commit: bool = False
+
+
 class AppConfig(StrictConfigModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
@@ -139,6 +146,7 @@ class AppConfig(StrictConfigModel):
     web: WebConfig = Field(default_factory=WebConfig)
     source_intelligence: SourceIntelligenceConfig = Field(default_factory=SourceIntelligenceConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    git: GitConfig = Field(default_factory=GitConfig)
 
 
 class ConfigFileSource(StrictConfigModel):

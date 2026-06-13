@@ -25,6 +25,8 @@ from allCode.tools.approval import ApprovalHandler, ApprovalManager
 from allCode.tools.mcp import load_mcp_tools
 from allCode.tools.registry import ToolRegistry
 from allCode.tools.web_provider import fetch_provider_from_config, provider_from_config
+from allCode.workspace.git_ops import commit_all as git_commit_all
+from allCode.workspace.git_ops import is_git_repo
 
 EventHandler = Callable[[AgentEvent], Awaitable[None]]
 TurnRunner = Callable[[str, EventHandler, ApprovalHandler | None], Awaitable[None]]
@@ -84,6 +86,7 @@ async def run_agent_turn(
         )
         result = await loop.run_turn(turn_input)
         await _save_persisted_session_state(config, turn_input.session_id, effective_context_builder)
+        _maybe_auto_commit(config, result, prompt)
         _remember_result_targets(effective_context_builder, result)
         effective_context_builder.remember_user_prompt(turn_input.session_id, prompt)
         effective_context_builder.remember_user_note(turn_input.session_id, prompt)
@@ -172,6 +175,20 @@ async def _save_persisted_session_state(config: AppConfig, session_id: str, cont
     store = SessionStateStore(Path(config.workspace.root))
     snapshot = context_builder.session_state.to_snapshot(session_id=session_id, workspace_root=config.workspace.root)
     await store.save_snapshot(snapshot)
+
+
+def _maybe_auto_commit(config: AppConfig, result: TurnResult, prompt: str) -> None:
+    if not config.git.auto_commit:
+        return
+    if result.status not in {"success", "partial"}:
+        return
+    if not (result.created_files or result.completion_evidence.has_file_change()):
+        return
+    root = config.workspace.root
+    if not is_git_repo(root):
+        return
+    subject = " ".join(prompt.split())[:72] or "allCode change"
+    git_commit_all(root, f"allCode: {subject}")
 
 
 def _remember_result_targets(context_builder: ContextBuilder, result: TurnResult) -> None:
