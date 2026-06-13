@@ -46,6 +46,22 @@ class PreflightPlanner:
                 )
             )
         if explicit_target is None and not signals.followup_requested and routing.kind == "inspect" and "search_workspace" in routing.tool_capabilities:
+            # Broad architecture/structure analysis must start from the actual
+            # source tree, not a keyword search: a "def " search matches code
+            # fences inside design docs (plan/*.md) and generated output trees and
+            # steers the model to summarize docs instead of the real code. Seed a
+            # code-prioritized source_overview so src/ packages are the first
+            # evidence the model sees.
+            if self._is_architecture_overview(prompt):
+                return PreflightPlan(
+                    tool_calls=[
+                        ToolCall(
+                            id=f"preflight-{uuid4().hex}",
+                            name="source_overview",
+                            arguments={"path": ".", "focus": "package_roles", "query": prompt[:400]},
+                        )
+                    ]
+                )
             query = self._inspection_search_query(prompt)
             if query:
                 return PreflightPlan(
@@ -150,6 +166,19 @@ class PreflightPlanner:
         if any(marker in normalized for marker in markers):
             return True
         return bool(re.search(r"\b[A-Z][A-Z0-9_]{3,}\b", prompt))
+
+    def _is_architecture_overview(self, prompt: str) -> bool:
+        """Broad "understand the project/architecture" requests (no explicit
+        target) that should begin from a code-prioritized source overview."""
+
+        normalized = " ".join(prompt.lower().split())
+        markers = (
+            "architecture", "아키텍처", "구조", "전체 흐름", "전반", "overall", "overview",
+            "module", "modules", "모듈", "responsibility", "responsibilities", "책임",
+            "layer", "layered", "계층", "codebase", "코드베이스", "프로젝트 목적", "project purpose",
+            "도메인 로직", "domain logic", "핵심 코드", "important code", "핵심 도메인",
+        )
+        return any(marker in normalized for marker in markers)
 
     def _inspection_search_query(self, prompt: str) -> str | None:
         normalized = " ".join(prompt.lower().split())

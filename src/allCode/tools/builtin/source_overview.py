@@ -157,10 +157,34 @@ def _combined_query(user_prompt: str, tool_query: str) -> str:
     return "\n".join(dict.fromkeys(parts))
 
 
+def _gitignore_dirs(workspace_root: Path) -> set[str]:
+    """Top-level directory names the repo gitignores (build output, generated
+    trees, vendored deps, and—per project choice—tests/docs). Architecture
+    overviews should center on tracked source, so these are skipped for the
+    overview scan only (the global index is unaffected)."""
+
+    names: set[str] = set()
+    try:
+        text = (workspace_root / ".gitignore").read_text(encoding="utf-8")
+    except OSError:
+        return names
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", "!")):
+            continue
+        candidate = line.rstrip("/")
+        # Only simple directory-name patterns; ignore globs and nested paths.
+        if not candidate or "/" in candidate or "*" in candidate or "?" in candidate:
+            continue
+        names.add(candidate)
+    return names
+
+
 def _target_index(*, target: Path, workspace_root: Path, max_files: int) -> WorkspaceIndex:
     scan_root = target if target.is_dir() else target.parent
     scan_cap = min(2_000, max(max_files * 5, max_files + 200))
-    raw_index = WorkspaceIndexer(max_files=scan_cap).build(WorkspaceRoots.from_root(scan_root))
+    ignore_dirs = DEFAULT_IGNORE_DIRS | _gitignore_dirs(workspace_root)
+    raw_index = WorkspaceIndexer(max_files=scan_cap, ignore_dirs=ignore_dirs).build(WorkspaceRoots.from_root(scan_root))
     prefix = _relative(scan_root, workspace_root)
     records = []
     for record in raw_index.files:

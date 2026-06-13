@@ -165,6 +165,38 @@ python -m pytest
   않도록(문서 내 코드 블록 vs 실제 소스 파일 구분).
 - 가능하면 inspect 첫 단계에서 코드 루트 source_overview를 자동 seed.
 
+## 구현 결과 (2026-06-13, 2차 — Phase 6)
+
+근본 원인 추가 확정: `agent/preflight.py`의 inspect 프리플라이트가 아키텍처/모듈/
+책임 프롬프트에서 검색어 `"def "`로 `search_files`를 seed → `plan/*.md` 코드펜스와
+`output/*.py`에 매칭되어 모델을 문서로 유도.
+
+수정:
+
+- `preflight.py`: `_is_architecture_overview()` 추가. 광역 아키텍처/구조/모듈/책임
+  분석(명시 타겟 없음)에서는 `search_files` 대신 코드 우선 `source_overview`(path=".")를
+  seed. (policy상 `search_workspace` 능력이면 source_overview 허용)
+- `tools/builtin/source_overview.py`: `_gitignore_dirs()` 추가. overview 스캔이
+  `.gitignore`의 단순 디렉터리(이 레포: `output/`,`review/`,`docs/`,`tests/`,`cache/`)를
+  제외 — 전역 인덱서/컨텍스트/테스트 탐색에는 영향 없음. 아키텍처 분석이 tracked
+  소스(`src/`)에 집중.
+- 테스트: `test_preflight_seeds_source_overview_for_architecture_analysis`,
+  `test_preflight_keeps_keyword_search_for_non_architecture_inspect` 추가;
+  기존 `test_preflight_searches_before_workspace_inventory_answer`를 source_overview
+  기대로 갱신. 전체 `python -m pytest` → 775 passed, 3 skipped.
+
+검증(실모델 재실행, v4):
+
+- ✅ 확인 범위가 `src/allCode/{agent,memory,tools,tui,core,generation,llm,workspace,
+  config,telemetry}` 핵심 패키지 전체로 정확화(노이즈/문서/생성물 제거).
+- ✅ 역할 표가 agy 수준으로 정확(각 패키지 책임 1줄, 8개 계층).
+- ✅ 대표 파일이 실제 코어 소스(`agent/round_runner.py`, `llm/response_parser.py`,
+  `core/events.py` 등) + 실제 import edge 표시.
+- ✅ 스캐폴딩 누출 없음(Phase 2 유지).
+- 남은 점: 여전히 결정론적 fallback(모델 답변이 source_answer_guard에 거부)이나,
+  fallback 내용이 정확·구조적이라 실사용 품질은 codex/agy에 근접. Phase 3(guard가
+  양질의 모델 prose를 과도 거부하지 않도록 정합)는 후속 선택 과제.
+
 ## 남은 리스크
 
 - source-analysis 서브시스템(다수 파일)이 크다. 합성 정리 시 기존 evidence/guard
