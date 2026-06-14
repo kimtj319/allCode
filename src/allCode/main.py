@@ -154,8 +154,20 @@ def _slash_handler(config, *, session_log_path: Path | None = None) -> SlashComm
         session_store=SessionStore(project_root),
         cwd=project_root,
     )
+    from allCode.tui.command_registry import CommandRegistry, CommandSpec
+    from allCode.tui.custom_commands import load_custom_commands
+
+    registry = CommandRegistry()
+    custom = load_custom_commands(project_root)
+    for command in custom:
+        try:
+            registry.register(CommandSpec(name=command.name, description=command.description, usage=command.name))
+        except ValueError:
+            continue
     return SlashCommandHandler(
+        registry=registry,
         memory_backend=service,
         status_backend=RuntimeStatusCommandService(config=config, tools=tools, session_log_path=session_log_path),
         workspace_root=str(project_root),
+        custom_commands={command.name: command for command in custom},
     )

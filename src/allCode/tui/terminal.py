@@ -207,6 +207,9 @@ class TerminalSession:
             self._print_assistant_block(result.message)
         if result.exit_requested:
             return 0
+        if result.submit_prompt:
+            # A custom command expands to a prompt that runs as a normal turn.
+            self._run_agent_prompt(result.submit_prompt)
         return None
 
     def _print_header(self) -> None:
