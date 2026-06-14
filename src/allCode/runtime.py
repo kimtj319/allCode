@@ -143,6 +143,12 @@ def runtime_tool_registry(config: AppConfig) -> ToolRegistry:
             shell_sandbox=config.workspace.shell_sandbox,
         )
     )
+    from allCode.tools.builtin.task import TaskTool
+
+    try:
+        registry.register(TaskTool(config))
+    except ValueError:
+        pass
     mcp_tools, _manager = load_mcp_tools(config)
     for tool in mcp_tools:
         try:
