@@ -58,7 +58,9 @@ class PromptBuilder:
         messages = [Message(role="system", content=content)]
         if context_bundle is not None and context_bundle.sections:
             messages.append(Message(role="system", content=context_instruction(context_bundle)))
-        messages.append(Message(role="user", content=turn_input.user_prompt))
+        messages.append(
+            Message(role="user", content=turn_input.user_prompt, images=list(getattr(turn_input, "images", []) or []))
+        )
         return messages
     def append_tool_results(
         self,

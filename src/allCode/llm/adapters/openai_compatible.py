@@ -265,7 +265,17 @@ class OpenAICompatibleClient:
 
     @staticmethod
     def _message_payload(message: Message) -> dict[str, Any]:
-        payload: dict[str, Any] = {"role": message.role, "content": message.content}
+        if message.images:
+            # Multimodal content for vision-capable models: text block + one
+            # image_url block per attachment.
+            content_blocks: list[dict[str, Any]] = []
+            if message.content:
+                content_blocks.append({"type": "text", "text": message.content})
+            for image in message.images:
+                content_blocks.append({"type": "image_url", "image_url": {"url": image}})
+            payload: dict[str, Any] = {"role": message.role, "content": content_blocks}
+        else:
+            payload = {"role": message.role, "content": message.content}
         if message.tool_calls:
             payload["tool_calls"] = [
                 {

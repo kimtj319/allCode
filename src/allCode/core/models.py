@@ -103,6 +103,9 @@ class ToolResult(CoreModel):
 class Message(CoreModel):
     role: Role
     content: str = ""
+    # Optional image attachments as data URLs ("data:image/png;base64,...").
+    # Sent as multimodal content blocks to vision-capable models.
+    images: list[str] = Field(default_factory=list)
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -121,6 +124,7 @@ class TurnInput(CoreModel):
     workspace: WorkspaceRef
     mode: AgentMode = "all_rounder"
     session_id: str = Field(default_factory=lambda: uuid4().hex)
+    images: list[str] = Field(default_factory=list)
 
     @field_validator("user_prompt")
     @classmethod
