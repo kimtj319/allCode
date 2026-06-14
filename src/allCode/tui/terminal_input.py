@@ -253,7 +253,7 @@ class TerminalInputEditor:
         completion = self._completion_overlay()
         if completion is not None:
             return completion
-        return self._slash_menu_overlay(area)
+        return self._slash_menu_overlay(area) or self._mention_menu_overlay(area)
 
     def _completion_overlay(self) -> OverlayView | None:
         state = self._completion_state
@@ -277,3 +277,19 @@ class TerminalInputEditor:
             return None
         items = [OverlayItem(label=command.name, description=command.description) for command in matches[:6]]
         return OverlayView(kind="completion", items=items)
+
+    def _mention_menu_overlay(self, area: TerminalTextArea) -> OverlayView | None:
+        # Live workspace file picker while typing an "@path" token (Codex-style),
+        # reusing the Tab path-completion candidates as a display-only overlay.
+        # Defensive: an overlay must never break the composer render.
+        try:
+            state = self.completer._path_completion(area.text, area.cursor)
+        except Exception:
+            return None
+        if state is None:
+            return None
+        items = [
+            OverlayItem(label=candidate.label, description=candidate.description)
+            for candidate in state.candidates[:6]
+        ]
+        return OverlayView(kind="completion", items=items) if items else None

@@ -81,7 +81,7 @@ class TerminalCompleter:
         for child in sorted(base_dir.iterdir(), key=lambda path: (not path.is_dir(), path.name.lower())):
             if not child.name.startswith(prefix):
                 continue
-            relative = child.relative_to(self.cwd) if self._is_relative_to(child, self.cwd) else child
+            relative = child.resolve().relative_to(self.cwd.resolve()) if self._is_relative_to(child, self.cwd) else child
             replacement = "@" + str(relative)
             if child.is_dir():
                 replacement += "/"
