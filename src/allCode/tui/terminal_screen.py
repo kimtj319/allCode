@@ -35,6 +35,10 @@ class _BodyRowCounter:
             newlines = text.count("\n")
             if newlines:
                 self._screen._advance_body_rows(newlines)
+            # Track whether body output left the cursor mid-row (no trailing
+            # newline). The floating composer must not be drawn on a partial line
+            # or it would clobber streamed text that hasn't been committed yet.
+            self._screen._body_partial = not text.endswith("\n")
         return self._target.write(text)
 
     def flush(self) -> None:
@@ -73,6 +77,9 @@ class TerminalScreen:
         # Next free body row (1-based). Body output flows from here; once it
         # reaches body_bottom it stays clamped there and content scrolls.
         self._body_row = 1
+        # True when the last body write did not end in a newline (cursor sits
+        # mid-row). The float floor is pushed one row down in that case.
+        self._body_partial = False
         # Row where the composer block was last drawn. While body output is short
         # (e.g. just the banner) the composer floats right beneath it instead of
         # being pinned to the bottom, so the screen does not show a large empty gap
@@ -101,31 +108,43 @@ class TerminalScreen:
     def _advance_body_rows(self, count: int) -> None:
         self._body_row = min(self._body_row + count, self.body_bottom)
 
+    def _composer_start(self) -> int:
+        """Row where the composer block begins. It floats right under the body
+        while there is room, and pins to the bottom once body output reaches the
+        reserved area. A partial (un-newline-terminated) last body line pushes the
+        floor down one row so the composer never overwrites uncommitted text."""
+
+        bottom_start = self.height - self.reserved_rows + 1
+        floor_row = self._body_row + (1 if self._body_partial else 0)
+        if floor_row >= self.body_bottom:
+            return bottom_start
+        return max(1, floor_row)
+
     def enter(self) -> None:
         if not self.interactive:
             return
         self._entered = True
         self._body_row = 1
-        self.stdout.write("\x1b[2J\x1b[H")
+        self._raw_stdout.write("\x1b[2J\x1b[H")
         self._apply_scroll_region()
-        self.stdout.flush()
+        self._raw_stdout.flush()
 
     def exit(self) -> None:
         if not self.interactive or not self._entered:
             return
-        self.stdout.write("\x1b[r")
+        self._raw_stdout.write("\x1b[r")
         self._clear_prompt_area()
-        self.stdout.write(f"\x1b[{self.height};1H")
-        self.stdout.flush()
+        self._raw_stdout.write(f"\x1b[{self.height};1H")
+        self._raw_stdout.flush()
         self._entered = False
 
     def clear_all(self) -> None:
         if not self.interactive:
             return
         self._body_row = 1
-        self.stdout.write("\x1b[2J\x1b[H")
+        self._raw_stdout.write("\x1b[2J\x1b[H")
         self._apply_scroll_region()
-        self.stdout.flush()
+        self._raw_stdout.flush()
 
     def render_input_panel(
         self,
@@ -148,18 +167,11 @@ class TerminalScreen:
     def render_bottom_frame(self, frame: TerminalFrame) -> None:
         if not self.interactive:
             return
-        self.stdout.write("\x1b[?25l")
+        self._raw_stdout.write("\x1b[?25l")
         try:
             needed_rows = max(4, min(self.max_reserved_rows, frame.line_count + 2))
             self.set_reserved_rows(needed_rows)
-            bottom_start = self.height - self.reserved_rows + 1
-            # Float the composer right under the body while there is still room
-            # above the reserved area; pin it to the bottom once body output has
-            # grown into that area (steady state once scrolling begins).
-            if self._body_row >= self.body_bottom:
-                start = bottom_start
-            else:
-                start = max(1, self._body_row)
+            start = self._composer_start()
             self._composer_top = start
             self._clear_prompt_area()
             # Codex separates the live composer from scrollback with blank space
@@ -185,9 +197,9 @@ class TerminalScreen:
             for index, line in enumerate(frame.input_lines[:usable_rows]):
                 prefix = "› " if index == 0 else "  "
                 current_row = input_start + index
-                self.stdout.write(f"\x1b[{current_row};1H")
-                self.stdout.write(f"{self._fg(self.theme.prompt_fg)}{prefix}\x1b[0m")
-                self.stdout.write(clip_display_width(line.text, max(0, self.width - 3)))
+                self._raw_stdout.write(f"\x1b[{current_row};1H")
+                self._raw_stdout.write(f"{self._fg(self.theme.prompt_fg)}{prefix}\x1b[0m")
+                self._raw_stdout.write(clip_display_width(line.text, max(0, self.width - 3)))
             completion_start = input_start + min(len(frame.input_lines), usable_rows)
             shown_overlays = frame.overlay_lines[: max(0, usable_rows - len(frame.input_lines))]
             for offset, line in enumerate(shown_overlays):
@@ -201,10 +213,10 @@ class TerminalScreen:
                 self._write_line(row, f"  {line.text}", style=line.style)
             cursor_screen_row = min(input_start + frame.cursor_row, self.height)
             cursor_screen_col = max(1, min(self.width, 1 + frame.cursor_col))
-            self.stdout.write(f"\x1b[{cursor_screen_row};{cursor_screen_col}H")
+            self._raw_stdout.write(f"\x1b[{cursor_screen_row};{cursor_screen_col}H")
         finally:
-            self.stdout.write("\x1b[?25h")
-            self.stdout.flush()
+            self._raw_stdout.write("\x1b[?25h")
+            self._raw_stdout.flush()
 
     def set_reserved_rows(self, rows: int) -> None:
         # Reserved height is monotonic (high-water) within a session: once the
@@ -234,7 +246,7 @@ class TerminalScreen:
         if not self.interactive:
             return
         self._clear_prompt_area()
-        self.stdout.flush()
+        self._raw_stdout.flush()
 
     def prepare_body_output(self) -> None:
         """Clear composer rows and move the cursor back into the scrollback area."""
@@ -244,21 +256,21 @@ class TerminalScreen:
         self._clear_prompt_area()
         self._apply_scroll_region()
         target_row = min(max(1, self._body_row), self.body_bottom)
-        self.stdout.write(f"\x1b[{target_row};1H")
-        self.stdout.flush()
+        self._raw_stdout.write(f"\x1b[{target_row};1H")
+        self._raw_stdout.flush()
 
     def _clear_prompt_area(self) -> None:
-        # Clear from wherever the composer currently sits (it may float above the
-        # reserved area) down to the bottom of the screen. Fall back to the
-        # bottom-anchored position before the first draw.
-        bottom_start = self.height - self.reserved_rows + 1
-        start = bottom_start if self._composer_top is None else min(self._composer_top, bottom_start)
+        # Clear from where the composer currently belongs (derived from the live
+        # body position, not a stale cached row) down to the bottom of the screen.
+        # Deriving it live ensures body text written since the last composer draw
+        # is never erased by the clear that precedes a redraw.
+        start = self._composer_start()
         for row in range(start, self.height + 1):
-            self.stdout.write(f"\x1b[{row};1H\x1b[2K")
+            self._raw_stdout.write(f"\x1b[{row};1H\x1b[2K")
 
     def _apply_scroll_region(self) -> None:
         self._applied_height = self.height
-        self.stdout.write(f"\x1b[1;{self.body_bottom}r")
+        self._raw_stdout.write(f"\x1b[1;{self.body_bottom}r")
 
     def _separator(self) -> str:
         return "─" * self.width
@@ -266,10 +278,10 @@ class TerminalScreen:
     def _write_line(self, row: int, text: str, *, style: str = "normal") -> None:
         if row > self.height:
             return
-        self.stdout.write(f"\x1b[{row};1H\x1b[2K")
+        self._raw_stdout.write(f"\x1b[{row};1H\x1b[2K")
         prefix = self._fg(self.theme.dim_fg) if style == "dim" else ""
         suffix = "\x1b[0m" if prefix else ""
-        self.stdout.write(f"{prefix}{clip_display_width(text, self.width)}{suffix}")
+        self._raw_stdout.write(f"{prefix}{clip_display_width(text, self.width)}{suffix}")
 
     def _write_pulse_line(self, row: int, text: str, split: int, fg: tuple[int, int, int]) -> None:
         """Write an activity line whose leading "• <label>" breathes in `fg`
@@ -281,10 +293,10 @@ class TerminalScreen:
         split = max(0, min(split, len(clipped)))
         head, tail = clipped[:split], clipped[split:]
         red, green, blue = fg
-        self.stdout.write(f"\x1b[{row};1H\x1b[2K")
-        self.stdout.write(f"\x1b[1m\x1b[38;2;{red};{green};{blue}m{head}\x1b[0m")
+        self._raw_stdout.write(f"\x1b[{row};1H\x1b[2K")
+        self._raw_stdout.write(f"\x1b[1m\x1b[38;2;{red};{green};{blue}m{head}\x1b[0m")
         if tail:
-            self.stdout.write(f"{self._fg(self.theme.dim_fg)}{tail}\x1b[0m")
+            self._raw_stdout.write(f"{self._fg(self.theme.dim_fg)}{tail}\x1b[0m")
 
     @staticmethod
     def _is_terminal(stream: TextIO) -> bool:

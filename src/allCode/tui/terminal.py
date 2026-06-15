@@ -155,13 +155,39 @@ class TerminalSession:
         self._running_started_at = time.monotonic()
         self._render_running_composer(messages.MODEL_REQUEST_STATUS)
         try:
-            asyncio.run(self._run_turn(prompt))
+            asyncio.run(self._run_turn_with_ticker(prompt))
         except KeyboardInterrupt:
             self.stderr.write("\nInterrupted.\n")
         except Exception as exc:
             self.error_console.print(f"[bold red]오류:[/] {exc}")
         finally:
             self._finish_running_composer()
+
+    async def _run_turn_with_ticker(self, prompt: str) -> None:
+        # Animate the spinner/elapsed counter while the turn runs, including the
+        # model "thinking" phase before the first token arrives (no agent events
+        # fire then, so without this the spinner would freeze). The ticker shares
+        # the turn's event loop, so repaints interleave safely with stream writes
+        # at await boundaries — no cross-thread terminal contention.
+        ticker = asyncio.create_task(self._spinner_ticker())
+        try:
+            await self._run_turn(prompt)
+        finally:
+            ticker.cancel()
+            try:
+                await ticker
+            except asyncio.CancelledError:
+                pass
+
+    async def _spinner_ticker(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(0.2)
+                # Keep whatever status the latest real event set; just re-tick the
+                # spinner frame and elapsed counter.
+                self._render_running_composer(self._composer_status)
+        except asyncio.CancelledError:
+            return
 
     async def _run_turn(self, prompt: str) -> None:
         if self._turn_runner_accepts_approval:
