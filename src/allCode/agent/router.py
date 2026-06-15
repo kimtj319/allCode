@@ -30,6 +30,21 @@ WorkflowHint = Literal[
 ]
 RouteSource = Literal["rule", "model", "fallback"]
 
+# Markers that a prompt is asking about the earlier conversation rather than the
+# codebase. Such questions should be answered from chat context.
+_CONVERSATION_RECALL_MARKERS = (
+    "1번 턴", "첫 번째 턴", "첫번째 턴", "맨 처음", "처음에", "아까", "이전에",
+    "이전 대화", "앞에서", "앞서", "방금 전", "내가 말한", "내가 준", "내가 강조",
+    "내가 요청한", "내가 했던", "우리가 얘기", "우리가 논의", "위에서 말한",
+    "earlier", "previously", "first turn", "you said", "i told you", "i asked you",
+    "we discussed", "we talked about", "our conversation", "above you said",
+)
+
+
+def _references_prior_conversation(prompt: str) -> bool:
+    lowered = prompt.lower()
+    return any(marker.lower() in lowered for marker in _CONVERSATION_RECALL_MARKERS)
+
 
 class RoutingDecision(CoreModel):
     kind: RouteKind
@@ -77,6 +92,22 @@ class RuleBasedRouter:
     def classify(self, prompt: str) -> RoutingDecision:
         signals = self._extractor.extract(prompt)
         flags = self._flags(signals)
+
+        # A question that refers back to the conversation ("what did I say in turn
+        # 1?", "the constraint I gave earlier") must be answered from context, not
+        # routed into source inspection (which ignores chat history and returns a
+        # generic structural summary). Only when there is no explicit change/run
+        # command — modify/operate requests keep their own routing.
+        if _references_prior_conversation(prompt) and not (
+            signals.modify_action or signals.operate_action or signals.explicit_change_request
+        ):
+            return self._decision(
+                "answer",
+                0.85,
+                "Question refers to earlier conversation; answer from context.",
+                signals,
+                flags,
+            )
 
         if signals.read_only_requested:
             if signals.answer_artifact_requested:
