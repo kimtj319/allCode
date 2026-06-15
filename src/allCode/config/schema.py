@@ -132,6 +132,28 @@ class MCPConfig(StrictConfigModel):
         return value
 
 
+class HookSpec(StrictConfigModel):
+    # Glob matched against the tool name ("*" = all). command runs via the shell
+    # with ALLCODE_TOOL_NAME / ALLCODE_TOOL_ARGS / ALLCODE_TOOL_OK in the env.
+    match: str = "*"
+    command: str
+    timeout_seconds: int = 10
+
+    @field_validator("command")
+    @classmethod
+    def require_non_empty(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("hook command must be non-empty")
+        return value
+
+
+class HooksConfig(StrictConfigModel):
+    # pre_tool hooks run before a tool; a non-zero exit blocks the tool.
+    # post_tool hooks run after a tool (observe-only).
+    pre_tool: list[HookSpec] = Field(default_factory=list)
+    post_tool: list[HookSpec] = Field(default_factory=list)
+
+
 class GitConfig(StrictConfigModel):
     # When true, allCode commits file changes after a successful turn (marked so
     # /undo can revert only allCode's own commits). Off by default to avoid
@@ -147,6 +169,7 @@ class AppConfig(StrictConfigModel):
     source_intelligence: SourceIntelligenceConfig = Field(default_factory=SourceIntelligenceConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     git: GitConfig = Field(default_factory=GitConfig)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
 
 
 class ConfigFileSource(StrictConfigModel):

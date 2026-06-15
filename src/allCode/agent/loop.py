@@ -75,6 +75,7 @@ class AgentLoop:
         tool_executor: ToolExecutor | None = None,
         generation_workflow: GenerationWorkflow | None = None,
         context_builder: ContextBuilder | None = None,
+        hook_runner=None,
     ) -> None:
         self._llm_client = llm_client
         self._settings = settings
@@ -93,6 +94,7 @@ class AgentLoop:
             policy=self._tool_policy,
             approval=self._approval,
             approval_handler=approval_handler,
+            hook_runner=hook_runner,
         )
         self._generation_workflow = generation_workflow or GenerationWorkflow(
             event_bus=self._event_bus,

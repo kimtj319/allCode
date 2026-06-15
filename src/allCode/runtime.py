@@ -22,6 +22,7 @@ from allCode.memory.session_state_store import SessionStateStore
 from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.approval import ApprovalHandler, ApprovalManager
+from allCode.tools.hooks import HookRunner
 from allCode.tools.mcp import load_mcp_tools
 from allCode.tools.registry import ToolRegistry
 from allCode.tools.web_provider import fetch_provider_from_config, provider_from_config
@@ -64,6 +65,7 @@ async def run_agent_turn(
         approval_handler=approval_handler,
         context_builder=effective_context_builder,
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
+        hook_runner=HookRunner(config.hooks),
     )
     turn_input = TurnInput(
         user_prompt=prompt,

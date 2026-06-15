@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from allCode.agent.policy import ToolPolicy
 from allCode.agent.read_only_guard import read_only_tool_denial
@@ -30,6 +31,9 @@ from allCode.tools.diff import EditTransaction
 from allCode.tools.executor_evidence import update_completion_evidence
 from allCode.tools.registry import ToolRegistry
 
+if TYPE_CHECKING:
+    from allCode.tools.hooks import HookRunner
+
 class ToolExecutor:
     """Runs registered tools after route policy and approval checks."""
 
@@ -40,11 +44,13 @@ class ToolExecutor:
         policy: ToolPolicy | None = None,
         approval: ApprovalManager | None = None,
         approval_handler: ApprovalHandler | None = None,
+        hook_runner: "HookRunner | None" = None,
     ) -> None:
         self._registry = registry
         self._policy = policy or ToolPolicy()
         self._approval = approval or ApprovalManager()
         self._approval_handler = approval_handler
+        self._hook_runner = hook_runner
 
     @property
     def approval_mode(self) -> str:
@@ -102,6 +108,11 @@ class ToolExecutor:
         if approval_result is not None:
             return approval_result
 
+        if self._hook_runner is not None and self._hook_runner.active:
+            denial = await self._hook_runner.pre_tool(call)
+            if denial is not None:
+                return ToolResult(call_id=call.id, name=call.name, ok=False, error=denial, error_type="hook_denied")
+
         try:
             if call.name == "run_tests" and event_bus is not None:
                 await event_bus.publish(ValidationStarted(turn_id=turn_id, message="Validation started.", data={"command": call.arguments.get("command", "")}))
@@ -115,6 +126,8 @@ class ToolExecutor:
         metadata = dict(result.metadata)
         metadata["duration_ms"] = elapsed_ms
         result = result.model_copy(update={"metadata": metadata})
+        if self._hook_runner is not None and self._hook_runner.active:
+            await self._hook_runner.post_tool(call, result)
         if completion_evidence is not None:
             update_completion_evidence(result, completion_evidence, workspace_root=context.workspace.root)
         if call.name == "run_tests" and event_bus is not None:
