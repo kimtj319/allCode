@@ -21,7 +21,7 @@ from allCode.agent.prompt_builder import PromptBuilder
 from allCode.agent.model_router import ModelRouter
 from allCode.agent.loop_obligations import remember_generation_workflow_result, seed_session_artifact_obligations, target_hint_exists
 from allCode.agent.recovery import RecoveryTracker, ToolLoopGuard
-from allCode.agent.router import RuleBasedRouter
+from allCode.agent.router import RuleBasedRouter, _references_prior_conversation
 from allCode.agent.round_runner import RoundRunner
 from allCode.agent.stream_collector import ModelStreamCollector
 from allCode.agent.tool_call_processor import ToolCallProcessor
@@ -174,7 +174,10 @@ class AgentLoop:
                 *self._context_builder.manifest_recent_paths(),
                 *self._context_builder.recent_targets.recent_paths(),
             ]
-        if self._model_router is not None:
+        # Questions that refer back to the conversation must be answered from chat
+        # context, so bypass the LLM router (which classifies them as source
+        # inspection) and use the rule router's conversation-recall handling.
+        if self._model_router is not None and not _references_prior_conversation(turn_input.user_prompt):
             routing = await self._model_router.classify(
                 turn_input.user_prompt,
                 context_bundle=context_bundle,
