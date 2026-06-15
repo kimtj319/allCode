@@ -252,10 +252,16 @@ class TerminalSession:
 
     def _print_user_prompt(self, prompt: str) -> None:
         self._prepare_body_output()
-        # One blank line separates turns; Codex shows the submitted prompt with a
-        # dim "›" marker rather than fencing it with a full-width rule.
+        # A blank line separates turns. The submitted prompt is rendered in a
+        # distinct accent colour with a "›" marker so it reads unmistakably as the
+        # user's input, clearly set apart from the dim "•" assistant answer that
+        # follows. Built with Text (not console markup) so "[" in the prompt is not
+        # interpreted as a style tag.
         self.console.print()
-        self.console.print(f"[dim]›[/] [dim]{prompt}[/]")
+        line = Text()
+        line.append("› ", style="bold #61afef")
+        line.append(prompt, style="#61afef")
+        self.console.print(line)
 
     def _print_assistant_block(self, text: str) -> None:
         self._prepare_body_output()
