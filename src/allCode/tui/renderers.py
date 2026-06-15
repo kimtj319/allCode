@@ -166,6 +166,18 @@ class EventRenderer:
         return RenderedEvent(transcript=f"{step}: {status}", transcript_role="status", status=str(status), severity="user_visible")
 
     def _render_generation_workflow_started(self, event: AgentEvent) -> RenderedEvent:
+        files = event.data.get("files") or []
+        plan_block = _format_plan_preview(
+            target_root=str(event.data.get("target_root") or "."),
+            files=files,
+        )
+        if plan_block:
+            return RenderedEvent(
+                transcript=plan_block,
+                transcript_role="allCode",
+                status=messages.WORKFLOW_STATUS,
+                severity="user_visible",
+            )
         return RenderedEvent(status=messages.WORKFLOW_STATUS, spinner=True, severity=event.severity)
 
     def _render_generation_workflow_finished(self, event: AgentEvent) -> RenderedEvent:
@@ -356,3 +368,51 @@ def _compact_count(value, label: str) -> str:
     if isinstance(value, str) and value.strip().isdigit():
         return f"{value.strip()} {label}"
     return ""
+
+
+def _format_plan_preview(*, target_root: str, files: list) -> str:
+    """Render the implementation plan and a file tree before any code is written.
+
+    Codex/Claude Code show a plan up front so the user can see the intended file
+    layout before generation begins. We render a fenced tree (monospace, immune to
+    markdown reflow) plus a short purpose list.
+    """
+
+    paths = [str(item.get("path", "")).replace("\\", "/").strip("/") for item in files if item.get("path")]
+    paths = [path for path in paths if path]
+    if not paths:
+        return ""
+    root_label = (target_root or ".").replace("\\", "/").rstrip("/") or "."
+    tree_lines = _ascii_file_tree(paths)
+    lines = [
+        f"**구현 계획** — `{root_label}/` 아래 {len(paths)}개 파일 생성",
+        "",
+        "```",
+        f"{root_label}/",
+        *tree_lines,
+        "```",
+    ]
+    return "\n".join(lines)
+
+
+def _ascii_file_tree(paths: list[str]) -> list[str]:
+    tree: dict = {}
+    for path in sorted(set(paths)):
+        node = tree
+        for part in path.split("/"):
+            node = node.setdefault(part, {})
+
+    out: list[str] = []
+
+    def walk(node: dict, prefix: str) -> None:
+        entries = sorted(node.items(), key=lambda kv: (not kv[1], kv[0]))
+        for index, (name, child) in enumerate(entries):
+            last = index == len(entries) - 1
+            connector = "└── " if last else "├── "
+            suffix = "/" if child else ""
+            out.append(f"{prefix}{connector}{name}{suffix}")
+            if child:
+                walk(child, prefix + ("    " if last else "│   "))
+
+    walk(tree, "")
+    return out

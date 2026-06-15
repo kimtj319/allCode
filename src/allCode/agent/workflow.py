@@ -118,7 +118,16 @@ class GenerationWorkflow:
             GenerationWorkflowStarted(
                 turn_id=turn_id,
                 message="Generation workflow started.",
-                data={"target_root": plan.target_root, "language": plan.language},
+                data={
+                    "target_root": plan.target_root,
+                    "language": plan.language,
+                    # Surface the plan so the UI can show the implementation plan and
+                    # file tree before any code is written (Codex-style plan preview).
+                    "files": [
+                        {"path": file.path, "purpose": file.purpose, "stage": file.stage}
+                        for file in plan.files
+                    ],
+                },
             )
         )
 

@@ -135,6 +135,12 @@ def _artifact_obligations(prompt: str) -> list[str]:
         ("retry/backoff behavior", ("retry", "backoff", "재시도", "백오프")),
         ("structured audit logging", ("jsonl", "audit", "logger", "logging", "감사", "로거", "로그")),
         ("plugin-like modules", ("plugin", "plugins", "extension", "플러그인", "확장")),
+        ("HTTP API endpoints/routes", ("endpoint", "route", "router", "fastapi", "flask", "api", "엔드포인트", "라우터", "라우트", "에이피아이")),
+        ("request/response schema models", ("schema", "pydantic", "dto", "model", "스키마", "모델")),
+        ("service layer / business logic module", ("service", "infrastructure", "인프라", "서비스")),
+        ("email/SMTP sending module", ("smtp", "email", "mail", "이메일", "메일", "발송")),
+        ("data store / repository", ("storage", "repository", "store", "database", "db", "저장소", "리포지토리", "데이터베이스")),
+        ("dependency manifest (requirements/pyproject)", ("requirements", "requirements.txt", "pyproject", "dependencies", "의존성", "패키지 목록")),
         ("tests", ("pytest", "tests", "unit test", "테스트", "검증")),
         ("README or user documentation", ("readme", "docs", "documentation", "문서", "사용법")),
     )
