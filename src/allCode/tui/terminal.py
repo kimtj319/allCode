@@ -80,6 +80,9 @@ class TerminalSession:
         self._spinner_index = 0
         self._composer_render_at = 0.0
         self._composer_status: str | None = None
+        # Persistent context/session meta shown in the always-redrawn footer.
+        self._base_footer = app_info.replace(" | ", " · ")
+        self._context_label = ""
         self.answer_renderer = TerminalAnswerRenderer(self.console)
         self._turn_runner_accepts_approval = self._accepts_approval_handler(turn_runner)
 
@@ -109,6 +112,9 @@ class TerminalSession:
             self.screen.exit()
 
     async def handle_agent_event(self, event: AgentEvent) -> None:
+        if event.event_type == "model_metrics_recorded":
+            self._update_context_label(event.data or {})
+            return
         if event.event_type == "approval_requested":
             self._print_status(messages.APPROVAL_STATUS)
             return
@@ -294,6 +300,34 @@ class TerminalSession:
         if len(lines) > max_lines:
             self.console.print(Text(f"  ... {len(lines) - max_lines} more diff lines ...", style="dim"))
         self._render_running_composer()
+
+    def _update_context_label(self, data: dict) -> None:
+        """Refresh the persistent context-usage indicator in the footer from the
+        latest model round metrics. Uses real token counts when the model reports
+        them, otherwise approximates from the request size (~4 chars/token)."""
+
+        usage = data.get("usage") if isinstance(data, dict) else None
+        tokens = None
+        if isinstance(usage, dict):
+            tokens = usage.get("prompt_tokens") or usage.get("total_tokens")
+        approx = False
+        if not tokens:
+            chars = data.get("prompt_chars") or data.get("request_chars")
+            if isinstance(chars, int) and chars > 0:
+                tokens = max(1, chars // 4)
+                approx = True
+        if not tokens:
+            return
+        prefix = "~" if approx else ""
+        if tokens >= 1000:
+            shown = f"{prefix}{tokens / 1000:.1f}k"
+        else:
+            shown = f"{prefix}{tokens}"
+        self._context_label = f"컨텍스트 {shown} 토큰"
+        footer = self._base_footer
+        if self._context_label:
+            footer = f"{footer} · {self._context_label}"
+        self.input_editor.footer = footer
 
     def _print_status(self, status: str) -> None:
         if not status:
