@@ -47,7 +47,7 @@ class ModelProjectPlanner:
         if payload is None:
             return None
         try:
-            plan = ProjectPlan.model_validate(payload)
+            plan = ProjectPlan.model_validate(_coerce_plan_payload(payload))
         except Exception:
             return None
         return _sanitize_plan(plan, prompt=prompt, target_hint=target_hint)
@@ -178,6 +178,63 @@ def _compact(text: str, *, limit: int) -> str:
 
 def _indent(text: str) -> str:
     return "\n".join(f"  {line}" for line in text.splitlines() if line.strip())
+
+
+def _coerce_plan_payload(payload: dict) -> dict:
+    """Coerce a loosely-shaped model plan into the strict ProjectPlan schema.
+
+    Smaller models reliably produce a good plan but with surface variations the
+    strict schema rejects wholesale: validation_commands/tasks emitted as plain
+    strings, and implementation/test files left with empty content (their bodies
+    are generated downstream). Rather than discard the whole plan and fall back to
+    a bare scaffold, normalize these shapes so the real multi-file plan survives.
+    """
+
+    if not isinstance(payload, dict):
+        return payload
+    data = dict(payload)
+
+    commands = data.get("validation_commands")
+    if isinstance(commands, list):
+        data["validation_commands"] = [
+            {"command": item} if isinstance(item, str) else item for item in commands
+        ]
+
+    tasks = data.get("tasks")
+    if isinstance(tasks, list):
+        coerced_tasks: list = []
+        for item in tasks:
+            if isinstance(item, str):
+                coerced_tasks.append({"description": item, "step": "implementation"})
+            elif isinstance(item, dict):
+                task = dict(item)
+                task.setdefault("step", "implementation")
+                task.setdefault("description", "")
+                coerced_tasks.append(task)
+            else:
+                coerced_tasks.append(item)
+        data["tasks"] = coerced_tasks
+
+    files = data.get("files")
+    if isinstance(files, list):
+        coerced_files: list = []
+        for item in files:
+            if not isinstance(item, dict):
+                coerced_files.append(item)
+                continue
+            file = dict(item)
+            file.setdefault("stage", "implementation")
+            file.setdefault("purpose", "")
+            file.setdefault("required", True)
+            if not file.get("content"):
+                # Implementation/test bodies are (re)generated per file later, so a
+                # placeholder is sufficient to pass the non-empty content contract.
+                purpose = str(file.get("purpose") or "").strip()
+                file["content"] = f"# {purpose}\n" if purpose else "# generated\n"
+            coerced_files.append(file)
+        data["files"] = coerced_files
+
+    return data
 
 
 def _extract_json_object(text: str) -> dict | None:
