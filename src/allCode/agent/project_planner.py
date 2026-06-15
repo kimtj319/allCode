@@ -25,6 +25,12 @@ class ModelProjectPlanner:
         self._llm_client = llm_client
         self._settings = settings
 
+    # The model produces a good plan most of the time but its JSON is
+    # occasionally malformed; a single miss would fall back to a bare scaffold.
+    # Retry a few times so an intermittent bad response does not cost the whole
+    # multi-file plan.
+    _PLAN_ATTEMPTS = 3
+
     async def create_plan(
         self,
         prompt: str,
@@ -38,11 +44,30 @@ class ModelProjectPlanner:
                 "max_output_tokens": max(self._settings.max_output_tokens, 6000),
             }
         )
-        response = await self._llm_client.complete(
-            self._messages(prompt, target_hint=target_hint, task_digest=task_digest),
-            tools=[],
-            settings=planner_settings,
-        )
+        for _ in range(self._PLAN_ATTEMPTS):
+            plan = await self._attempt_plan(
+                prompt, target_hint=target_hint, task_digest=task_digest, settings=planner_settings
+            )
+            if plan is not None:
+                return plan
+        return None
+
+    async def _attempt_plan(
+        self,
+        prompt: str,
+        *,
+        target_hint: str | None,
+        task_digest: str | None,
+        settings: ModelSettings,
+    ) -> ProjectPlan | None:
+        try:
+            response = await self._llm_client.complete(
+                self._messages(prompt, target_hint=target_hint, task_digest=task_digest),
+                tools=[],
+                settings=settings,
+            )
+        except Exception:
+            return None
         payload = _extract_json_object(response.final_text)
         if payload is None:
             return None
