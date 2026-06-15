@@ -213,8 +213,10 @@ class TerminalSession:
         return None
 
     def _print_header(self) -> None:
+        # No trailing blank line here: the composer draws its own one-line
+        # separator above the prompt, so the banner sits one blank line above
+        # the prompt without a wasteful gap.
         self.console.print(logo_text(self.app_info))
-        self.console.print()
 
     def _print_user_prompt(self, prompt: str) -> None:
         self._prepare_body_output()

@@ -51,7 +51,11 @@ class _BodyRowCounter:
 class TerminalScreen:
     """Reserve a small bottom prompt area while body output scrolls above it."""
 
-    reserved_rows = 3
+    # Start at the steady-state minimum (blank separator + prompt + footer +
+    # margin). The composer never needs fewer rows, so beginning here avoids a
+    # one-row scroll on the first render that would push the banner's top border
+    # off-screen.
+    reserved_rows = 4
     max_reserved_rows = 12
 
     def __init__(
@@ -69,6 +73,12 @@ class TerminalScreen:
         # Next free body row (1-based). Body output flows from here; once it
         # reaches body_bottom it stays clamped there and content scrolls.
         self._body_row = 1
+        # Row where the composer block was last drawn. While body output is short
+        # (e.g. just the banner) the composer floats right beneath it instead of
+        # being pinned to the bottom, so the screen does not show a large empty gap
+        # between the header and the prompt. It migrates down to the bottom as body
+        # content grows. None means "not yet drawn" → defaults to the bottom.
+        self._composer_top: int | None = None
         self._raw_stdout = stdout
         self.stdout: TextIO = _BodyRowCounter(stdout, self)
 
@@ -142,8 +152,16 @@ class TerminalScreen:
         try:
             needed_rows = max(4, min(self.max_reserved_rows, frame.line_count + 2))
             self.set_reserved_rows(needed_rows)
+            bottom_start = self.height - self.reserved_rows + 1
+            # Float the composer right under the body while there is still room
+            # above the reserved area; pin it to the bottom once body output has
+            # grown into that area (steady state once scrolling begins).
+            if self._body_row >= self.body_bottom:
+                start = bottom_start
+            else:
+                start = max(1, self._body_row)
+            self._composer_top = start
             self._clear_prompt_area()
-            start = self.height - self.reserved_rows + 1
             # Codex separates the live composer from scrollback with blank space
             # rather than a full-width rule.
             self._write_line(start, "")
@@ -171,10 +189,15 @@ class TerminalScreen:
                 self.stdout.write(f"{self._fg(self.theme.prompt_fg)}{prefix}\x1b[0m")
                 self.stdout.write(clip_display_width(line.text, max(0, self.width - 3)))
             completion_start = input_start + min(len(frame.input_lines), usable_rows)
-            for offset, line in enumerate(frame.overlay_lines[: max(0, usable_rows - len(frame.input_lines))]):
+            shown_overlays = frame.overlay_lines[: max(0, usable_rows - len(frame.input_lines))]
+            for offset, line in enumerate(shown_overlays):
                 self._write_line(completion_start + offset, f"  {line.text}", style=line.style)
+            # Keep the footer (status line) attached to the bottom of the composer
+            # block rather than the screen bottom, so a floating composer stays
+            # compact instead of stranding the footer at the bottom of the screen.
+            footer_start = completion_start + len(shown_overlays)
             for offset, line in enumerate(frame.footer_lines):
-                row = self.height - len(frame.footer_lines) + offset + 1
+                row = min(self.height, footer_start + offset)
                 self._write_line(row, f"  {line.text}", style=line.style)
             cursor_screen_row = min(input_start + frame.cursor_row, self.height)
             cursor_screen_col = max(1, min(self.width, 1 + frame.cursor_col))
@@ -225,7 +248,11 @@ class TerminalScreen:
         self.stdout.flush()
 
     def _clear_prompt_area(self) -> None:
-        start = self.height - self.reserved_rows + 1
+        # Clear from wherever the composer currently sits (it may float above the
+        # reserved area) down to the bottom of the screen. Fall back to the
+        # bottom-anchored position before the first draw.
+        bottom_start = self.height - self.reserved_rows + 1
+        start = bottom_start if self._composer_top is None else min(self._composer_top, bottom_start)
         for row in range(start, self.height + 1):
             self.stdout.write(f"\x1b[{row};1H\x1b[2K")
 
