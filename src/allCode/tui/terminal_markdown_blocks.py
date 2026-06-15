@@ -9,10 +9,40 @@ from typing import Iterable
 from rich import box
 from rich.console import Console, RenderableType
 from rich.markdown import Markdown
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
 from allCode.tui.terminal_width import display_width
+
+# Map common fence labels to Pygments lexer names so syntax highlighting works
+# for the languages assistants emit most. Unknown labels fall back to plain text.
+_SYNTAX_LANGUAGE_ALIASES = {
+    "yml": "yaml",
+    "dockerfile": "docker",
+    "sh": "bash",
+    "shell": "bash",
+    "zsh": "bash",
+    "console": "bash",
+    "py": "python",
+    "js": "javascript",
+    "ts": "typescript",
+    "tsx": "typescript",
+    "jsx": "javascript",
+    "rs": "rust",
+    "yaml": "yaml",
+    "json": "json",
+    "toml": "toml",
+    "ini": "ini",
+    "python": "python",
+    "bash": "bash",
+    "go": "go",
+    "sql": "sql",
+    "html": "html",
+    "css": "css",
+}
+
+_SYNTAX_PLAIN_LABELS = {"", "text", "txt", "plain", "plaintext", "none", "output", "log"}
 
 # Codex-style table: no outer/vertical borders, a segmented heavy rule under the
 # header, and a light rule between each row (gaps at column boundaries).
@@ -207,9 +237,27 @@ def _render_code(console: Console, block: MarkdownBlock) -> None:
     code = "\n".join(block.lines).rstrip("\n")
     if not code:
         return
-    # Codex renders fenced code as plain text (no syntax highlighting) at the same
-    # body indent as the rest of the answer; the answer renderer adds that indent,
-    # and the code's own internal indentation is preserved as-is.
+    # Syntax-highlight fenced code when the fence names a known language, using a
+    # terminal-palette theme with no background fill so it blends into the answer
+    # body (the answer renderer adds the 2-column indent). Unknown/plain labels and
+    # any highlighter error fall back to plain text.
+    label = (block.language or "").strip().lower()
+    if label not in _SYNTAX_PLAIN_LABELS:
+        lexer = _SYNTAX_LANGUAGE_ALIASES.get(label, label)
+        try:
+            console.print(
+                Syntax(
+                    code,
+                    lexer,
+                    theme="ansi_dark",
+                    background_color="default",
+                    word_wrap=False,
+                    padding=0,
+                )
+            )
+            return
+        except Exception:
+            pass
     console.print(Text(code))
 
 
