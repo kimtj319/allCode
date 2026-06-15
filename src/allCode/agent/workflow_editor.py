@@ -92,6 +92,9 @@ def _editor_messages(
         "You are the file editor component for allCode. "
         "Write exactly one complete file for the accepted project plan. "
         "Return only raw file content, with no markdown fences or explanation. "
+        "Implement complete, working logic for every function, method, route, and class. "
+        "Never emit placeholder bodies such as 'raise NotImplementedError', a bare 'pass', "
+        "'TODO', or '...' for functions that the request or tests require to work. "
         "Preserve the user request, project constraints, imports, and existing generated file contracts."
     )
     user_prompt = "\n".join(
