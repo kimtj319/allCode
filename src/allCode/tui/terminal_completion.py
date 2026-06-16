@@ -29,6 +29,15 @@ class CompletionState:
         self.selected = (self.selected + 1) % len(self.candidates)
         return self.current()
 
+    def retreat(self) -> CompletionCandidate:
+        self.selected = (self.selected - 1) % len(self.candidates)
+        return self.current()
+
+    def move(self, delta: int) -> CompletionCandidate:
+        """Move the selection by delta (wrap-around). +1 = next, -1 = previous."""
+        self.selected = (self.selected + delta) % len(self.candidates)
+        return self.current()
+
 
 class TerminalCompleter:
     """Build completion candidates without owning the editor state."""

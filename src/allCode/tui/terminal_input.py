@@ -144,9 +144,11 @@ class TerminalInputEditor:
         elif command.name == "move_word_right":
             area.move_word_right()
         elif command.name == "move_up":
-            self._move_up_or_history(area)
+            if not self._navigate_completion(area, -1):
+                self._move_up_or_history(area)
         elif command.name == "move_down":
-            self._move_down_or_history(area)
+            if not self._navigate_completion(area, +1):
+                self._move_down_or_history(area)
         elif command.name == "move_line_start":
             area.move_line_start()
         elif command.name == "move_line_end":
@@ -170,7 +172,13 @@ class TerminalInputEditor:
             self.paste_manager.insert_paste(area, command.text)
         elif command.name == "insert_char":
             area.insert(command.text)
-        if command.name != "complete_or_queue":
+        # Tab cycling and arrow-key completion navigation keep the active
+        # completion alive; any other key dismisses the suggestion overlay.
+        if command.name == "complete_or_queue":
+            pass
+        elif command.name in {"move_up", "move_down"} and self._completion_state is not None:
+            pass
+        else:
             self._completion_state = None
         return None
 
@@ -200,6 +208,30 @@ class TerminalInputEditor:
             candidate = state.current()
         else:
             candidate = state.advance()
+        self._insert_candidate(area, candidate)
+
+    def _navigate_completion(self, area: TerminalTextArea, delta: int) -> bool:
+        """Move the slash/path suggestion selection with ↑/↓.
+
+        Returns True when a completion was active (or could be started for the
+        current token) and was navigated; False when there is nothing to
+        complete, so the caller can fall back to history/cursor movement."""
+        state = self._completion_state
+        if state is None:
+            state = self.completer.complete(area.text, area.cursor)
+            if state is None:
+                return False
+            self._completion_state = state
+            # ↓ starts at the first suggestion, ↑ at the last (wrap-around).
+            state.selected = 0 if delta > 0 else len(state.candidates) - 1
+            candidate = state.current()
+        else:
+            candidate = state.move(delta)
+        self._insert_candidate(area, candidate)
+        return True
+
+    def _insert_candidate(self, area: TerminalTextArea, candidate) -> None:
+        state = self._completion_state
         text = area.text[: state.start] + candidate.replacement + area.text[state.end :]
         state.end = state.start + len(candidate.replacement)
         area.set_text(text, cursor=state.end)

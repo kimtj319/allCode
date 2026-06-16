@@ -56,7 +56,12 @@ AGENTS.md 메모리, repo_map(`memory/repo_map.py`), 텔레메트리(`/status`·
 
 ---
 
-## 4. 추천 묶음(스프린트 제안)
+## 3-b. 추가 요청 — 슬래시 추천 화살표 탐색 (Tier 1)
+
+- **기능**: 슬래시 명령 추천 오버레이가 떠 있을 때 **↑/↓ 화살표**로 후보를 위아래로 이동(wrap-around) 후 Tab/Enter로 선택. 현재는 Tab 순환만 가능.
+- **현황**: `tui/terminal_completion.py`의 `CompletionState`는 `current()`/순환 인덱스를 갖고, `tui/terminal_input.py`가 Tab으로 사이클. 화살표 키는 오버레이가 떠 있어도 후보 탐색에 연결돼 있지 않음.
+- **구현 방향**: 입력 에디터의 키 처리에서 완성 오버레이 활성 상태일 때 `up`/`down` 키를 `CompletionState`의 이전/다음 후보 이동으로 라우팅(오버레이 비활성 시에는 기존 히스토리/커서 이동 동작 유지). `CompletionState.move(delta)` 또는 `previous()`/`next()` 추가.
+- **검증**: 단위 테스트로 ↑/↓가 선택 인덱스를 wrap하며 이동하고, 오버레이 비활성 시 화살표가 기존 동작을 유지하는지 확인.
 
 - **A. 온보딩·진단 묶음**: `/init` + `/doctor` + `/context` — 신규 사용자 체감 즉시 향상, 노력 소.
 - **B. 세션 QoL 묶음**: `/export` + 세션 이름/포크 + 완료 알림 — 장시간 작업 흐름 보완.
@@ -105,3 +110,22 @@ AGENTS.md 메모리, repo_map(`memory/repo_map.py`), 텔레메트리(`/status`·
 | 브라우저 자동화 / 음성 / IDE 확장 / 클라우드·스케줄 | repo 내 파이썬 변경 범위를 벗어나는 외부/인프라 작업. |
 
 요약: plan/72 Tier1 전부 + Tier2 대부분(에이전트 정의·PR·세션 이름/포크·todo)을 테스트와 함께 구현했고, in-repo로 가능한 Tier3(예시 워크플로/훅/템플릿)를 추가했다. 외부 인프라·대형 작업 항목은 사유와 함께 보류로 명시했다. 전체 테스트 938 passed, 3 skipped.
+
+### ✅ 실제 환경 검증 완료 (2026-06-16)
+
+실제 `allcode` 바이너리 + 라이브 vLLM 엔드포인트 + 실제 git 저장소에서 전 기능을 구동 검증했다.
+
+| 기능 | 실측 |
+|---|---|
+| `/doctor` | API 키/AGENTS.md/모델 점검 출력 확인 |
+| `/init` (생성/거부/force) | AGENTS.md 실제 작성(Python·pytest 감지) |
+| `/theme light` / `/context` | 전환 메시지 / 컨텍스트 안내 출력 |
+| `/agents` | frontmatter(description/model/tools) 파싱·목록 |
+| 커스텀 커맨드 `@{}`/`!{}` | `STAT-OK`(셸)+파일내용+`$ARGUMENTS`가 실제 모델 프롬프트에 주입되어 응답 |
+| `/export` | 트랜스크립트 파일 작성 확인 |
+| `--name`/`--resume <이름>` | 이름→id 매핑(`_names.json`), 대화 복원 |
+| `--fork` | 복제 세션 진행 + 복제 jsonl 생성 |
+| `derive_commit_message` / `/pr` | `docs: update README.md` / 기본 브랜치 PR 거부 |
+
+검증 중 `allcode --fork`의 런타임 `NameError`(ConversationStore 미임포트)를 발견·수정하고
+회귀 테스트(`tests/unit/test_fork_session.py`)를 추가했다(커밋 `fda7b93`). 재검증 후 전 항목 정상.
