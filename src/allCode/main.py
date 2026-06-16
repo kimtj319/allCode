@@ -19,7 +19,7 @@ from allCode.memory.commands import MemoryCommandService
 from allCode.memory.inbox import MemoryInbox
 from allCode.memory.session_store import SessionStore
 from allCode.memory.store import MemoryStore
-from allCode.runtime import make_tui_turn_runner, runtime_tool_registry
+from allCode.runtime import make_tui_turn_runner, runtime_tool_registry, seed_resumed_session
 from allCode.telemetry import AgentSessionLogger
 from allCode.tui.runtime import run_interactive_session
 from allCode.tui.slash_commands import SlashCommandHandler
@@ -43,6 +43,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--textual", action="store_true", help="Use the optional Textual TUI instead of the Codex-like terminal UI.")
     parser.add_argument("--plain-terminal", action="store_true", help="Compatibility alias for the default terminal-native UI.")
+    parser.add_argument(
+        "--continue",
+        action="store_true",
+        dest="continue_session",
+        help="Resume the most recent conversation in this workspace.",
+    )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="",
+        metavar="SESSION_ID",
+        help="Resume a specific session by id, or the most recent if none is given.",
+    )
     return parser
 
 
@@ -77,7 +90,11 @@ def main(
         if out is None and err is None:
             _validate_interactive_model_config(config)
             context_builder = build_runtime_context_builder(config)
-            session_logger = AgentSessionLogger.create(config=config)
+            resume_id = _resolve_resume_session_id(config, args)
+            session_logger = AgentSessionLogger.create(config=config, session_id=resume_id)
+            if resume_id is not None:
+                restored = seed_resumed_session(config, context_builder, resume_id)
+                stdout.write(f"이전 세션을 이어서 진행합니다 (id {resume_id[:8]}, 복원된 대화 {restored}턴).\n")
             return run_interactive_session(
                 turn_runner=make_tui_turn_runner(
                     config=config,
@@ -101,6 +118,22 @@ def main(
     except KeyboardInterrupt:
         stderr.write("Interrupted.\n")
         return 130
+
+
+def _resolve_resume_session_id(config, args) -> str | None:
+    """Resolve which prior session to resume, if any. --continue / --resume
+    (no id) pick the most recent; --resume <id> picks a specific one."""
+
+    from allCode.memory.conversation_store import ConversationStore
+
+    requested = getattr(args, "resume", None)
+    wants_continue = getattr(args, "continue_session", False)
+    if requested is None and not wants_continue:
+        return None
+    store = ConversationStore(config.workspace.root)
+    if requested:  # explicit, non-empty session id
+        return requested if requested in store.list_sessions() else None
+    return store.latest_session_id()
 
 
 def _tui_app_info(config) -> str:

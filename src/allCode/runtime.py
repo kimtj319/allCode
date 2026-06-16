@@ -19,6 +19,7 @@ from allCode.llm.factory import create_llm_client
 from allCode.llm.settings import ModelSettings
 from allCode.memory.session_summary import SessionSummary
 from allCode.memory.session_state_store import SessionStateStore
+from allCode.memory.conversation_store import ConversationStore
 from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.approval import ApprovalHandler, ApprovalManager
@@ -96,6 +97,7 @@ async def run_agent_turn(
         effective_context_builder.remember_user_note(turn_input.session_id, prompt)
         effective_context_builder.remember_assistant_summary(turn_input.session_id, result.final_answer)
         await _persist_user_note_summary(config, turn_input.session_id, effective_context_builder.extract_user_note(prompt))
+        _append_conversation_exchange(config, turn_input.session_id, prompt, result.final_answer)
         await event_bus.close()
         event_bus_closed = True
         await logger.log(
@@ -185,6 +187,31 @@ async def _save_persisted_session_state(config: AppConfig, session_id: str, cont
     store = SessionStateStore(Path(config.workspace.root))
     snapshot = context_builder.session_state.to_snapshot(session_id=session_id, workspace_root=config.workspace.root)
     await store.save_snapshot(snapshot)
+
+
+def _append_conversation_exchange(config: AppConfig, session_id: str, prompt: str, answer: str) -> None:
+    try:
+        ConversationStore(config.workspace.root).append_exchange(session_id, prompt=prompt, answer=answer)
+    except OSError:
+        pass
+
+
+def seed_resumed_session(config: AppConfig, context_builder: ContextBuilder, session_id: str) -> int:
+    """Replay a previous session's conversation into the context builder so a
+    resumed session continues with the prior back-and-forth. Returns the number
+    of exchanges restored. The reused session_id also restores the state snapshot
+    on the first turn (it is keyed by session_id)."""
+
+    exchanges = ConversationStore(config.workspace.root).load(session_id)
+    restored = 0
+    for role, text in exchanges:
+        if role == "user":
+            context_builder.remember_user_prompt(session_id, text)
+            context_builder.remember_user_note(session_id, text)
+            restored += 1
+        elif role == "assistant":
+            context_builder.remember_assistant_summary(session_id, text)
+    return restored
 
 
 def _maybe_auto_commit(config: AppConfig, result: TurnResult, prompt: str) -> None:
