@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import select
+import threading
 import time
 from pathlib import Path
 from typing import Any, TextIO
@@ -27,6 +29,72 @@ from allCode.tui.terminal_screen import TerminalScreen, TerminalTheme
 from allCode.tools.approval import ApprovalAction, ApprovalRequest
 
 TurnRunner = Any
+
+
+class _SteeringCapture:
+    """Capture full lines typed while a turn runs and queue them as steering.
+
+    During a turn the TTY is in cooked (line) mode, so a background thread can
+    ``select`` + ``readline`` to grab Enter-terminated lines without disturbing
+    the streaming output. It is paused around interactive approval prompts so it
+    never steals an approval response, and stops promptly when the turn ends."""
+
+    def __init__(self, stdin: TextIO, steering) -> None:
+        self._stdin = stdin
+        self._steering = steering
+        self._stop = threading.Event()
+        self._paused = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._steering is None:
+            return
+        try:
+            if not self._stdin.isatty():
+                return
+            self._stdin.fileno()
+        except (OSError, ValueError, AttributeError):
+            return
+        self._thread = threading.Thread(target=self._loop, name="steering-capture", daemon=True)
+        self._thread.start()
+
+    def pause(self) -> None:
+        self._paused.set()
+
+    def resume(self) -> None:
+        self._paused.clear()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.3)
+            self._thread = None
+
+    def _loop(self) -> None:
+        try:
+            fd = self._stdin.fileno()
+        except (OSError, ValueError):
+            return
+        while not self._stop.is_set():
+            if self._paused.is_set():
+                time.sleep(0.05)
+                continue
+            try:
+                ready, _, _ = select.select([fd], [], [], 0.15)
+            except (OSError, ValueError):
+                return
+            # Re-check after the select wait: an approval prompt may have paused
+            # us while we were blocked, in which case the pending bytes belong to
+            # the approval reader, not to steering.
+            if not ready or self._paused.is_set() or self._stop.is_set():
+                continue
+            try:
+                line = self._stdin.readline()
+            except (OSError, ValueError):
+                return
+            if not line:
+                return
+            self._steering.push(line.strip())
 
 
 class TerminalSession:
@@ -90,6 +158,9 @@ class TerminalSession:
         self._last_context_tokens = 0
         self.answer_renderer = TerminalAnswerRenderer(self.console)
         self._turn_runner_accepts_approval = self._accepts_approval_handler(turn_runner)
+        # Active mid-turn steering capture (set while a turn runs); lets the user
+        # type extra guidance that the agent picks up at the next round boundary.
+        self._steering_capture: _SteeringCapture | None = None
 
     def run(self) -> int:
         self.screen.enter()
@@ -186,9 +257,14 @@ class TerminalSession:
         # the turn's event loop, so repaints interleave safely with stream writes
         # at await boundaries — no cross-thread terminal contention.
         ticker = asyncio.create_task(self._spinner_ticker())
+        capture = _SteeringCapture(self.stdin, getattr(self.turn_runner, "steering", None))
+        self._steering_capture = capture
+        capture.start()
         try:
             await self._run_turn(prompt)
         finally:
+            capture.stop()
+            self._steering_capture = None
             ticker.cancel()
             try:
                 await ticker
@@ -212,6 +288,17 @@ class TerminalSession:
         await self.turn_runner(prompt, self.handle_agent_event)
 
     async def handle_approval_request(self, request: ApprovalRequest) -> ApprovalAction:
+        # Pause mid-turn steering capture so the approval response (read from the
+        # same stdin) is never grabbed by the steering reader thread.
+        if self._steering_capture is not None:
+            self._steering_capture.pause()
+        try:
+            return await self._handle_approval_request(request)
+        finally:
+            if self._steering_capture is not None:
+                self._steering_capture.resume()
+
+    async def _handle_approval_request(self, request: ApprovalRequest) -> ApprovalAction:
         self._prepare_body_output()
         self.console.print(f"[bold]{messages.APPROVAL_REQUIRED_TITLE}[/]")
         self.console.print(f"[dim]{request.tool_name} · risk: {request.risk}[/]")
