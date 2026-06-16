@@ -100,6 +100,10 @@ class _SteeringCapture:
 class TerminalSession:
     """Codex-style terminal session using normal terminal scrollback."""
 
+    # Ring the terminal bell only after a turn this long (seconds), so quick
+    # answers don't beep but a long build/generation gets your attention.
+    _NOTIFY_AFTER_SECONDS = 10.0
+
     def __init__(
         self,
         *,
@@ -271,7 +275,22 @@ class TerminalSession:
         except Exception as exc:
             self.error_console.print(f"[bold red]오류:[/] {exc}")
         finally:
+            elapsed = (time.monotonic() - self._running_started_at) if self._running_started_at else 0.0
             self._finish_running_composer()
+            self._notify_turn_complete(elapsed)
+
+    def _notify_turn_complete(self, elapsed: float) -> None:
+        """Ring the terminal bell after a long turn so the user can step away.
+
+        Only fires when the turn ran past a threshold, so quick answers don't
+        beep. The bell is portable; an OS notification is attempted best-effort."""
+        if elapsed < self._NOTIFY_AFTER_SECONDS:
+            return
+        try:
+            self.stdout.write("\a")
+            self.stdout.flush()
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _run_turn_with_ticker(self, prompt: str) -> None:
         # Animate the spinner/elapsed counter while the turn runs, including the
@@ -351,10 +370,17 @@ class TerminalSession:
 
     def _run_slash_command(self, command: str) -> int | None:
         self._print_user_prompt(command)
-        if command.strip() == "/cost":
+        stripped = command.strip()
+        if stripped == "/cost":
             # Session token accounting lives here (collected from round metrics),
             # so answer /cost directly rather than via the slash backend.
             self._print_assistant_block(self._cost_summary())
+            return None
+        if stripped == "/context":
+            self._print_assistant_block(self._context_summary())
+            return None
+        if stripped.split(maxsplit=1)[0] == "/theme":
+            self._print_assistant_block(self._switch_theme(stripped))
             return None
         result = asyncio.run(self.slash_handler.handle(command))
         if result.clear_transcript:
@@ -443,6 +469,27 @@ class TerminalSession:
             f"- 누적 생성(출력) 토큰: {fmt(self._session_output_tokens)}\n"
             f"- 현재 컨텍스트 크기: {fmt(self._last_context_tokens)} 토큰"
         )
+
+    def _context_summary(self) -> str:
+        def fmt(value: int) -> str:
+            return f"{value / 1000:.1f}k" if value >= 1000 else str(value)
+
+        if not self._last_context_tokens:
+            return "아직 컨텍스트 정보가 없습니다. 한 번 질문한 뒤 다시 확인하세요."
+        return (
+            "컨텍스트 윈도 사용 현황\n"
+            f"- 최근 요청 컨텍스트: {fmt(self._last_context_tokens)} 토큰\n"
+            f"- 누적 생성(출력) 토큰: {fmt(self._session_output_tokens)}\n"
+            "- 줄이려면 /compact 로 대화를 압축하세요."
+        )
+
+    def _switch_theme(self, command: str) -> str:
+        parts = command.split(maxsplit=1)
+        if len(parts) < 2 or parts[1].strip().lower() not in {"dark", "light"}:
+            return "사용법: /theme dark | /theme light"
+        name = parts[1].strip().lower()
+        self.screen.theme = TerminalTheme.named(name)
+        return f"테마를 '{name}'(으)로 변경했습니다."
 
     def _update_context_label(self, data: dict) -> None:
         """Refresh the persistent context-usage indicator in the footer from the

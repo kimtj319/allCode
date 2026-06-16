@@ -15,6 +15,13 @@ class TerminalTheme:
     prompt_fg: tuple[int, int, int] = (247, 247, 247)
     dim_fg: tuple[int, int, int] = (138, 138, 138)
 
+    @classmethod
+    def named(cls, name: str) -> "TerminalTheme":
+        """Return a named preset: 'light' for light terminals, else the dark default."""
+        if (name or "").strip().lower() == "light":
+            return cls(prompt_fg=(20, 20, 20), dim_fg=(110, 110, 110))
+        return cls()
+
 
 class _BodyRowCounter:
     """Wrap stdout and count newlines so the screen knows where body output ends.

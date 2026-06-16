@@ -20,6 +20,7 @@ class RuntimeStatusCommandService:
         session_log_path: str | Path | None = None,
         session_analyzer: SessionAnalyzer | None = None,
         project_root: str | Path | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.config = config
         self.tools = tools
@@ -27,6 +28,7 @@ class RuntimeStatusCommandService:
         self.session_analyzer = session_analyzer or SessionAnalyzer()
         # Where /model and /approval persist changes (the project config file).
         self.project_root = Path(project_root).expanduser() if project_root is not None else Path(config.workspace.root).expanduser()
+        self.session_id = session_id
 
     async def handle(self, command: str) -> str:
         normalized = " ".join(command.strip().split())
@@ -40,11 +42,78 @@ class RuntimeStatusCommandService:
             return self._approval(args)
         if root == "/config":
             return self._config()
+        if root == "/init":
+            return self._init(args)
+        if root == "/doctor":
+            return self._doctor()
+        if root == "/export":
+            return self._export(args)
         if root == "/status":
             return self._status(normalized)
         if root == "/debug":
             return self._debug(normalized)
         return f"지원하지 않는 상태 명령입니다: {normalized}"
+
+    def _init(self, args: list[str]) -> str:
+        from allCode.workspace.project_init import build_agents_md
+
+        force = bool(args) and args[0].lower() in {"force", "--force", "-f"}
+        target = self.project_root / "AGENTS.md"
+        if target.exists() and not force:
+            return f"AGENTS.md가 이미 있습니다 ({target}). 덮어쓰려면 /init force."
+        try:
+            content = build_agents_md(self.project_root)
+            target.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            return f"AGENTS.md 생성에 실패했습니다: {exc}"
+        return f"AGENTS.md 초안을 생성했습니다 ({target}). 내용을 검토·수정하세요."
+
+    def _doctor(self) -> str:
+        import os
+
+        m = self.config.model
+        key_set = bool(os.environ.get(m.api_key_env))
+        host = urlparse(m.base_url).netloc or m.base_url or "(default)"
+        checks = [
+            ("workspace 존재", Path(self.config.workspace.root).expanduser().exists()),
+            (f"API 키({m.api_key_env}) 설정", key_set),
+            ("base_url 설정", bool(m.base_url)),
+            ("AGENTS.md 존재", (self.project_root / "AGENTS.md").exists()),
+            (".allCode/config.yaml 존재", (self.project_root / ".allCode" / "config.yaml").exists()),
+        ]
+        lines = ["진단(/doctor):"]
+        for label, ok in checks:
+            lines.append(f"- [{'OK' if ok else '!!'}] {label}")
+        lines += [
+            "",
+            f"- model: {m.model_name}",
+            f"- implementation_model: {m.implementation_model_name or '(model과 동일)'}",
+            f"- base_url_host: {host}",
+            f"- approval: {self.config.approval.mode}",
+        ]
+        if not key_set:
+            lines.append(f"\n⚠ API 키가 없습니다. `export {m.api_key_env}=...` 후 다시 실행하세요.")
+        return "\n".join(lines)
+
+    def _export(self, args: list[str]) -> str:
+        from allCode.memory.conversation_store import ConversationStore
+
+        if not self.session_id:
+            return "내보낼 세션 정보가 없습니다."
+        store = ConversationStore(self.project_root)
+        exchanges = store.load(self.session_id)
+        if not exchanges:
+            return "아직 내보낼 대화 기록이 없습니다."
+        lines = [f"# allCode 세션 트랜스크립트 ({self.session_id})", ""]
+        for index, (prompt, answer) in enumerate(exchanges, start=1):
+            lines += [f"## {index}. 사용자", prompt, "", f"## {index}. allCode", answer, ""]
+        body = "\n".join(lines)
+        target = Path(args[0]).expanduser() if args else (self.project_root / f"allcode-session-{self.session_id[:8]}.md")
+        try:
+            target.write_text(body, encoding="utf-8")
+        except OSError as exc:
+            return f"트랜스크립트 저장에 실패했습니다: {exc}"
+        return f"대화 {len(exchanges)}턴을 {target}에 저장했습니다."
 
     def _persist(self, section: str, values: dict) -> Path:
         from allCode.config.manager import update_project_config_file
