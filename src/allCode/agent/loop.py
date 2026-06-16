@@ -77,6 +77,7 @@ class AgentLoop:
         generation_workflow: GenerationWorkflow | None = None,
         context_builder: ContextBuilder | None = None,
         hook_runner=None,
+        checkpoint=None,
     ) -> None:
         self._llm_client = llm_client
         self._settings = settings
@@ -97,6 +98,7 @@ class AgentLoop:
             approval=self._approval,
             approval_handler=approval_handler,
             hook_runner=hook_runner,
+            checkpoint=checkpoint,
         )
         self._generation_workflow = generation_workflow or GenerationWorkflow(
             event_bus=self._event_bus,

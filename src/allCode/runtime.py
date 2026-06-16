@@ -20,6 +20,7 @@ from allCode.llm.settings import ModelSettings
 from allCode.memory.session_summary import SessionSummary
 from allCode.memory.session_state_store import SessionStateStore
 from allCode.memory.conversation_store import ConversationStore
+from allCode.workspace.checkpoint_store import CheckpointStore
 from allCode.telemetry import AgentSessionLogger
 from allCode.tools.builtin import builtin_tools
 from allCode.tools.approval import ApprovalHandler, ApprovalManager
@@ -58,6 +59,18 @@ async def run_agent_turn(
     implementation_settings = ModelSettings.implementation_from_config(config)
     effective_context_builder = context_builder or build_runtime_context_builder(config)
     await _load_persisted_session_state(config, logger.session_id, effective_context_builder)
+    checkpoint_store = CheckpointStore(config.workspace.root)
+    checkpoint_store.begin_turn()
+    workspace_root_path = Path(config.workspace.root).expanduser().resolve()
+
+    def _checkpoint(target: str) -> None:
+        if not target:
+            return
+        path = Path(target)
+        if not path.is_absolute():
+            path = workspace_root_path / path
+        checkpoint_store.snapshot(path)
+
     loop = AgentLoop(
         llm_client=effective_llm,
         settings=settings,
@@ -74,6 +87,7 @@ async def run_agent_turn(
         context_builder=effective_context_builder,
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
         hook_runner=HookRunner(config.hooks),
+        checkpoint=_checkpoint,
     )
     turn_input = TurnInput(
         user_prompt=prompt,

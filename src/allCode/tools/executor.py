@@ -45,12 +45,14 @@ class ToolExecutor:
         approval: ApprovalManager | None = None,
         approval_handler: ApprovalHandler | None = None,
         hook_runner: "HookRunner | None" = None,
+        checkpoint=None,
     ) -> None:
         self._registry = registry
         self._policy = policy or ToolPolicy()
         self._approval = approval or ApprovalManager()
         self._approval_handler = approval_handler
         self._hook_runner = hook_runner
+        self._checkpoint = checkpoint
 
     @property
     def approval_mode(self) -> str:
@@ -112,6 +114,12 @@ class ToolExecutor:
             denial = await self._hook_runner.pre_tool(call)
             if denial is not None:
                 return ToolResult(call_id=call.id, name=call.name, ok=False, error=denial, error_type="hook_denied")
+
+        if self._checkpoint is not None and call.name in {"write_file", "patch_file", "delete_path"}:
+            try:
+                self._checkpoint(self._target_for_call(call, context))
+            except Exception:
+                pass
 
         try:
             if call.name == "run_tests" and event_bus is not None:

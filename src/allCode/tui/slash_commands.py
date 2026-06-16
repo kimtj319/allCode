@@ -67,6 +67,8 @@ class SlashCommandHandler:
             return SlashCommandResult(message=await self.status_backend.handle(normalized))
         if normalized == "/undo":
             return SlashCommandResult(message=self._undo())
+        if normalized == "/rewind":
+            return SlashCommandResult(message=self._rewind())
         if normalized == "/compact":
             if self.compact_backend is None:
                 return SlashCommandResult(message="컨텍스트 압축 백엔드가 설정되지 않았습니다.")
@@ -87,6 +89,11 @@ class SlashCommandHandler:
 
         root = self.workspace_root or "."
         return undo_last_allcode_commit(root).message
+
+    def _rewind(self) -> str:
+        from allCode.workspace.checkpoint_store import CheckpointStore
+
+        return CheckpointStore(self.workspace_root or ".").restore_latest()
 
     def _help_text(self) -> str:
         return "\n".join(f"- {command.usage}: {command.description}" for command in self.registry.all())
