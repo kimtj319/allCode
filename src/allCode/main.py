@@ -102,7 +102,12 @@ def main(
                     session_logger=session_logger,
                 ),
                 app_info=_tui_app_info(config),
-                slash_handler=_slash_handler(config, session_log_path=session_logger.path),
+                slash_handler=_slash_handler(
+                    config,
+                    session_log_path=session_logger.path,
+                    context_builder=context_builder,
+                    session_id=session_logger.session_id,
+                ),
                 stdin=sys.stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -178,7 +183,13 @@ def _write_diagnostics(report: ConfigSourceReport, out: TextIO) -> None:
         out.write("- cli overrides: " + ", ".join(report.cli_overrides) + "\n")
 
 
-def _slash_handler(config, *, session_log_path: Path | None = None) -> SlashCommandHandler:
+def _slash_handler(
+    config,
+    *,
+    session_log_path: Path | None = None,
+    context_builder=None,
+    session_id: str | None = None,
+) -> SlashCommandHandler:
     project_root = Path(config.workspace.root).expanduser().resolve()
     store = MemoryStore(project_root, DEFAULT_CONFIG_DIR)
     inbox = MemoryInbox(project_root / ".allCode" / "memory" / "inbox", store)
@@ -199,10 +210,14 @@ def _slash_handler(config, *, session_log_path: Path | None = None) -> SlashComm
             registry.register(CommandSpec(name=command.name, description=command.description, usage=command.name))
         except ValueError:
             continue
+    compact_backend = None
+    if context_builder is not None and session_id is not None:
+        compact_backend = lambda: context_builder.compact_session(session_id)  # noqa: E731
     return SlashCommandHandler(
         registry=registry,
         memory_backend=service,
         status_backend=RuntimeStatusCommandService(config=config, tools=tools, session_log_path=session_log_path),
         workspace_root=str(project_root),
         custom_commands={command.name: command for command in custom},
+        compact_backend=compact_backend,
     )

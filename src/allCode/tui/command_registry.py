@@ -52,6 +52,8 @@ def default_commands() -> list[CommandSpec]:
         CommandSpec(name="/stop", description="Cancel the active turn.", usage="/stop"),
         CommandSpec(name="/exit", description="Exit allCode.", usage="/exit"),
         CommandSpec(name="/undo", description="Undo allCode's last auto-commit.", usage="/undo"),
+        CommandSpec(name="/compact", description="Summarize and compact the conversation context.", usage="/compact"),
+        CommandSpec(name="/cost", description="Show this session's token usage.", usage="/cost"),
         CommandSpec(name="/clear", description="Clear transcript view.", usage="/clear"),
         CommandSpec(name="/help", description="Show slash commands.", usage="/help"),
     ]

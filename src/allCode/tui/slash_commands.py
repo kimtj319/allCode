@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from allCode.core.models import CoreModel
 from allCode.tui.command_registry import CommandRegistry
@@ -38,12 +38,14 @@ class SlashCommandHandler:
         status_backend: StatusCommandBackend | None = None,
         workspace_root: str | None = None,
         custom_commands: dict[str, "CustomCommand"] | None = None,
+        compact_backend: Callable[[], str] | None = None,
     ) -> None:
         self.registry = registry or CommandRegistry()
         self.memory_backend = memory_backend
         self.status_backend = status_backend
         self.workspace_root = workspace_root
         self.custom_commands = custom_commands or {}
+        self.compact_backend = compact_backend
 
     async def handle(self, command: str) -> SlashCommandResult:
         normalized = " ".join(command.strip().split())
@@ -65,6 +67,10 @@ class SlashCommandHandler:
             return SlashCommandResult(message=await self.status_backend.handle(normalized))
         if normalized == "/undo":
             return SlashCommandResult(message=self._undo())
+        if normalized == "/compact":
+            if self.compact_backend is None:
+                return SlashCommandResult(message="컨텍스트 압축 백엔드가 설정되지 않았습니다.")
+            return SlashCommandResult(message=self.compact_backend())
         if normalized in {"/help", "/commands"}:
             return SlashCommandResult(message=self._help_text())
         custom_name = normalized.split(maxsplit=1)[0]

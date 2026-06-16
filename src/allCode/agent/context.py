@@ -164,6 +164,29 @@ class ContextBuilder:
     def extract_user_note(self, prompt: str) -> str | None:
         return self._extract_session_note(prompt)
 
+    def compact_session(self, session_id: str) -> str:
+        """Fold the verbose recent conversation (prompts + assistant summaries)
+        into a single compact session note and clear the verbose lists, so the
+        next turn carries less context. Returns a short human-readable status."""
+
+        prompts = self._recent_prompts.get(session_id, [])
+        summaries = self._assistant_summaries.get(session_id, [])
+        folded = len(prompts) + len(summaries)
+        if folded == 0:
+            return "압축할 대화 컨텍스트가 없습니다."
+        lines: list[str] = []
+        for prompt in prompts[-6:]:
+            lines.append(f"사용자: {prompt[:120]}")
+        for summary in summaries[-6:]:
+            lines.append(f"어시스턴트: {summary[:160]}")
+        note = "이전 대화 요약 — " + " / ".join(lines)
+        notes = self._session_notes.setdefault(session_id, [])
+        notes.append(note[:1200])
+        del notes[:-4]
+        self._recent_prompts[session_id] = []
+        self._assistant_summaries[session_id] = []
+        return f"대화 컨텍스트를 압축했습니다 ({folded}건 → 요약 1건)."
+
     def _session_note_sections(self, turn_input: TurnInput) -> list[ContextSection]:
         return build_session_note_sections(
             session_id=turn_input.session_id,

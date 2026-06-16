@@ -83,6 +83,9 @@ class TerminalSession:
         # Persistent context/session meta shown in the always-redrawn footer.
         self._base_footer = app_info.replace(" | ", " · ")
         self._context_label = ""
+        # Cumulative session token accounting for the /cost command.
+        self._session_output_tokens = 0
+        self._last_context_tokens = 0
         self.answer_renderer = TerminalAnswerRenderer(self.console)
         self._turn_runner_accepts_approval = self._accepts_approval_handler(turn_runner)
 
@@ -231,6 +234,11 @@ class TerminalSession:
 
     def _run_slash_command(self, command: str) -> int | None:
         self._print_user_prompt(command)
+        if command.strip() == "/cost":
+            # Session token accounting lives here (collected from round metrics),
+            # so answer /cost directly rather than via the slash backend.
+            self._print_assistant_block(self._cost_summary())
+            return None
         result = asyncio.run(self.slash_handler.handle(command))
         if result.clear_transcript:
             self._clear_screen()
@@ -307,6 +315,18 @@ class TerminalSession:
             self.console.print(Text(f"  ... {len(lines) - max_lines} more diff lines ...", style="dim"))
         self._render_running_composer()
 
+    def _cost_summary(self) -> str:
+        def fmt(value: int) -> str:
+            return f"{value / 1000:.1f}k" if value >= 1000 else str(value)
+
+        if not self._session_output_tokens and not self._last_context_tokens:
+            return "아직 이 세션의 토큰 사용량 정보가 없습니다."
+        return (
+            f"이번 세션 토큰 사용량\n"
+            f"- 누적 생성(출력) 토큰: {fmt(self._session_output_tokens)}\n"
+            f"- 현재 컨텍스트 크기: {fmt(self._last_context_tokens)} 토큰"
+        )
+
     def _update_context_label(self, data: dict) -> None:
         """Refresh the persistent context-usage indicator in the footer from the
         latest model round metrics. Uses real token counts when the model reports
@@ -316,6 +336,11 @@ class TerminalSession:
         tokens = None
         if isinstance(usage, dict):
             tokens = usage.get("prompt_tokens") or usage.get("total_tokens")
+            completion = usage.get("completion_tokens")
+            if isinstance(completion, int) and completion > 0:
+                self._session_output_tokens += completion
+        if isinstance(tokens, int) and tokens > 0:
+            self._last_context_tokens = tokens
         approx = False
         if not tokens:
             chars = data.get("prompt_chars") or data.get("request_chars")
