@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from allCode.core.models import CoreModel, ToolCall
+from allCode.tools.permission_rules import PermissionRules
 
 ApprovalMode = Literal["ask", "auto", "rules"]
 ApprovalAction = Literal["approve_once", "deny", "allow_session"]
@@ -49,11 +50,34 @@ class ApprovalManager:
         re.compile(r"&\s*$"),
     )
 
-    def __init__(self, *, mode: ApprovalMode = "ask", session_allow: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        mode: ApprovalMode = "ask",
+        session_allow: list[str] | None = None,
+        allow_rules: list[str] | None = None,
+        deny_rules: list[str] | None = None,
+    ) -> None:
         self.mode = mode
         self.session_allow = session_allow or []
+        self.rules = PermissionRules(allow=allow_rules, deny=deny_rules)
 
-    def file_mutation(self, *, preview: str, tool_name: str) -> ApprovalDecision:
+    @staticmethod
+    def _denied(*, kind: str, preview: str) -> ApprovalDecision:
+        return ApprovalDecision(
+            allowed=False,
+            requires_approval=False,
+            reason=f"{kind} denied by a configured permission rule (deny). 실행하지 않았습니다.",
+            preview=preview,
+            risk="high",
+        )
+
+    def file_mutation(self, *, preview: str, tool_name: str, target: str | None = None) -> ApprovalDecision:
+        rule = self.rules.decision(tool_name, target)
+        if rule == "deny":
+            return self._denied(kind="File mutation", preview=preview)
+        if rule == "allow":
+            return ApprovalDecision(allowed=True, reason="Permission rule (allow) approved file mutation.", preview=preview)
         if self.mode == "auto":
             return ApprovalDecision(allowed=True, reason="Auto approval mode allowed file mutation.", preview=preview)
         if self._session_allows(tool_name):
@@ -72,6 +96,11 @@ class ApprovalManager:
     def shell_command(self, command: str, *, validation: bool = False) -> ApprovalDecision:
         destructive = self.is_destructive_command(command)
         preview = self.command_preview(command)
+        rule = self.rules.decision("run_command", command)
+        if rule == "deny":
+            return self._denied(kind="Shell command", preview=preview)
+        if rule == "allow":
+            return ApprovalDecision(allowed=True, reason="Permission rule (allow) approved shell command.", preview=preview, risk="low")
         if destructive and not self._session_allows(command):
             return ApprovalDecision(
                 allowed=False,

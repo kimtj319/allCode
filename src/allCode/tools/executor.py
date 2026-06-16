@@ -203,7 +203,11 @@ class ToolExecutor:
                 action=call.name,
             )
             decision = self._with_approval_preview(
-                self._approval.file_mutation(preview=approval_preview.preview, tool_name=call.name),
+                self._approval.file_mutation(
+                    preview=approval_preview.preview,
+                    tool_name=call.name,
+                    target=self._target_for_call(call, context),
+                ),
                 approval_preview,
             )
         elif call.name in {"run_command", "run_tests"}:

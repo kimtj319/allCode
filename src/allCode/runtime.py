@@ -64,7 +64,12 @@ async def run_agent_turn(
         implementation_settings=implementation_settings,
         tools=tools or runtime_tool_registry(config),
         event_bus=event_bus,
-        approval=ApprovalManager(mode=config.approval.mode, session_allow=config.approval.session_allow),
+        approval=ApprovalManager(
+            mode=config.approval.mode,
+            session_allow=config.approval.session_allow,
+            allow_rules=config.approval.allow,
+            deny_rules=config.approval.deny,
+        ),
         approval_handler=approval_handler,
         context_builder=effective_context_builder,
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,

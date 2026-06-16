@@ -78,6 +78,12 @@ class WorkspaceConfig(StrictConfigModel):
 class ApprovalConfig(StrictConfigModel):
     mode: Literal["ask", "auto", "rules"] = "ask"
     session_allow: list[str] = Field(default_factory=list)
+    # Per-path / per-command permission rules. Each entry is "Tool" or
+    # "Tool(glob)" where Tool is an allCode tool name or a group (Bash, Edit,
+    # Write, Read). deny wins over allow; allow auto-approves; unmatched calls
+    # fall through to `mode`. e.g. allow: ["Bash(npm run test*)", "Write(src/**)"]
+    allow: list[str] = Field(default_factory=list)
+    deny: list[str] = Field(default_factory=list)
 
 
 class WebConfig(StrictConfigModel):
