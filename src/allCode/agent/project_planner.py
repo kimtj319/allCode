@@ -205,25 +205,77 @@ def _indent(text: str) -> str:
     return "\n".join(f"  {line}" for line in text.splitlines() if line.strip())
 
 
+# Allowed keys per nested model (CoreModel uses extra="forbid", so any stray
+# key the model invents — e.g. a task "name" or a file "symbol" — hard-fails
+# validation and would otherwise discard an entire good plan).
+_TASK_KEYS = {"id", "description", "step", "status", "evidence"}
+_FILE_KEYS = {"path", "purpose", "stage", "content", "required"}
+_VALIDATION_KEYS = {"command", "cwd", "timeout_seconds", "environment"}
+_OBLIGATION_KEYS = {"path", "symbol", "reason"}
+
+
+def _normalize_constraints(value) -> list[str]:
+    """Coerce constraints into a list[str] regardless of the model's shape.
+
+    Models sometimes emit constraints as a string, or as an object like
+    ``{"python_version": "3.9+", "dependencies": [...]}`` instead of the
+    schema's list[str]. Flatten any of these to readable strings rather than
+    rejecting the plan."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        items: list[str] = []
+        for key, val in value.items():
+            if isinstance(val, (list, tuple)):
+                val = ", ".join(str(v) for v in val)
+            items.append(f"{key}: {val}")
+        return items
+    if isinstance(value, (list, tuple)):
+        flattened: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                if item.strip():
+                    flattened.append(item.strip())
+            elif isinstance(item, dict):
+                flattened.extend(_normalize_constraints(item))
+            else:
+                flattened.append(str(item))
+        return flattened
+    return [str(value)]
+
+
 def _coerce_plan_payload(payload: dict) -> dict:
     """Coerce a loosely-shaped model plan into the strict ProjectPlan schema.
 
-    Smaller models reliably produce a good plan but with surface variations the
-    strict schema rejects wholesale: validation_commands/tasks emitted as plain
-    strings, and implementation/test files left with empty content (their bodies
-    are generated downstream). Rather than discard the whole plan and fall back to
-    a bare scaffold, normalize these shapes so the real multi-file plan survives.
+    Capable models reliably produce a good multi-file plan but with surface
+    variations the strict (extra="forbid") schema rejects wholesale: constraints
+    as a dict/string, validation_commands/tasks as plain strings, tasks carrying
+    an extra ``name`` field, files carrying stray keys, or empty content (bodies
+    are generated downstream). Rather than discard the whole plan and fall back
+    to a bare single-module scaffold, normalize these shapes and drop unknown
+    keys so the real plan survives.
     """
 
     if not isinstance(payload, dict):
         return payload
     data = dict(payload)
 
+    if "constraints" in data:
+        data["constraints"] = _normalize_constraints(data.get("constraints"))
+
     commands = data.get("validation_commands")
     if isinstance(commands, list):
-        data["validation_commands"] = [
-            {"command": item} if isinstance(item, str) else item for item in commands
-        ]
+        coerced_commands: list = []
+        for item in commands:
+            if isinstance(item, str):
+                coerced_commands.append({"command": item})
+            elif isinstance(item, dict):
+                coerced_commands.append({k: v for k, v in item.items() if k in _VALIDATION_KEYS})
+            else:
+                coerced_commands.append(item)
+        data["validation_commands"] = coerced_commands
 
     tasks = data.get("tasks")
     if isinstance(tasks, list):
@@ -232,13 +284,26 @@ def _coerce_plan_payload(payload: dict) -> dict:
             if isinstance(item, str):
                 coerced_tasks.append({"description": item, "step": "implementation"})
             elif isinstance(item, dict):
-                task = dict(item)
+                task = {k: v for k, v in item.items() if k in _TASK_KEYS}
+                # Models often label tasks with "name"/"title" instead of "description".
+                if not task.get("description"):
+                    task["description"] = str(item.get("name") or item.get("title") or "").strip()
                 task.setdefault("step", "implementation")
                 task.setdefault("description", "")
                 coerced_tasks.append(task)
             else:
                 coerced_tasks.append(item)
         data["tasks"] = coerced_tasks
+
+    obligations = data.get("api_obligations")
+    if isinstance(obligations, list):
+        coerced_obligations: list = []
+        for item in obligations:
+            if isinstance(item, dict):
+                coerced_obligations.append({k: v for k, v in item.items() if k in _OBLIGATION_KEYS})
+            else:
+                coerced_obligations.append(item)
+        data["api_obligations"] = coerced_obligations
 
     files = data.get("files")
     if isinstance(files, list):
@@ -247,7 +312,7 @@ def _coerce_plan_payload(payload: dict) -> dict:
             if not isinstance(item, dict):
                 coerced_files.append(item)
                 continue
-            file = dict(item)
+            file = {k: v for k, v in item.items() if k in _FILE_KEYS}
             file.setdefault("stage", "implementation")
             file.setdefault("purpose", "")
             file.setdefault("required", True)
