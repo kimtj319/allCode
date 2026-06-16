@@ -9,6 +9,7 @@ from typing import Iterable
 from rich import box
 from rich.console import Console, RenderableType
 from rich.markdown import Markdown
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -61,7 +62,17 @@ _FENCE_START_RE = re.compile(r"^```([A-Za-z0-9_+.-]*)\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _ORDERED_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.*)$")
 _UNORDERED_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
-_INLINE_RE = re.compile(r"(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)")
+# Inline spans, longest/most-specific first. The italic alternative is
+# flanking-aware ("*" must hug the word on the inside and be bounded by a
+# non-word, non-"*" char on the outside) so literal asterisks in code/math such
+# as ``n*log`` or ``2*3`` are not swallowed as emphasis and dropped.
+_INLINE_RE = re.compile(
+    r"(\[[^\]\n]+\]\([^)\s]+\)"
+    r"|\*\*[^*\n]+\*\*"
+    r"|`[^`\n]+`"
+    r"|(?<![\w*])\*(?!\s)[^*\n]+?(?<!\s)\*)"
+)
+_LINK_RE = re.compile(r"^\[([^\]\n]+)\]\(([^)\s]+)\)$")
 
 
 @dataclass(frozen=True)
@@ -118,9 +129,24 @@ def _render_block(console: Console, block: MarkdownBlock) -> None:
         elif block.kind == "list":
             _render_list(console, block.lines)
         else:
-            _print_renderable_compact(console, Markdown("\n".join(block.lines)))
+            _print_renderable_compact(console, Markdown(_escape_intraword_asterisks("\n".join(block.lines))))
     except Exception:
         _print_renderable_compact(console, Markdown("\n".join(block.lines)))
+
+
+def _escape_intraword_asterisks(text: str) -> str:
+    """Escape single ``*`` characters that sit between word characters (e.g.
+    ``n*log``, ``2*3``, ``a*b``). Rich's Markdown treats these as intraword
+    emphasis and silently deletes the asterisks together with the surrounding
+    text run; escaping them keeps the literal multiplication/glob/regex text.
+    Inline code spans are left untouched so backslashes do not appear in them."""
+
+    parts = re.split(r"(`[^`\n]+`)", text)
+    for index, part in enumerate(parts):
+        if part.startswith("`") and part.endswith("`"):
+            continue
+        parts[index] = re.sub(r"(?<=\w)\*(?=\w)", r"\\*", part)
+    return "".join(parts)
 
 
 def _parse_blocks(source: str) -> list[MarkdownBlock]:
@@ -391,18 +417,33 @@ def _render_list(console: Console, lines: list[str]) -> None:
         ordered = _ORDERED_RE.match(line)
         if ordered:
             indent, number, content = ordered.group(1), ordered.group(2), ordered.group(3)
-            prefix = Text(f"{indent}{number}. ")
-            prefix.append_text(_inline_markup(content))
-            console.print(prefix)
+            _print_list_item(console, indent, f"{number}. ", content)
             continue
         unordered = _UNORDERED_RE.match(line)
         if unordered:
             indent, content = unordered.group(1), unordered.group(2)
-            prefix = Text(f"{indent}• ")
-            prefix.append_text(_inline_markup(content))
-            console.print(prefix)
+            _print_list_item(console, indent, "• ", content)
             continue
         console.print(_inline_markup(line.strip()))
+
+
+def _print_list_item(console: Console, indent: str, marker: str, content: str) -> None:
+    """Print a list item so wrapped continuation lines hang-indent under the item
+    text instead of falling back to the left margin (which made wrapped bullets
+    read as new top-level lines)."""
+
+    body = _inline_markup(content)
+    marker_width = display_width(indent) + display_width(marker)
+    avail = max(1, console.width - marker_width)
+    wrapped = body.wrap(console, avail)
+    hang = " " * marker_width
+    if not wrapped:
+        console.print(Text(f"{indent}{marker}"))
+        return
+    for row, segment in enumerate(wrapped):
+        prefix = Text(f"{indent}{marker}" if row == 0 else hang)
+        prefix.append_text(segment)
+        console.print(prefix)
 
 
 def _strip_inline_markup(text: str) -> str:
@@ -417,7 +458,13 @@ def _inline_markup(text: str, *, base_style: str = "") -> Text:
     for part in _INLINE_RE.split(text):
         if not part:
             continue
-        if part.startswith("**") and part.endswith("**") and len(part) > 4:
+        link_match = _LINK_RE.match(part)
+        if link_match:
+            label, url = link_match.group(1), link_match.group(2)
+            # Render the link text as a terminal hyperlink so the label shows and
+            # the URL is preserved (clickable) instead of leaking raw "](url)".
+            result.append(label, style=Style(link=url))
+        elif part.startswith("**") and part.endswith("**") and len(part) > 4:
             result.append(part[2:-2], style="bold")
         elif part.startswith("`") and part.endswith("`") and len(part) > 2:
             result.append(part[1:-1], style="cyan")
