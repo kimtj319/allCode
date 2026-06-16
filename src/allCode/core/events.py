@@ -157,32 +157,6 @@ class GenerationWorkflowFinished(AgentEvent):
     severity: EventSeverity = "user_visible"
 
 
-class WorkspaceRootAdded(AgentEvent):
-    event_type: Literal["workspace_root_added"] = "workspace_root_added"
-
-
-class WorkspaceRootRejected(AgentEvent):
-    event_type: Literal["workspace_root_rejected"] = "workspace_root_rejected"
-    severity: EventSeverity = "user_visible"
-
-
-class WorkspaceIndexed(AgentEvent):
-    event_type: Literal["workspace_indexed"] = "workspace_indexed"
-
-
-class PathResolved(AgentEvent):
-    event_type: Literal["path_resolved"] = "path_resolved"
-
-
-class PathResolutionAmbiguous(AgentEvent):
-    event_type: Literal["path_resolution_ambiguous"] = "path_resolution_ambiguous"
-    severity: EventSeverity = "user_visible"
-
-
-class WorkspaceIndexUpdated(AgentEvent):
-    event_type: Literal["workspace_index_updated"] = "workspace_index_updated"
-
-
 class FinalAnswerReady(AgentEvent):
     event_type: Literal["final_answer_ready"] = "final_answer_ready"
     severity: EventSeverity = "user_visible"
@@ -226,11 +200,6 @@ class TurnFailed(AgentEvent):
     severity: EventSeverity = "user_visible"
     error_type: str
     cancelled: bool = False
-
-
-class TurnCancelled(AgentEvent):
-    event_type: Literal["turn_cancelled"] = "turn_cancelled"
-    severity: EventSeverity = "user_visible"
 
 
 class EventDropped(AgentEvent):

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from allCode.core.models import ToolCall, ToolResult
 
 if TYPE_CHECKING:
-    from allCode.config.schema import HooksConfig, HookSpec
+    from allCode.config.schema import HooksConfig
 
 
 class HookRunner:

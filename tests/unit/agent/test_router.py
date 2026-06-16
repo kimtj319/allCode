@@ -137,3 +137,34 @@ def test_router_does_not_use_tests_word_as_generation_target() -> None:
     assert decision.kind == "modify"
     assert decision.target_hint is None
     assert "broad_source_analysis" not in decision.flags
+
+
+def test_router_web_research_writeup_answers_not_modify() -> None:
+    # "검색해서 작성하라" must not drop a file into the workspace; it is a
+    # researched answer. Regression for the middle_east_analysis.md incident.
+    decision = RuleBasedRouter().classify("중동 정세에 대해 더 자세하게 검색해서 작성하라.")
+    assert decision.kind == "answer"
+    assert decision.requires_mutation is False
+    assert "web_search" in decision.tool_capabilities
+
+
+def test_router_news_summary_answers() -> None:
+    decision = RuleBasedRouter().classify(
+        "현재 국제 뉴스에서 가장 관심받는 뉴스를 검색해서 내용을 정리하라."
+    )
+    assert decision.kind == "answer"
+    assert decision.requires_mutation is False
+
+
+def test_router_still_creates_files_with_directory_target() -> None:
+    decision = RuleBasedRouter().classify(
+        "./output/event_broker/ 하위에 브로커 시스템을 구현하고 테스트를 작성하라."
+    )
+    assert decision.kind == "modify"
+    assert decision.requires_mutation is True
+
+
+def test_router_still_creates_files_with_filename_target() -> None:
+    decision = RuleBasedRouter().classify("breaker.py 파일에 CircuitBreaker 클래스를 작성하라.")
+    assert decision.kind == "modify"
+    assert decision.requires_mutation is True

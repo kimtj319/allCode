@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any
 
 from allCode.core.event_bus import EventBus
 from allCode.core.models import ToolCall, ToolResult
