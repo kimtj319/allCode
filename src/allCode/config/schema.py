@@ -21,6 +21,11 @@ class ModelConfig(StrictConfigModel):
     timeout_seconds: int = 120
     max_output_tokens: int = 8192
     extra_body: dict[str, object] = Field(default_factory=dict)
+    # Optional higher-performance model used only for code implementation,
+    # editing, and repair (the generation workflow editor). Routing, summary,
+    # planning, and general reasoning keep `model_name`. When unset, `model_name`
+    # is used everywhere (backward compatible).
+    implementation_model_name: str | None = None
 
     @field_validator("model_name", "api_key_env")
     @classmethod
@@ -28,6 +33,16 @@ class ModelConfig(StrictConfigModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("value must not be empty")
+        return stripped
+
+    @field_validator("implementation_model_name")
+    @classmethod
+    def require_non_empty_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("implementation_model_name must not be empty when set")
         return stripped
 
     @field_validator("timeout_seconds", "max_output_tokens")
@@ -192,6 +207,7 @@ class ConfigSourceReport(StrictConfigModel):
     cli_overrides: list[str] = Field(default_factory=list)
     workspace_root: str
     model_name: str
+    implementation_model_name: str | None = None
     base_url: str | None = None
     api_key_env: str
     api_key_present: bool = False

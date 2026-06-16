@@ -253,6 +253,7 @@ class ConfigManager:
             cli_overrides=cli_overrides,
             workspace_root=config.workspace.root,
             model_name=config.model.model_name,
+            implementation_model_name=config.model.implementation_model_name,
             base_url=_display_url(config.model.base_url),
             api_key_env=api_key_env,
             api_key_present=bool(self.environ.get(api_key_env)),

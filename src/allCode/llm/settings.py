@@ -28,6 +28,18 @@ class ModelSettings(CoreModel):
             extra_body=dict(config.model.extra_body),
         )
 
+    @classmethod
+    def implementation_from_config(cls, config: AppConfig) -> "ModelSettings":
+        """Settings for the code-implementation/editor role. Uses the optional
+        higher-performance ``implementation_model_name`` when configured, else the
+        same model as :meth:`from_config` (backward compatible)."""
+
+        settings = cls.from_config(config)
+        impl_model = config.model.implementation_model_name
+        if impl_model and impl_model != settings.model_name:
+            return settings.model_copy(update={"model_name": impl_model})
+        return settings
+
 
 class ToolSchema(CoreModel):
     name: str

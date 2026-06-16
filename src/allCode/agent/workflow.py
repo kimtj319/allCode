@@ -55,6 +55,7 @@ class GenerationWorkflow:
         final_reporter: FinalReporter | None = None,
         llm_client: LLMClient | None = None,
         settings: ModelSettings | None = None,
+        editor_settings: ModelSettings | None = None,
         model_planner: ModelProjectPlanner | None = None,
         max_repair_attempts: int = 5,
     ) -> None:
@@ -64,14 +65,18 @@ class GenerationWorkflow:
         self.validation_runner = validation_runner or ValidationRunner()
         self.completion_checker = completion_checker or CompletionChecker()
         self.final_reporter = final_reporter or FinalReporter()
+        # Planner stays on the base/reasoning model; the editor (code generation,
+        # editing, repair) uses the higher-performance implementation model when
+        # one is configured. Falls back to base settings.
+        editor_settings = editor_settings or settings
         self.model_planner = model_planner or (
             ModelProjectPlanner(llm_client=llm_client, settings=settings)
             if llm_client is not None and settings is not None
             else None
         )
         self.model_editor = (
-            ModelWorkflowEditor(llm_client=llm_client, settings=settings)
-            if llm_client is not None and settings is not None
+            ModelWorkflowEditor(llm_client=llm_client, settings=editor_settings)
+            if llm_client is not None and editor_settings is not None
             else None
         )
         self.max_repair_attempts = max_repair_attempts

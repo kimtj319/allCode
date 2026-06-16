@@ -54,11 +54,13 @@ async def run_agent_turn(
     use_model_router = llm_client is None
     effective_llm = llm_client or create_llm_client(config)
     settings = ModelSettings.from_config(config)
+    implementation_settings = ModelSettings.implementation_from_config(config)
     effective_context_builder = context_builder or build_runtime_context_builder(config)
     await _load_persisted_session_state(config, logger.session_id, effective_context_builder)
     loop = AgentLoop(
         llm_client=effective_llm,
         settings=settings,
+        implementation_settings=implementation_settings,
         tools=tools or runtime_tool_registry(config),
         event_bus=event_bus,
         approval=ApprovalManager(mode=config.approval.mode, session_allow=config.approval.session_allow),

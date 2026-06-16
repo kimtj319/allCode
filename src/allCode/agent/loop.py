@@ -61,6 +61,7 @@ class AgentLoop:
         *,
         llm_client: LLMClient,
         settings: ModelSettings,
+        implementation_settings: ModelSettings | None = None,
         tools: ToolRegistry | None = None,
         event_bus: EventBus | None = None,
         max_rounds: int = 12,
@@ -79,6 +80,7 @@ class AgentLoop:
     ) -> None:
         self._llm_client = llm_client
         self._settings = settings
+        self._implementation_settings = implementation_settings or settings
         self._tools = tools or ToolRegistry(builtin_tools())
         self._event_bus = event_bus or AsyncEventBus()
         self._max_rounds = max_rounds
@@ -102,6 +104,7 @@ class AgentLoop:
             router=self._router,
             llm_client=self._llm_client,
             settings=self._settings,
+            editor_settings=self._implementation_settings,
         )
         self._context_builder = context_builder
         session_state = context_builder.session_state if context_builder is not None else None

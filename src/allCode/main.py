@@ -120,6 +120,8 @@ def _write_diagnostics(report: ConfigSourceReport, out: TextIO) -> None:
     out.write("allCode configuration diagnostics\n")
     out.write(f"- workspace: {report.workspace_root}\n")
     out.write(f"- model: {report.model_name}\n")
+    if report.implementation_model_name and report.implementation_model_name != report.model_name:
+        out.write(f"- implementation model: {report.implementation_model_name}\n")
     out.write(f"- base_url: {report.base_url or 'default'}\n")
     out.write(f"- api_key_env: {report.api_key_env} ({'set' if report.api_key_present else 'not set'})\n")
     out.write(f"- approval: {report.approval_mode}\n")
