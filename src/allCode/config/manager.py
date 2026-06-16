@@ -39,6 +39,33 @@ class ConfigError(RuntimeError):
     """Raised when configuration cannot be loaded or validated."""
 
 
+def update_project_config_file(project_root: str | Path, updates: Mapping[str, Mapping[str, Any]]) -> Path:
+    """Merge ``updates`` into the project ``.allCode/config.yaml`` and write it.
+
+    Existing keys are preserved; only the named section keys are overwritten.
+    Used by runtime slash commands (``/model``, ``/approval``) to persist a
+    setting change so it survives the next launch. Returns the file path.
+    """
+    path = Path(project_root).expanduser() / PROJECT_CONFIG_RELATIVE_PATH
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, yaml.YAMLError):
+            data = {}
+    for section, values in updates.items():
+        existing = data.get(section)
+        if isinstance(existing, dict):
+            existing.update(values)
+        else:
+            data[section] = dict(values)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return path
+
+
 @dataclass(frozen=True)
 class ConfigOverrides:
     config_path: str | None = None

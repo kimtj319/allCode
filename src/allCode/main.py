@@ -241,7 +241,9 @@ def _slash_handler(
     return SlashCommandHandler(
         registry=registry,
         memory_backend=service,
-        status_backend=RuntimeStatusCommandService(config=config, tools=tools, session_log_path=session_log_path),
+        status_backend=RuntimeStatusCommandService(
+            config=config, tools=tools, session_log_path=session_log_path, project_root=project_root
+        ),
         workspace_root=str(project_root),
         custom_commands={command.name: command for command in custom},
         compact_backend=compact_backend,
