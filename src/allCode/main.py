@@ -29,6 +29,13 @@ from allCode.tui.status_commands import RuntimeStatusCommandService
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="allcode")
     parser.add_argument("--headless", nargs="?", const="", metavar="PROMPT")
+    parser.add_argument(
+        "--output-format",
+        choices=["text", "json", "stream-json"],
+        default="text",
+        dest="output_format",
+        help="Headless output format: text (default), json (single object), or stream-json (one event per line).",
+    )
     parser.add_argument("--workspace")
     parser.add_argument("--config")
     parser.add_argument("--model")
@@ -86,7 +93,13 @@ def main(
             return 0
         if args.headless is not None:
             prompt = args.headless or sys.stdin.read()
-            return run_headless_sync(prompt, config=config, out=stdout, err=stderr)
+            return run_headless_sync(
+                prompt,
+                config=config,
+                out=stdout,
+                err=stderr,
+                output_format=getattr(args, "output_format", "text"),
+            )
         if out is None and err is None:
             _validate_interactive_model_config(config)
             context_builder = build_runtime_context_builder(config)

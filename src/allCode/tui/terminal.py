@@ -16,6 +16,7 @@ from allCode.core.events import AgentEvent
 from allCode.tui import messages
 from allCode.tui.approval_preview_view import approval_preview_from_payload
 from allCode.tui.markdown import logo_text
+from allCode.tui.mentions import expand_mentions
 from allCode.tui.renderers import EventRenderer
 from allCode.tui.slash_commands import SlashCommandHandler
 from allCode.tui.streaming import MarkdownStreamBuffer
@@ -46,6 +47,7 @@ class TerminalSession:
         self.turn_runner = turn_runner
         self.app_info = app_info
         self.slash_handler = slash_handler
+        self._cwd = cwd or Path.cwd()
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
@@ -155,6 +157,11 @@ class TerminalSession:
 
     def _run_agent_prompt(self, prompt: str) -> None:
         self._print_user_prompt(prompt)
+        # @path mentions: the typed prompt is shown verbatim, but the agent
+        # receives the referenced file/dir contents appended as context.
+        agent_prompt, mentioned = expand_mentions(prompt, self._cwd)
+        if mentioned:
+            self._print_status("첨부: " + ", ".join("@" + name for name in mentioned))
         self._stream_started = False
         self._stream_buffer = ""
         self._stream_markdown_buffer.reset()
@@ -164,7 +171,7 @@ class TerminalSession:
         self._running_started_at = time.monotonic()
         self._render_running_composer(messages.MODEL_REQUEST_STATUS)
         try:
-            asyncio.run(self._run_turn_with_ticker(prompt))
+            asyncio.run(self._run_turn_with_ticker(agent_prompt))
         except KeyboardInterrupt:
             self.stderr.write("\nInterrupted.\n")
         except Exception as exc:
