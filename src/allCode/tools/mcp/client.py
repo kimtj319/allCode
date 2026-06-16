@@ -72,6 +72,34 @@ class MCPStdioClient:
             raise MCPError("tools/call returned a non-object result")
         return result
 
+    async def list_resources(self) -> list[dict[str, Any]]:
+        try:
+            result = await self._request("resources/list", {})
+        except MCPError:
+            return []
+        resources = result.get("resources", []) if isinstance(result, dict) else []
+        return [item for item in resources if isinstance(item, dict) and item.get("uri")]
+
+    async def read_resource(self, uri: str) -> dict[str, Any]:
+        result = await self._request("resources/read", {"uri": uri})
+        if not isinstance(result, dict):
+            raise MCPError("resources/read returned a non-object result")
+        return result
+
+    async def list_prompts(self) -> list[dict[str, Any]]:
+        try:
+            result = await self._request("prompts/list", {})
+        except MCPError:
+            return []
+        prompts = result.get("prompts", []) if isinstance(result, dict) else []
+        return [item for item in prompts if isinstance(item, dict) and item.get("name")]
+
+    async def get_prompt(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        result = await self._request("prompts/get", {"name": name, "arguments": arguments or {}})
+        if not isinstance(result, dict):
+            raise MCPError("prompts/get returned a non-object result")
+        return result
+
     async def close(self) -> None:
         process = self._process
         if process is None:

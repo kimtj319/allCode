@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictConfigModel(BaseModel):
@@ -125,20 +125,45 @@ class SourceIntelligenceConfig(StrictConfigModel):
 
 
 class MCPServerConfig(StrictConfigModel):
-    """A Model Context Protocol stdio server allCode launches and exposes as tools."""
+    """A Model Context Protocol server allCode exposes as tools.
+
+    ``transport`` selects how allCode reaches the server: ``stdio`` launches
+    ``command``/``args`` as a child process; ``http`` (a.k.a. Streamable HTTP /
+    SSE) connects to ``url`` over JSON-RPC.
+    """
 
     name: str
-    command: str
+    transport: str = "stdio"
+    command: str = ""
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
 
-    @field_validator("name", "command")
+    @field_validator("name")
     @classmethod
     def require_non_empty(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("value must be non-empty")
         return value.strip()
+
+    @field_validator("transport")
+    @classmethod
+    def require_known_transport(cls, value: str) -> str:
+        normalized = (value or "stdio").strip().lower()
+        if normalized not in {"stdio", "http", "sse"}:
+            raise ValueError("transport must be one of: stdio, http, sse")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_transport_target(self) -> "MCPServerConfig":
+        if self.transport == "stdio":
+            if not self.command.strip():
+                raise ValueError("stdio MCP server requires a command")
+        elif not (self.url or "").strip():
+            raise ValueError("http/sse MCP server requires a url")
+        return self
 
 
 class MCPConfig(StrictConfigModel):

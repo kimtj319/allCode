@@ -75,6 +75,81 @@ class MCPTool:
         )
 
 
+class MCPResourceTool:
+    """Expose an MCP server's resources/read as a read-only allCode tool.
+
+    MCP resources are server-curated context (files, docs, records). This tool
+    lets the agent pull a resource by URI into the turn; advertised URIs are
+    listed in the description so the model knows what is available.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: MCPStdioClient,
+        server_name: str,
+        resources: list[dict[str, Any]],
+        dispatch: Callable[[Awaitable[Any]], Awaitable[Any]] | None = None,
+    ) -> None:
+        self._client = client
+        self._dispatch = dispatch
+        self._server_name = server_name
+        listing = "; ".join(
+            f"{item.get('uri')} ({item.get('name')})" if item.get("name") else str(item.get("uri"))
+            for item in resources[:20]
+        )
+        self.definition = ToolDefinition(
+            name=_normalized_tool_name(server_name, "read_resource"),
+            description=f"Read a resource from MCP server '{server_name}'. Available: {listing}",
+            parameters={
+                "type": "object",
+                "properties": {"uri": {"type": "string"}},
+                "required": ["uri"],
+                "additionalProperties": False,
+            },
+            read_only=True,
+            requires_approval=False,
+            group="mcp",
+            risk="low",
+            side_effects=["network"],
+        )
+
+    async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
+        uri = str(call.arguments.get("uri", ""))
+        if not uri:
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error="uri is required", error_type="missing_uri")
+        try:
+            coro = self._client.read_resource(uri)
+            result = await (self._dispatch(coro) if self._dispatch is not None else coro)
+        except MCPError as exc:
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type="mcp_error")
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
+        text = _resource_contents_to_text(result.get("contents"))
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            ok=True,
+            content=text,
+            metadata={"mcp_server": self._server_name, "uri": uri},
+        )
+
+
+def _resource_contents_to_text(contents: Any) -> str:
+    if not isinstance(contents, list):
+        return str(contents or "")
+    parts: list[str] = []
+    for item in contents:
+        if not isinstance(item, dict):
+            parts.append(str(item))
+            continue
+        if item.get("text"):
+            parts.append(str(item["text"]))
+        elif item.get("blob"):
+            parts.append(f"[binary resource {item.get('uri', '')} omitted]")
+    return "\n".join(part for part in parts if part)
+
+
 def _content_to_text(content: Any) -> str:
     if content is None:
         return ""

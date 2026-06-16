@@ -14,7 +14,8 @@ import threading
 from typing import TYPE_CHECKING
 
 from allCode.tools.mcp.client import MCPStdioClient
-from allCode.tools.mcp.tool import MCPTool
+from allCode.tools.mcp.http_client import MCPHttpClient
+from allCode.tools.mcp.tool import MCPResourceTool, MCPTool
 
 if TYPE_CHECKING:
     from allCode.config.schema import AppConfig, MCPServerConfig
@@ -29,8 +30,9 @@ class MCPManager:
 
     def __init__(self, *, startup_timeout: float = 8.0) -> None:
         self._startup_timeout = startup_timeout
-        self._clients: list[MCPStdioClient] = []
-        self._tools: list[MCPTool] = []
+        self._clients: list = []
+        self._tools: list = []
+        self._prompts: list[dict] = []
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, name="mcp-loop", daemon=True)
         self._thread.start()
@@ -51,29 +53,48 @@ class MCPManager:
         return asyncio.wrap_future(future)
 
     def add_server(self, server: "MCPServerConfig") -> list[str]:
-        """Start one server and register its tools. Returns the tool names added."""
-        client = MCPStdioClient(
-            command=server.command,
-            args=server.args,
-            env=server.env,
-            startup_timeout=self._startup_timeout,
-        )
+        """Start one server and register its tools/resources. Returns names added."""
+        if server.transport in {"http", "sse"}:
+            client = MCPHttpClient(
+                url=server.url or "",
+                headers=server.headers,
+                startup_timeout=self._startup_timeout,
+            )
+        else:
+            client = MCPStdioClient(
+                command=server.command,
+                args=server.args,
+                env=server.env,
+                startup_timeout=self._startup_timeout,
+            )
 
-        async def _bootstrap() -> list[dict]:
+        async def _bootstrap() -> tuple[list[dict], list[dict], list[dict]]:
             await client.start()
-            return await client.list_tools()
+            return (await client.list_tools(), await client.list_resources(), await client.list_prompts())
 
-        specs = self._submit(_bootstrap())
+        tool_specs, resources, prompts = self._submit(_bootstrap())
         self._clients.append(client)
         added: list[str] = []
-        for spec in specs:
+        for spec in tool_specs:
             tool = MCPTool(client=client, server_name=server.name, spec=spec, dispatch=self.submit_async)
             self._tools.append(tool)
             added.append(tool.definition.name)
+        if resources:
+            resource_tool = MCPResourceTool(
+                client=client, server_name=server.name, resources=resources, dispatch=self.submit_async
+            )
+            self._tools.append(resource_tool)
+            added.append(resource_tool.definition.name)
+        for prompt in prompts:
+            self._prompts.append({**prompt, "server": server.name, "client": client})
         return added
 
-    def tools(self) -> list[MCPTool]:
+    def tools(self) -> list:
         return list(self._tools)
+
+    def prompts(self) -> list[dict]:
+        """Prompts advertised by connected servers (MCP prompts → slash commands)."""
+        return [{k: v for k, v in prompt.items() if k != "client"} for prompt in self._prompts]
 
     def close(self) -> None:
         if self._closed:
