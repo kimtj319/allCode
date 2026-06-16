@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 
 from allCode.agent.policy import ToolPolicy, policy_denied_tool_result
@@ -94,6 +95,11 @@ class ToolCallProcessor:
             approval_mode=self._approval.mode,
             user_prompt=turn_input.user_prompt,
         )
+        # When the model emits several independent read-only calls in one round,
+        # run their (I/O-bound) bodies concurrently up front. The sequential loop
+        # below still gates each call and simply consumes the prefetched result
+        # when it matches — gating, ordering and evidence stay sequential.
+        prefetched = await self._prefetch_read_only(tool_calls, context, routing, completion_evidence, inspect_stage)
         for tool_call in tool_calls:
             tool_call = normalize_tool_call_for_routing(tool_call, routing)
             tool_call = normalize_inspect_stage_call(tool_call, inspect_stage)
@@ -314,13 +320,17 @@ class ToolCallProcessor:
                     )
                 )
 
-            result = await self._tool_executor.execute(
-                tool_call,
-                context,
-                routing=routing,
-                completion_evidence=completion_evidence,
-                event_bus=self._event_bus,
-            )
+            pre = prefetched.pop(tool_call.id, None)
+            if pre is not None and pre[0] == tool_call.name and pre[1] == tool_call.arguments:
+                result = pre[2]
+            else:
+                result = await self._tool_executor.execute(
+                    tool_call,
+                    context,
+                    routing=routing,
+                    completion_evidence=completion_evidence,
+                    event_bus=self._event_bus,
+                )
             result = attach_validation_failure_summary(result)
             self._evidence_recorder.record(
                 result,
@@ -369,6 +379,45 @@ class ToolCallProcessor:
                     )
                 )
         return results
+
+    async def _prefetch_read_only(self, tool_calls, context, routing, completion_evidence, inspect_stage):
+        """Concurrently execute the batch's independent read-only calls.
+
+        Returns {call_id: (name, arguments, ToolResult)}. Engages only when at
+        least two calls all resolve to read-only, no-approval tools, so there
+        are no side effects, no approval prompts, and no ordering hazards. The
+        sequential loop verifies (name, arguments) still match before using a
+        prefetched result, so it is a pure optimisation."""
+        if len(tool_calls) < 2:
+            return {}
+        prepared: list = []
+        for raw in tool_calls:
+            call = normalize_tool_call_for_routing(raw, routing)
+            call = normalize_inspect_stage_call(call, inspect_stage)
+            tool = self._tools.get(call.name)
+            if tool is None or not tool.definition.read_only or tool.definition.requires_approval:
+                return {}  # mixed batch — fall back to fully sequential execution
+            prepared.append(strip_harmless_extra_arguments(call, tool.definition))
+        if len(prepared) < 2:
+            return {}
+
+        async def _run(call):
+            result = await self._tool_executor.execute(
+                call,
+                context,
+                routing=routing,
+                completion_evidence=completion_evidence,
+                event_bus=self._event_bus,
+            )
+            return call.id, call.name, dict(call.arguments or {}), result
+
+        gathered = await asyncio.gather(*[_run(call) for call in prepared], return_exceptions=True)
+        prefetched: dict = {}
+        for item in gathered:
+            if isinstance(item, tuple):
+                call_id, name, arguments, result = item
+                prefetched[call_id] = (name, arguments, result)
+        return prefetched
 
     def tool_schemas_for_routing(self, routing, **kwargs):
         return self._schema_filter.schemas_for_routing(routing, **kwargs)
