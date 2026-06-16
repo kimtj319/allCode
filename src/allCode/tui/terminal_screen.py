@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TextIO
 
 from allCode.tui.terminal_frame import StyledLine, TerminalFrame
-from allCode.tui.terminal_width import clip_display_width
+from allCode.tui.terminal_width import clip_display_width, display_width
 
 @dataclass(frozen=True)
 class TerminalTheme:
@@ -55,12 +55,12 @@ class _BodyRowCounter:
 class TerminalScreen:
     """Reserve a small bottom prompt area while body output scrolls above it."""
 
-    # Start at the steady-state minimum (blank separator + prompt + footer +
-    # margin). The composer never needs fewer rows, so beginning here avoids a
-    # one-row scroll on the first render that would push the banner's top border
-    # off-screen.
-    reserved_rows = 4
-    max_reserved_rows = 12
+    # Start at the steady-state minimum for the boxed composer: blank separator +
+    # box top border + prompt row + box bottom border + footer + margin. Beginning
+    # here avoids a scroll on the first render that would push the banner's top
+    # border off-screen.
+    reserved_rows = 6
+    max_reserved_rows = 14
 
     def __init__(
         self,
@@ -169,7 +169,8 @@ class TerminalScreen:
             return
         self._raw_stdout.write("\x1b[?25l")
         try:
-            needed_rows = max(4, min(self.max_reserved_rows, frame.line_count + 2))
+            # +2 rows for the input box's top and bottom borders.
+            needed_rows = max(4, min(self.max_reserved_rows, frame.line_count + 4))
             self.set_reserved_rows(needed_rows)
             start = self._composer_start()
             self._composer_top = start
@@ -191,17 +192,22 @@ class TerminalScreen:
                 self._write_line(row, "")
                 row += 1
 
-            input_start = row
+            # Draw the input inside a rounded border box for clear separation
+            # (Claude Code-style). The box reserves two rows for borders.
             footer_rows = len(frame.footer_lines)
-            usable_rows = max(1, self.height - input_start - footer_rows + 1)
-            for index, line in enumerate(frame.input_lines[:usable_rows]):
+            box_top = row
+            input_start = box_top + 1
+            usable_rows = max(1, self.height - input_start - footer_rows - 1)
+            shown_inputs = frame.input_lines[:usable_rows] or [StyledLine(text="")]
+            self._write_box_border(box_top, top=True)
+            for index, line in enumerate(shown_inputs):
                 prefix = "› " if index == 0 else "  "
-                current_row = input_start + index
-                self._raw_stdout.write(f"\x1b[{current_row};1H")
-                self._raw_stdout.write(f"{self._fg(self.theme.prompt_fg)}{prefix}\x1b[0m")
-                self._raw_stdout.write(clip_display_width(line.text, max(0, self.width - 3)))
-            completion_start = input_start + min(len(frame.input_lines), usable_rows)
-            shown_overlays = frame.overlay_lines[: max(0, usable_rows - len(frame.input_lines))]
+                self._write_box_input_row(input_start + index, prefix, line.text)
+            box_bottom = input_start + len(shown_inputs)
+            self._write_box_border(box_bottom, top=False)
+
+            completion_start = box_bottom + 1
+            shown_overlays = frame.overlay_lines[: max(0, usable_rows - len(shown_inputs))]
             for offset, line in enumerate(shown_overlays):
                 self._write_line(completion_start + offset, f"  {line.text}", style=line.style)
             # Keep the footer (status line) attached to the bottom of the composer
@@ -209,14 +215,36 @@ class TerminalScreen:
             # compact instead of stranding the footer at the bottom of the screen.
             footer_start = completion_start + len(shown_overlays)
             for offset, line in enumerate(frame.footer_lines):
-                row = min(self.height, footer_start + offset)
-                self._write_line(row, f"  {line.text}", style=line.style)
+                footer_row = min(self.height, footer_start + offset)
+                self._write_line(footer_row, f"  {line.text}", style=line.style)
+            # Cursor: shift right by the box's "│ " (2 cells) past the prefix base.
             cursor_screen_row = min(input_start + frame.cursor_row, self.height)
-            cursor_screen_col = max(1, min(self.width, 1 + frame.cursor_col))
+            cursor_screen_col = max(1, min(self.width, 3 + frame.cursor_col))
             self._raw_stdout.write(f"\x1b[{cursor_screen_row};{cursor_screen_col}H")
         finally:
             self._raw_stdout.write("\x1b[?25h")
             self._raw_stdout.flush()
+
+    def _write_box_border(self, row: int, *, top: bool) -> None:
+        if row > self.height:
+            return
+        left, right = ("╭", "╮") if top else ("╰", "╯")
+        line = left + "─" * max(0, self.width - 2) + right
+        self._write_line(row, line, style="dim")
+
+    def _write_box_input_row(self, row: int, prefix: str, text: str) -> None:
+        if row > self.height:
+            return
+        inner = max(0, self.width - 4)  # content between "│ " and " │"
+        body_text = clip_display_width(text, max(0, inner - display_width(prefix)))
+        used = display_width(prefix) + display_width(body_text)
+        pad = " " * max(0, inner - used)
+        border = self._fg(self.theme.dim_fg)
+        prompt = self._fg(self.theme.prompt_fg)
+        self._raw_stdout.write(f"\x1b[{row};1H\x1b[2K")
+        self._raw_stdout.write(f"{border}│\x1b[0m ")
+        self._raw_stdout.write(f"{prompt}{prefix}\x1b[0m{body_text}{pad}")
+        self._raw_stdout.write(f" {border}│\x1b[0m")
 
     def set_reserved_rows(self, rows: int) -> None:
         # Reserved height is monotonic (high-water) within a session: once the

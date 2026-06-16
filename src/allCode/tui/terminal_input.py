@@ -222,7 +222,9 @@ class TerminalInputEditor:
         self.screen.render_bottom_frame(frame)
 
     def _render_state(self, area: TerminalTextArea) -> InputRenderState:
-        width = max(10, self.screen.width - 3)
+        # Text wraps inside the input box: terminal width minus the box borders
+        # ("│ " + " │" = 4) and the two-column prompt prefix.
+        width = max(8, self.screen.width - 6)
         visual_lines: list[str] = []
         cursor_position = area.cursor_position()
         cursor_row = 0
