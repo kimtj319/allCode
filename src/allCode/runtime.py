@@ -9,6 +9,7 @@ from allCode.agent.context import ContextBuilder
 from allCode.agent.context_factory import build_runtime_context_builder
 from allCode.agent.loop import AgentLoop
 from allCode.agent.model_router import ModelRouter
+from allCode.agent.steering import SteeringQueue
 from allCode.config.schema import AppConfig
 from allCode.core.event_bus import AsyncEventBus
 from allCode.core.events import AgentEvent
@@ -45,6 +46,7 @@ async def run_agent_turn(
     event_handler: EventHandler | None = None,
     approval_handler: ApprovalHandler | None = None,
     session_logger: AgentSessionLogger | None = None,
+    steering=None,
 ) -> TurnResult:
     """Run a single agent turn with optional event forwarding."""
 
@@ -90,6 +92,7 @@ async def run_agent_turn(
         hook_runner=HookRunner(config.hooks),
         checkpoint=_checkpoint,
         plan_approval=plan_approval,
+        steering=steering,
     )
     turn_input = TurnInput(
         user_prompt=prompt,
@@ -146,8 +149,11 @@ def make_tui_turn_runner(
 
     context_builder = context_builder or build_runtime_context_builder(config)
     session_logger = session_logger or AgentSessionLogger.create(config=config)
+    steering = SteeringQueue()
 
     async def run(prompt: str, event_handler: EventHandler, approval_handler: ApprovalHandler | None = None) -> None:
+        # Drop any stale steering left over from a previous turn.
+        steering.drain()
         await run_agent_turn(
             prompt,
             config=config,
@@ -157,8 +163,12 @@ def make_tui_turn_runner(
             event_handler=event_handler,
             approval_handler=approval_handler,
             session_logger=session_logger,
+            steering=steering,
         )
 
+    # The TUI pushes mid-turn user input here; the running turn drains it at
+    # each round boundary.
+    run.steering = steering  # type: ignore[attr-defined]
     return run
 
 

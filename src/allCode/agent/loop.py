@@ -79,6 +79,7 @@ class AgentLoop:
         hook_runner=None,
         checkpoint=None,
         plan_approval=None,
+        steering=None,
     ) -> None:
         self._llm_client = llm_client
         self._settings = settings
@@ -140,6 +141,7 @@ class AgentLoop:
             tool_call_processor=self._tool_call_processor,
             stream_collector=self._stream_collector,
             max_rounds=self._max_rounds,
+            steering=steering,
         )
 
     async def run_turn(self, turn_input: TurnInput) -> TurnResult:

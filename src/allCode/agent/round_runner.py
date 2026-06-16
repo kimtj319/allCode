@@ -39,8 +39,8 @@ from allCode.agent.web_finalization import (
     web_evidence_fallback_answer,
 )
 from allCode.core.event_bus import EventBus
-from allCode.core.events import ModelStreamStarted, RecoveryStateUpdated
-from allCode.core.models import ToolResult, TurnInput, TurnState
+from allCode.core.events import ModelStreamStarted, RecoveryStateUpdated, UserPromptSubmitted
+from allCode.core.models import Message, ToolResult, TurnInput, TurnState
 from allCode.core.result import CompletionEvidence
 from allCode.llm.response_parser import ResponseParser
 
@@ -63,7 +63,11 @@ class RoundRunner:
         # inspection room before it locks to mutation-only.
         inspect_action_budget: int = 7,
         inspect_round_budget: int = 6,
+        steering=None,
     ) -> None:
+        # Optional SteeringQueue: drained at each round boundary so user
+        # guidance typed mid-turn is fed into the next model round.
+        self._steering = steering
         self._event_bus = event_bus
         self._prompt_builder = prompt_builder
         self._tool_call_processor = tool_call_processor
@@ -77,6 +81,22 @@ class RoundRunner:
         self._revalidation = RevalidationOrchestrator(tool_call_processor=tool_call_processor, max_rounds=max_rounds)
         self._response_handler = RoundResponseHandler(self)
         self._tool_handler = RoundToolHandler(self)
+
+    async def _apply_steering(self, state: TurnState, runtime) -> None:
+        """Drain mid-turn steering messages and inject them as user turns."""
+        if self._steering is None:
+            return
+        for message in self._steering.drain():
+            injected = Message(role="user", content=f"[사용자 추가 지시] {message}")
+            runtime.messages.append(injected)
+            state.messages.append(injected)
+            await self._event_bus.publish(
+                UserPromptSubmitted(
+                    turn_id=state.turn_id,
+                    message="Mid-turn steering message injected.",
+                    data={"steering": message},
+                )
+            )
 
     async def run_rounds(
         self,
@@ -94,6 +114,7 @@ class RoundRunner:
 
         for round_index in range(self._max_rounds):
             state.phase = "model"
+            await self._apply_steering(state, runtime)
             more_mutation = self._update_repair_flags(turn_input, routing, completion_evidence, runtime)
             control = self._validation_controller.decide(
                 snapshot=self._snapshot(round_index, completion_evidence, recovery, runtime),
