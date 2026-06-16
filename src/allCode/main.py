@@ -191,6 +191,8 @@ def _maybe_fork_session(config, args) -> str | None:
     and return it (to be seeded). Returns None when --fork was not requested."""
     from uuid import uuid4
 
+    from allCode.memory.conversation_store import ConversationStore
+
     ref = getattr(args, "fork_session", None)
     if ref is None:
         return None
