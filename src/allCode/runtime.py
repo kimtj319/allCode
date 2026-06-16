@@ -47,6 +47,7 @@ async def run_agent_turn(
     approval_handler: ApprovalHandler | None = None,
     session_logger: AgentSessionLogger | None = None,
     steering=None,
+    images: list[str] | None = None,
 ) -> TurnResult:
     """Run a single agent turn with optional event forwarding."""
 
@@ -98,6 +99,7 @@ async def run_agent_turn(
         user_prompt=prompt,
         workspace=WorkspaceRef(root=config.workspace.root, writable=config.workspace.sandbox_enabled),
         session_id=logger.session_id,
+        images=list(images or []),
     )
     event_bus_closed = False
     try:

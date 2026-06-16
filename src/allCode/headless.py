@@ -33,6 +33,7 @@ async def run_headless(
     llm_client=None,
     tools: ToolRegistry | None = None,
     event_handler=None,
+    images: list[str] | None = None,
 ) -> TurnResult:
     return await run_agent_turn(
         prompt,
@@ -40,6 +41,7 @@ async def run_headless(
         llm_client=llm_client,
         tools=tools,
         event_handler=event_handler,
+        images=images,
     )
 
 
@@ -76,6 +78,7 @@ def run_headless_sync(
     llm_client=None,
     tools: ToolRegistry | None = None,
     output_format: OutputFormat = "text",
+    images: list[str] | None = None,
 ) -> int:
     stdout = out or sys.stdout
     stderr = err or sys.stderr
@@ -97,6 +100,7 @@ def run_headless_sync(
                 llm_client=llm_client,
                 tools=tools,
                 event_handler=event_handler,
+                images=images,
             )
         )
     except Exception as exc:

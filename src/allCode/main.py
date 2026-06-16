@@ -36,6 +36,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="output_format",
         help="Headless output format: text (default), json (single object), or stream-json (one event per line).",
     )
+    parser.add_argument(
+        "--image",
+        action="append",
+        default=None,
+        dest="images",
+        metavar="PATH",
+        help="Attach an image file to the headless prompt (repeatable). Requires a vision-capable model.",
+    )
     parser.add_argument("--workspace")
     parser.add_argument("--config")
     parser.add_argument("--model")
@@ -93,12 +101,16 @@ def main(
             return 0
         if args.headless is not None:
             prompt = args.headless or sys.stdin.read()
+            from allCode.agent.image_input import encode_image_files
+
+            images = encode_image_files(getattr(args, "images", None) or [])
             return run_headless_sync(
                 prompt,
                 config=config,
                 out=stdout,
                 err=stderr,
                 output_format=getattr(args, "output_format", "text"),
+                images=images,
             )
         if out is None and err is None:
             _validate_interactive_model_config(config)
