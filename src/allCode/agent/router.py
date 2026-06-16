@@ -141,6 +141,28 @@ class RuleBasedRouter:
                 signals,
                 flags,
             )
+        # "Search the web and write up X" (e.g. "중동 정세를 검색해서 작성하라") reads as a
+        # change command because of verbs like 작성/정리, but the user wants a researched
+        # ANSWER, not a file dropped into the workspace. When external knowledge is
+        # requested and there is no concrete artifact target (no filename, output
+        # directory, multi-file or project hint), answer in conversation instead of
+        # routing to file generation.
+        if (
+            signals.modify_action
+            and signals.external_knowledge_requested
+            and not signals.no_external_network
+            and not signals.target_hint
+            and not signals.directory_output_hint
+            and not signals.multi_artifact_hint
+            and not signals.project_output_hint
+        ):
+            return self._decision(
+                "answer",
+                0.80,
+                "External research write-up requested without a workspace artifact target; answer in conversation.",
+                signals,
+                flags,
+            )
         if signals.modify_action:
             return self._decision("modify", 0.84, "Modification or generation action requested.", signals, flags)
         if signals.operate_action and not signals.no_shell_requested:
