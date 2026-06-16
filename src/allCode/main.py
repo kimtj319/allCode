@@ -68,8 +68,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume",
         nargs="?",
         const="",
-        metavar="SESSION_ID",
-        help="Resume a specific session by id, or the most recent if none is given.",
+        metavar="SESSION_REF",
+        help="Resume a session by id or name, or the most recent if none is given.",
+    )
+    parser.add_argument("--name", dest="session_name", metavar="NAME", help="Name this session for easy /resume <name> later.")
+    parser.add_argument(
+        "--fork",
+        nargs="?",
+        const="",
+        metavar="SESSION_REF",
+        dest="fork_session",
+        help="Start a new session seeded from a copy of an existing one (id/name, or most recent).",
     )
     return parser
 
@@ -116,10 +125,20 @@ def main(
             _validate_interactive_model_config(config)
             context_builder = build_runtime_context_builder(config)
             resume_id = _resolve_resume_session_id(config, args)
+            forked_from = _maybe_fork_session(config, args)
+            if forked_from is not None:
+                resume_id = forked_from
             session_logger = AgentSessionLogger.create(config=config, session_id=resume_id)
             if resume_id is not None:
                 restored = seed_resumed_session(config, context_builder, resume_id)
-                stdout.write(f"이전 세션을 이어서 진행합니다 (id {resume_id[:8]}, 복원된 대화 {restored}턴).\n")
+                origin = "복제한 세션" if forked_from is not None else "이전 세션"
+                stdout.write(f"{origin}을 이어서 진행합니다 (id {resume_id[:8]}, 복원된 대화 {restored}턴).\n")
+            name = getattr(args, "session_name", None)
+            if name:
+                from allCode.memory.conversation_store import ConversationStore
+
+                ConversationStore(config.workspace.root).set_name(session_logger.session_id, name)
+                stdout.write(f"이 세션을 '{name}'(으)로 명명했습니다. 다음에 `--resume {name}`로 재개하세요.\n")
             return run_interactive_session(
                 turn_runner=make_tui_turn_runner(
                     config=config,
@@ -162,9 +181,25 @@ def _resolve_resume_session_id(config, args) -> str | None:
     if requested is None and not wants_continue:
         return None
     store = ConversationStore(config.workspace.root)
-    if requested:  # explicit, non-empty session id
-        return requested if requested in store.list_sessions() else None
+    if requested:  # explicit id or registered name
+        return store.resolve(requested)
     return store.latest_session_id()
+
+
+def _maybe_fork_session(config, args) -> str | None:
+    """If --fork was given, copy the source conversation into a new session id
+    and return it (to be seeded). Returns None when --fork was not requested."""
+    from uuid import uuid4
+
+    ref = getattr(args, "fork_session", None)
+    if ref is None:
+        return None
+    store = ConversationStore(config.workspace.root)
+    source = store.resolve(ref) if ref else store.latest_session_id()
+    if not source:
+        return None
+    new_id = uuid4().hex
+    return new_id if store.fork(source, new_id) else None
 
 
 def _tui_app_info(config) -> str:

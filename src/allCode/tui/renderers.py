@@ -392,7 +392,29 @@ def _format_plan_preview(*, target_root: str, files: list) -> str:
         *tree_lines,
         "```",
     ]
+    checklist = _format_step_checklist(files)
+    if checklist:
+        lines += ["", checklist]
     return "\n".join(lines)
+
+
+def _format_step_checklist(files: list) -> str:
+    """Render the planned generation steps as a checklist (todo view).
+
+    The workflow runs skeleton → implementation → tests → validation; show the
+    stages the plan actually contains (plus validation) so the user sees the
+    intended sequence before work starts."""
+    stages = {str(item.get("stage", "")).strip().lower() for item in files}
+    order = [
+        ("skeleton", "뼈대 작성"),
+        ("implementation", "구현"),
+        ("tests", "테스트 작성"),
+    ]
+    steps = [label for key, label in order if key in stages]
+    steps.append("검증(pytest 등)")  # the workflow always validates
+    if len(steps) <= 1:
+        return ""
+    return "**작업 단계**\n" + "\n".join(f"- ▢ {step}" for step in steps)
 
 
 def _ascii_file_tree(paths: list[str]) -> list[str]:
