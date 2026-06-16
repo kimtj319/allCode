@@ -22,6 +22,7 @@ from allCode.agent.workflow_repair import repair_completion_check, repair_until_
 from allCode.agent.workflow_result import (
     GenerationWorkflowResult,
     build_failed_workflow_result,
+    build_rejected_workflow_result,
     build_workflow_turn_result,
 )
 from allCode.agent.workflow_routing import workflow_target_root_from_routing
@@ -58,7 +59,12 @@ class GenerationWorkflow:
         editor_settings: ModelSettings | None = None,
         model_planner: ModelProjectPlanner | None = None,
         max_repair_attempts: int = 5,
+        plan_approval=None,
     ) -> None:
+        # Optional async gate: called with the plan summary after the plan is
+        # built but before any file is written. Returning False aborts the
+        # generation (plan mode — present the plan, wait for approval).
+        self._plan_approval = plan_approval
         self.strategy_registry = strategy_registry or default_strategy_registry()
         self.event_bus = event_bus or AsyncEventBus()
         self.router = router or RuleBasedRouter()
@@ -135,6 +141,16 @@ class GenerationWorkflow:
                 },
             )
         )
+
+        if self._plan_approval is not None:
+            approved = await self._plan_approval(_plan_summary(plan))
+            if not approved:
+                return build_rejected_workflow_result(
+                    turn_id=turn_id,
+                    plan=plan,
+                    completion_evidence=completion_evidence,
+                    task_loop_digests=task_loop_digests,
+                )
 
         try:
             skeleton_digest = workflow_digest(
@@ -449,3 +465,11 @@ def _api_obligations_declared_in_plan(plan: ProjectPlan) -> bool:
         if not symbols or obligation.symbol not in symbols:
             return False
     return True
+
+
+def _plan_summary(plan: ProjectPlan) -> str:
+    """Human-readable plan preview shown for plan-mode approval."""
+    lines = [f"대상 경로: {plan.target_root}", f"언어: {plan.language}", "", "생성/수정 예정 파일:"]
+    for file in plan.files:
+        lines.append(f"  - [{file.stage}] {file.path} — {file.purpose}")
+    return "\n".join(lines)

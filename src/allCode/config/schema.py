@@ -84,6 +84,9 @@ class ApprovalConfig(StrictConfigModel):
     # fall through to `mode`. e.g. allow: ["Bash(npm run test*)", "Write(src/**)"]
     allow: list[str] = Field(default_factory=list)
     deny: list[str] = Field(default_factory=list)
+    # Plan mode: present the generation plan and wait for approval before any
+    # file is written. Off by default (the workflow proceeds straight to code).
+    plan_mode: bool = False
 
 
 class WebConfig(StrictConfigModel):

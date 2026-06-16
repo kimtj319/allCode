@@ -71,6 +71,7 @@ async def run_agent_turn(
             path = workspace_root_path / path
         checkpoint_store.snapshot(path)
 
+    plan_approval = _build_plan_approval(config, approval_handler)
     loop = AgentLoop(
         llm_client=effective_llm,
         settings=settings,
@@ -88,6 +89,7 @@ async def run_agent_turn(
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
         hook_runner=HookRunner(config.hooks),
         checkpoint=_checkpoint,
+        plan_approval=plan_approval,
     )
     turn_input = TurnInput(
         user_prompt=prompt,
@@ -158,6 +160,33 @@ def make_tui_turn_runner(
         )
 
     return run
+
+
+def _build_plan_approval(config: AppConfig, approval_handler: ApprovalHandler | None):
+    """Build a plan-mode gate from the interactive approval handler.
+
+    Returns None unless plan mode is on and an approval handler exists (e.g. a
+    headless run has no handler, so plan mode cannot block — it proceeds). The
+    plan is presented as an approval request named ``plan``; approve → proceed,
+    deny → abort before any file is written."""
+    if not config.approval.plan_mode or approval_handler is None:
+        return None
+
+    from allCode.core.models import ToolCall
+    from allCode.tools.approval import ApprovalDecision, ApprovalRequest
+
+    async def plan_approval(summary: str) -> bool:
+        request = ApprovalRequest(
+            tool_name="plan",
+            decision=ApprovalDecision(allowed=False, requires_approval=True, preview=summary, risk="medium"),
+            preview=summary,
+            risk="medium",
+            call=ToolCall(id="plan-approval", name="plan", arguments={}),
+        )
+        action = await approval_handler(request)
+        return action in {"approve_once", "allow_session"}
+
+    return plan_approval
 
 
 def runtime_tool_registry(config: AppConfig) -> ToolRegistry:

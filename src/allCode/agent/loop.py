@@ -78,6 +78,7 @@ class AgentLoop:
         context_builder: ContextBuilder | None = None,
         hook_runner=None,
         checkpoint=None,
+        plan_approval=None,
     ) -> None:
         self._llm_client = llm_client
         self._settings = settings
@@ -107,6 +108,7 @@ class AgentLoop:
             llm_client=self._llm_client,
             settings=self._settings,
             editor_settings=self._implementation_settings,
+            plan_approval=plan_approval,
         )
         self._context_builder = context_builder
         session_state = context_builder.session_state if context_builder is not None else None

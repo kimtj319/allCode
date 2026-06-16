@@ -71,6 +71,31 @@ def build_workflow_turn_result(
     )
 
 
+def build_rejected_workflow_result(
+    *,
+    turn_id: str,
+    plan: ProjectPlan,
+    completion_evidence: CompletionEvidence,
+    task_loop_digests: list[TaskLoopDigest],
+) -> GenerationWorkflowResult:
+    """Result for a plan the user declined (plan mode). No files were written."""
+    completion_evidence.status = "blocked"
+    completion_evidence.final_answer_ready = False
+    message = "계획이 승인되지 않아 작업을 진행하지 않았습니다. 계획을 조정해 다시 요청해 주세요."
+    return GenerationWorkflowResult(
+        plan=plan,
+        turn_result=TurnResult(
+            turn_id=turn_id,
+            status="cancelled",
+            final_answer=message,
+            error_message=message,
+            completion_evidence=completion_evidence,
+        ),
+        completion_check=CompletionCheck(ok=False, errors=["plan rejected"]),
+        task_loop_digests=task_loop_digests,
+    )
+
+
 def build_failed_workflow_result(
     *,
     turn_id: str,
