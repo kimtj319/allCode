@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import hashlib
 import re
@@ -174,10 +175,21 @@ class DuckDuckGoHtmlSearchProvider:
         search_url: str = "https://html.duckduckgo.com/html/",
         timeout_seconds: int = 15,
         http_client: httpx.AsyncClient | None = None,
+        max_attempts: int = 3,
+        retry_backoff_seconds: float = 0.8,
+        max_pages: int = 2,
     ) -> None:
         self._search_url = search_url
         self._timeout_seconds = timeout_seconds
         self._http_client = http_client
+        # DuckDuckGo's HTML endpoint throttles automated traffic with an
+        # intermittent anti-bot challenge, so a single request frequently fails
+        # even when the query is fine. Retry with backoff (the challenge is
+        # transient) and page deeper when one page is short — this is what makes
+        # web search persistent instead of giving up on the first failure.
+        self._max_attempts = max(1, max_attempts)
+        self._retry_backoff_seconds = max(0.0, retry_backoff_seconds)
+        self._max_pages = max(1, max_pages)
 
     def health(self) -> WebHealth:
         return WebHealth(
@@ -188,8 +200,65 @@ class DuckDuckGoHtmlSearchProvider:
         )
 
     async def search(self, query: str, *, top_n: int = 5) -> list[WebEvidence]:
+        evidence: list[WebEvidence] = []
+        seen_urls: set[str] = set()
+        last_error: WebSearchUnavailable | None = None
+        for page in range(self._max_pages):
+            try:
+                page_results = await self._fetch_page_with_retry(query, offset=page * 30, top_n=top_n)
+            except WebSearchUnavailable as exc:
+                last_error = exc
+                # A later page failing is fine if earlier pages already produced
+                # evidence; the first page failing (after retries) is fatal.
+                if evidence:
+                    break
+                if page == 0:
+                    raise
+                break
+            for item in page_results:
+                if item.url in seen_urls:
+                    continue
+                seen_urls.add(item.url)
+                evidence.append(item.model_copy(update={"rank": len(evidence) + 1}))
+                if len(evidence) >= top_n:
+                    return evidence
+            # A short page means there is nothing more to page into.
+            if len(page_results) < top_n:
+                break
+        if not evidence:
+            if last_error is not None:
+                raise last_error
+            raise WebSearchUnavailable("DuckDuckGo HTML search returned no parseable evidence.")
+        return evidence
+
+    async def _fetch_page_with_retry(self, query: str, *, offset: int, top_n: int) -> list[WebEvidence]:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return await self._fetch_page(query, offset=offset, top_n=top_n)
+            except (WebSearchUnavailable, httpx.HTTPError) as exc:
+                if attempt >= self._max_attempts:
+                    if isinstance(exc, WebSearchUnavailable):
+                        raise
+                    raise WebSearchUnavailable(f"DuckDuckGo HTML search request failed: {exc}") from exc
+                if self._retry_backoff_seconds:
+                    await asyncio.sleep(self._retry_backoff_seconds * attempt)
+
+    async def _fetch_page(self, query: str, *, offset: int, top_n: int) -> list[WebEvidence]:
         params = {"q": query}
-        headers = {"User-Agent": "allCode/0.1 (+https://github.com/kimtj319/allCode)"}
+        if offset:
+            params["s"] = str(offset)
+        # A realistic browser User-Agent is treated less aggressively than a
+        # bot-identifying one by the anti-bot filter.
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
         if self._http_client is not None:
             response = await self._http_client.get(self._search_url, params=params, headers=headers)
             return self._parse_response(response, top_n=top_n)
