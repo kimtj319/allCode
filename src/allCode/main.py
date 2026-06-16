@@ -139,6 +139,7 @@ def main(
                 cwd=Path(config.workspace.root).expanduser().resolve(),
                 plain_terminal=args.plain_terminal,
                 textual=args.textual,
+                session_id=session_logger.session_id,
             )
         stdout.write("allCode interactive UI requires a real TTY. Use allcode --headless for captured runs.\n")
         return 0

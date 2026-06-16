@@ -23,6 +23,7 @@ def run_interactive_session(
     cwd: Path,
     plain_terminal: bool = False,
     textual: bool = False,
+    session_id: str | None = None,
 ) -> int:
     """Run the best available interactive UI.
 
@@ -46,4 +47,5 @@ def run_interactive_session(
         stdout=stdout,
         stderr=stderr,
         cwd=cwd,
+        session_id=session_id,
     )

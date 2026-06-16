@@ -111,11 +111,15 @@ class TerminalSession:
         stderr: TextIO,
         theme: TerminalTheme | None = None,
         cwd: Path | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.turn_runner = turn_runner
         self.app_info = app_info
         self.slash_handler = slash_handler
         self._cwd = cwd or Path.cwd()
+        # Used to print a resume hint on exit once the session has real history.
+        self._session_id = session_id
+        self._had_turn = False
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
@@ -186,6 +190,24 @@ class TerminalSession:
                 self._run_agent_prompt(prompt)
         finally:
             self.screen.exit()
+            self._print_resume_hint()
+
+    def _print_resume_hint(self) -> None:
+        """On exit, tell the user how to resume this conversation later.
+
+        Only shown once the session has real history to resume; resuming an
+        empty session would be pointless."""
+        if not self._had_turn:
+            return
+        lines = [
+            "",
+            "이 세션을 이어서 진행하려면:",
+            "  allcode --continue            (이 작업 폴더의 가장 최근 세션)",
+        ]
+        if self._session_id:
+            lines.append(f"  allcode --resume {self._session_id}   (이 세션을 직접 지정)")
+        self.stdout.write("\n".join(lines) + "\n")
+        self.stdout.flush()
 
     async def handle_agent_event(self, event: AgentEvent) -> None:
         if event.event_type == "model_metrics_recorded":
@@ -227,6 +249,7 @@ class TerminalSession:
             self._print_status(rendered.status)
 
     def _run_agent_prompt(self, prompt: str) -> None:
+        self._had_turn = True
         self._print_user_prompt(prompt)
         # @path mentions: the typed prompt is shown verbatim, but the agent
         # receives the referenced file/dir contents appended as context.
@@ -550,6 +573,7 @@ def run_terminal_session(
     stdout: TextIO,
     stderr: TextIO,
     cwd: Path | None = None,
+    session_id: str | None = None,
 ) -> int:
     return TerminalSession(
         turn_runner=turn_runner,
@@ -559,4 +583,5 @@ def run_terminal_session(
         stdout=stdout,
         stderr=stderr,
         cwd=cwd,
+        session_id=session_id,
     ).run()
