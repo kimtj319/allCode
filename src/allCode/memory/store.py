@@ -9,6 +9,34 @@ from allCode.memory.redaction import redact_text
 from allCode.memory.schema import MemoryItem, MemoryKind
 
 
+def _condense_instruction_text(text: str, max_chars: int) -> str:
+    """Keep both the head and tail of an over-long instruction file on line
+    boundaries, rather than hard-truncating the head and dropping the (often
+    most specific) closing instructions."""
+
+    head_budget = (max_chars * 7) // 10
+    tail_budget = max_chars - head_budget
+    lines = text.splitlines()
+    head: list[str] = []
+    size = 0
+    for line in lines:
+        if size + len(line) + 1 > head_budget:
+            break
+        head.append(line)
+        size += len(line) + 1
+    tail: list[str] = []
+    size = 0
+    for line in reversed(lines[len(head):]):
+        if size + len(line) + 1 > tail_budget:
+            break
+        tail.append(line)
+        size += len(line) + 1
+    tail.reverse()
+    if not tail:
+        return "\n".join(head).rstrip() + "\n[truncated]"
+    return "\n".join(head).rstrip() + "\n\n[... 중략 ...]\n\n" + "\n".join(tail).strip()
+
+
 class MemoryStore:
     def __init__(
         self,
@@ -41,7 +69,7 @@ class MemoryStore:
         items.extend(self._read_structured_items())
         return [item for item in items if item.approved]
 
-    def _read_instruction_file(self, path: Path, *, scope, max_chars: int = 6000) -> list[MemoryItem]:
+    def _read_instruction_file(self, path: Path, *, scope, max_chars: int = 12000) -> list[MemoryItem]:
         """Read a standard agent-instruction file (AGENTS.md/CLAUDE.md) as one item."""
         if not path.exists() or not path.is_file():
             return []
@@ -52,7 +80,7 @@ class MemoryStore:
         if not text:
             return []
         if len(text) > max_chars:
-            text = text[:max_chars].rstrip() + "\n[truncated]"
+            text = _condense_instruction_text(text, max_chars)
         return [MemoryItem(scope=scope, kind="instruction", text=text, evidence=[str(path)])]
 
     async def add_item(self, item: MemoryItem) -> None:

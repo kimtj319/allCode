@@ -69,6 +69,10 @@ class SlashCommandHandler:
             return SlashCommandResult(message=self._undo())
         if normalized == "/rewind":
             return SlashCommandResult(message=self._rewind())
+        if normalized in {"/review", "/diff"}:
+            from allCode.workspace.git_ops import working_tree_diff
+
+            return SlashCommandResult(message=working_tree_diff(self.workspace_root or "."))
         if normalized == "/compact":
             if self.compact_backend is None:
                 return SlashCommandResult(message="컨텍스트 압축 백엔드가 설정되지 않았습니다.")

@@ -26,7 +26,8 @@ def build_runtime_context_builder(config: AppConfig) -> ContextBuilder:
     for extra_root in config.workspace.extra_roots:
         roots.add(extra_root, writable=False)
 
-    workspace_index = WorkspaceIndexer().build(roots)
+    index_cache = root_path / ".allCode" / "index_cache.json"
+    workspace_index = WorkspaceIndexer(cache_path=index_cache).build(roots)
     recent_targets = RecentTargetMemory()
     compactor = ContextCompactor()
     store = MemoryStore(root_path, DEFAULT_CONFIG_DIR)

@@ -40,6 +40,27 @@ def is_git_repo(root: str | Path) -> bool:
     return bool(result and result.returncode == 0 and result.stdout.strip() == "true")
 
 
+def working_tree_diff(root: str | Path, *, max_chars: int = 12000) -> str:
+    """Return a unified diff of uncommitted changes (staged + unstaged + new
+    files), for a /review-style overview of what the agent changed."""
+
+    base = Path(root)
+    if not is_git_repo(base):
+        return "git 저장소가 아니어서 변경 사항을 비교할 수 없습니다."
+    _run(base, ["add", "-N", "."])  # include new files in the diff
+    result = _run(base, ["--no-pager", "diff", "--stat"], timeout=15)
+    diff = _run(base, ["--no-pager", "diff"], timeout=15)
+    if result is None or diff is None:
+        return "git diff를 실행할 수 없습니다."
+    stat = result.stdout.strip()
+    body = diff.stdout
+    if not stat and not body.strip():
+        return "커밋되지 않은 변경 사항이 없습니다."
+    if len(body) > max_chars:
+        body = body[:max_chars].rstrip() + "\n... (diff truncated) ..."
+    return f"```\n{stat}\n```\n\n```diff\n{body}\n```"
+
+
 def working_tree_dirty(root: str | Path) -> bool:
     result = _run(Path(root), ["status", "--porcelain"], timeout=5)
     return bool(result and result.returncode == 0 and result.stdout.strip())

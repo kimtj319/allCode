@@ -53,6 +53,7 @@ def default_commands() -> list[CommandSpec]:
         CommandSpec(name="/exit", description="Exit allCode.", usage="/exit"),
         CommandSpec(name="/undo", description="Undo allCode's last auto-commit.", usage="/undo"),
         CommandSpec(name="/rewind", description="Revert the last turn's file changes (checkpoint).", usage="/rewind"),
+        CommandSpec(name="/review", description="Show uncommitted changes (git diff).", usage="/review"),
         CommandSpec(name="/compact", description="Summarize and compact the conversation context.", usage="/compact"),
         CommandSpec(name="/cost", description="Show this session's token usage.", usage="/cost"),
         CommandSpec(name="/clear", description="Clear transcript view.", usage="/clear"),

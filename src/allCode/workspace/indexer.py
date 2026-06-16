@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from pydantic import Field
@@ -62,13 +63,19 @@ class WorkspaceIndexer:
         ignore_dirs: set[str] | None = None,
         max_files: int = 20_000,
         max_read_size: int = 256 * 1024,
+        cache_path: Path | str | None = None,
     ) -> None:
         self.ignore_dirs = ignore_dirs or DEFAULT_IGNORE_DIRS
         self.max_files = max_files
         self.max_read_size = max_read_size
+        self.cache_path = Path(cache_path) if cache_path else None
         self._cache: dict[str, FileRecord] = {}
 
     def build(self, roots: WorkspaceRoots) -> WorkspaceIndex:
+        # Persisted hash cache: unchanged files (same path:mtime:size) skip the
+        # expensive content read+hash on every launch.
+        self._load_cache()
+        used: dict[str, FileRecord] = {}
         records: list[FileRecord] = []
         skipped = 0
         for root in roots.roots:
@@ -79,6 +86,7 @@ class WorkspaceIndexer:
             iterator = [root_path] if root_path.is_file() else root_path.rglob("*")
             for path in iterator:
                 if len(records) >= self.max_files:
+                    self._save_cache(used)
                     return WorkspaceIndex(files=records, skipped=skipped, truncated=True)
                 if self._ignored(path):
                     continue
@@ -86,6 +94,8 @@ class WorkspaceIndexer:
                     continue
                 record = self._record(path, root_path)
                 records.append(record)
+                used[f"{record.path}:{record.mtime}:{record.size}"] = record
+        self._save_cache(used)
         return WorkspaceIndex(files=records, skipped=skipped, truncated=False)
 
     def update_file(self, index: WorkspaceIndex, path: Path, root: Path) -> WorkspaceIndex:
@@ -133,6 +143,31 @@ class WorkspaceIndexer:
 
     def _hash_metadata(self, path: Path, mtime: float, size: int) -> str:
         return hashlib.sha256(f"{path}:{mtime}:{size}".encode("utf-8")).hexdigest()
+
+    def _load_cache(self) -> None:
+        if not self.cache_path or not self.cache_path.exists():
+            return
+        try:
+            raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        cache: dict[str, FileRecord] = {}
+        for key, value in raw.items():
+            try:
+                cache[key] = FileRecord(**value)
+            except (TypeError, ValueError):
+                continue
+        self._cache = cache
+
+    def _save_cache(self, used: dict[str, FileRecord]) -> None:
+        if not self.cache_path:
+            return
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {key: record.model_dump(mode="json") for key, record in used.items()}
+            self.cache_path.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            return
 
     def _language(self, path: Path) -> str | None:
         suffix = path.suffix.lower()

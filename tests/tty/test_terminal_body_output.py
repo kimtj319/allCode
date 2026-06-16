@@ -26,7 +26,7 @@ def test_prepare_body_output_clears_composer_and_flows_from_top_when_empty(monke
     )
     stream = TTYBuffer()
     screen = TerminalScreen(stdin=stream, stdout=stream)
-    screen.set_reserved_rows(4)
+    screen.set_reserved_rows(6)  # boxed composer reserves 6 rows
 
     stream.seek(0)
     stream.truncate(0)
@@ -34,9 +34,9 @@ def test_prepare_body_output_clears_composer_and_flows_from_top_when_empty(monke
 
     output = stream.getvalue()
     # Composer rows are cleared and the scroll region is reapplied.
-    assert "\x1b[21;1H\x1b[2K" in output
+    assert "\x1b[19;1H\x1b[2K" in output
     assert "\x1b[24;1H\x1b[2K" in output
-    assert "\x1b[1;20r" in output
+    assert "\x1b[1;18r" in output
     # With no committed body yet, body output flows from the top instead of being
     # pinned to body_bottom (no large gap under the header).
     assert output.endswith("\x1b[1;1H")
@@ -49,7 +49,7 @@ def test_prepare_body_output_clamps_to_body_bottom_once_filled(monkeypatch) -> N
     )
     stream = TTYBuffer()
     screen = TerminalScreen(stdin=stream, stdout=stream)
-    screen.set_reserved_rows(4)
+    screen.set_reserved_rows(6)
     # Simulate body output that fills past the scroll region (newlines flow
     # through the counting proxy).
     screen.stdout.write("line\n" * 50)
@@ -59,8 +59,8 @@ def test_prepare_body_output_clamps_to_body_bottom_once_filled(monkeypatch) -> N
     screen.prepare_body_output()
 
     output = stream.getvalue()
-    # body_bottom for 80x24 with reserved 4 is 20.
-    assert output.endswith("\x1b[20;1H")
+    # body_bottom for 80x24 with reserved 6 is 18.
+    assert output.endswith("\x1b[18;1H")
 
 
 def test_terminal_prompt_print_prepares_body_output_before_rendering(monkeypatch) -> None:
