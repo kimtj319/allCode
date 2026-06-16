@@ -91,7 +91,7 @@ AGENTS.md 메모리, repo_map(`memory/repo_map.py`), 텔레메트리(`/status`·
 | `/pr` + 스마트 커밋 메시지 | `git_ops.create_pull_request`·`derive_commit_message`(자동 커밋도 사용) |
 | 세션 이름/포크 | `--name`/`--resume <name>`/`--fork`(`ConversationStore.set_name/resolve/fork`) |
 | 진행 체크리스트(todo) | 플랜 프리뷰에 "작업 단계" 체크리스트 추가 |
-| GH Action / 포맷 훅 / 템플릿 | `docs/examples/`(github-action.yml, auto-format-hook.yaml, agent-and-command-templates.md) |
+| GH Action / 포맷 훅 / 템플릿 | `examples/`(github-action.yml, auto-format-hook.yaml, agent-and-command-templates.md) |
 
 ### ⏳ 의도적으로 보류 (사유 명시)
 

@@ -1,0 +1,14 @@
+# 예시: 편집(write_file/patch_file) 후 자동 포맷을 거는 PostToolUse 훅.
+# .allCode/config.yaml 의 hooks 섹션에 아래를 추가하면, 파일을 수정할 때마다
+# ruff(있으면)로 정렬합니다. allCode의 HookRunner가 ALLCODE_TOOL_NAME /
+# ALLCODE_TOOL_ARGS / ALLCODE_TOOL_OK 환경변수를 넘겨줍니다.
+hooks:
+  - match: "write_file"
+    command: "python -m ruff format . >/dev/null 2>&1 || true"
+    timeout_seconds: 20
+  - match: "patch_file"
+    command: "python -m ruff format . >/dev/null 2>&1 || true"
+    timeout_seconds: 20
+
+# JavaScript/TypeScript 프로젝트라면 prettier 로 바꿔서 사용하세요:
+#   command: "npx --no-install prettier -w . >/dev/null 2>&1 || true"

@@ -1,0 +1,36 @@
+# 예시: allCode를 CI(GitHub Actions)에서 헤드리스로 실행하는 워크플로 템플릿.
+# 이 파일은 "예시"이며 자동 활성화되지 않습니다. 사용하려면 저장소의
+# .github/workflows/ 아래로 복사하고 ALLCODE_API_KEY 시크릿을 설정하세요.
+name: allCode review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  allcode-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install allCode
+        run: pip install -e .
+
+      - name: Run allCode (headless, JSON)
+        env:
+          ALLCODE_API_KEY: ${{ secrets.ALLCODE_API_KEY }}
+          ALLCODE_BASE_URL: ${{ secrets.ALLCODE_BASE_URL }}
+        run: |
+          git diff --stat origin/${{ github.base_ref }}...HEAD > /tmp/diff.txt
+          allcode --headless "이 PR의 변경(diff.txt 기준)을 검토하고 버그/보안 위험을 요약하라" \
+            --output-format json > /tmp/allcode.json
+          cat /tmp/allcode.json
+
+      # 결과를 PR 코멘트로 올리려면 actions/github-script 등으로
+      # /tmp/allcode.json 의 final_answer 를 게시하세요.
