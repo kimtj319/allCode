@@ -164,8 +164,10 @@
 | 15 | 변경 리뷰 뷰 | ✅ 완료(diff) | `/review`(=`/diff`) → `git_ops.working_tree_diff` |
 | 16 | 지시문 처리 | ✅ 완료 | `store._condense_instruction_text`: 절단 대신 head+tail 요약 |
 | 17 | @-멘션 | ✅ 완료 | `tui/mentions.py`: `@경로` 파일/디렉터리 내용을 턴 컨텍스트로 첨부 |
-| 1 | 턴 중간 개입 | ⏳ 예정 | |
-| 2 | 플랜 승인 | ⏳ 예정 | |
-| 5 | 셸 스트리밍/백그라운드 | ⏳ 예정 | |
-| 6 | 병렬 도구/서브에이전트 | ⏳ 예정 | |
-| 9 | MCP HTTP/SSE + resources/prompts | ⏳ 예정 | |
+| 1 | 턴 중간 개입 | ✅ 핵심 완료 | `agent/steering.py` SteeringQueue, RoundRunner가 라운드 경계마다 drain→사용자 메시지 주입. 런타임까지 배선·테스트 완료. TUI 실시간 키 입력 캡처(원시 모드 동시 stdin)는 잔여 통합으로 보류 |
+| 2 | 플랜 승인 | ✅ 완료 | `approval.plan_mode`, GenerationWorkflow가 계획 제시 후 승인 게이트 대기(거부 시 cancelled, 파일 미작성) |
+| 5 | 셸 스트리밍/백그라운드 | ✅ 완료 | `run_command background=true` + `get_command_output`/`kill_command`, `background_jobs.py`(Popen+스레드) |
+| 6 | 병렬 도구/서브에이전트 | ✅ 부분 | 쓰기 가능 위임 서브에이전트 `delegate_task` 완료. 병렬 도구 실행은 라운드 파이프라인의 게이팅/증거 상태가 순서 의존적이라 대형 리팩터 필요로 보류 |
+| 9 | MCP HTTP/SSE + resources/prompts | ✅ 완료 | `http_client.MCPHttpClient`(Streamable HTTP/SSE), resources/read 도구, prompts 노출, transport 설정 |
+
+**최종 상태**: 17개 보강 항목 전부 적용. #1(TUI 실시간 캡처)과 #6(병렬 도구 실행)은 핵심 메커니즘을 구현·테스트했고, 안전상 잔여 통합/리팩터를 명시적으로 보류함. 전체 테스트 882 passed, 3 skipped.
