@@ -48,6 +48,10 @@ class RuntimeStatusCommandService:
             return self._doctor()
         if root == "/export":
             return self._export(args)
+        if root == "/pr":
+            return self._pr(args)
+        if root == "/agents":
+            return self._agents()
         if root == "/status":
             return self._status(normalized)
         if root == "/debug":
@@ -67,6 +71,29 @@ class RuntimeStatusCommandService:
         except OSError as exc:
             return f"AGENTS.md 생성에 실패했습니다: {exc}"
         return f"AGENTS.md 초안을 생성했습니다 ({target}). 내용을 검토·수정하세요."
+
+    def _agents(self) -> str:
+        from allCode.workspace.agent_definitions import load_agent_definitions
+
+        definitions = load_agent_definitions(self.project_root)
+        if not definitions:
+            return (
+                "정의된 서브에이전트가 없습니다.\n"
+                "`.allCode/agents/<name>.md`에 frontmatter(description/model/tools)와 지침을 작성하세요."
+            )
+        lines = ["정의된 서브에이전트:"]
+        for d in definitions:
+            tools = f" · tools: {', '.join(d.tools)}" if d.tools else ""
+            model = f" · model: {d.model}" if d.model else ""
+            lines.append(f"- {d.name}: {d.description}{model}{tools}")
+        return "\n".join(lines)
+
+    def _pr(self, args: list[str]) -> str:
+        from allCode.workspace.git_ops import create_pull_request
+
+        title = " ".join(args).strip() or None
+        result = create_pull_request(self.project_root, title=title)
+        return result.message
 
     def _doctor(self) -> str:
         import os

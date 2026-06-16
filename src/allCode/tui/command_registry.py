@@ -53,6 +53,8 @@ def default_commands() -> list[CommandSpec]:
         CommandSpec(name="/export", description="Save the conversation transcript to a file.", usage="/export [path]"),
         CommandSpec(name="/context", description="Show context-window usage.", usage="/context"),
         CommandSpec(name="/theme", description="Switch the color theme (dark|light).", usage="/theme [dark|light]"),
+        CommandSpec(name="/pr", description="Commit, push, and open a GitHub PR (gh).", usage="/pr [title]"),
+        CommandSpec(name="/agents", description="List defined sub-agents (.allCode/agents).", usage="/agents"),
         CommandSpec(name="/status last", description="Show latest session diagnostics.", usage="/status last"),
         CommandSpec(name="/debug last", description="Show raw latest session diagnostics.", usage="/debug last"),
         CommandSpec(name="/stop", description="Cancel the active turn.", usage="/stop"),

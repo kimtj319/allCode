@@ -101,6 +101,74 @@ def commit_all(root: str | Path, message: str) -> GitActionResult:
     return GitActionResult(ok=True, message=f"커밋 생성: {sha}", sha=short)
 
 
+def _current_branch(root: Path) -> str:
+    result = _run(root, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=5)
+    return result.stdout.strip() if result and result.returncode == 0 else ""
+
+
+def derive_commit_message(root: str | Path) -> str:
+    """Heuristic Conventional-Commit message from the staged/working changes.
+
+    Classifies by the paths that changed (tests/docs/build vs source) so the
+    auto-commit and PR flows get a meaningful default message without a model
+    call. e.g. ``test: update 2 files``, ``docs: update README.md``."""
+    workspace = Path(root)
+    _run(workspace, ["add", "-N", "."])
+    result = _run(workspace, ["--no-pager", "diff", "--name-only", "HEAD"], timeout=10)
+    files = [line.strip() for line in (result.stdout.splitlines() if result else []) if line.strip()]
+    if not files:
+        status = _run(workspace, ["status", "--porcelain"], timeout=5)
+        files = [line[3:].strip() for line in (status.stdout.splitlines() if status else []) if line.strip()]
+    if not files:
+        return "chore: update workspace"
+    lowered = [f.lower() for f in files]
+    if all("test" in f for f in lowered):
+        kind = "test"
+    elif all(f.endswith((".md", ".rst", ".txt")) for f in lowered):
+        kind = "docs"
+    elif any(f.endswith((".toml", ".cfg", ".ini", ".yaml", ".yml", "requirements.txt")) for f in lowered):
+        kind = "build"
+    else:
+        kind = "chore"
+    if len(files) == 1:
+        return f"{kind}: update {files[0]}"
+    return f"{kind}: update {len(files)} files"
+
+
+def create_pull_request(root: str | Path, *, title: str | None = None, body: str | None = None) -> GitActionResult:
+    """Commit pending changes, push the branch, and open a PR via the gh CLI.
+
+    Refuses on the default branch (main/master) so a PR always has a feature
+    branch. Requires the GitHub CLI (`gh`) to be installed and authenticated."""
+    workspace = Path(root)
+    if not is_git_repo(workspace):
+        return GitActionResult(ok=False, message="git 저장소가 아닙니다.")
+    branch = _current_branch(workspace)
+    if branch in {"main", "master", ""}:
+        return GitActionResult(ok=False, message=f"기본 브랜치('{branch}')에서는 PR을 만들 수 없습니다. 먼저 새 브랜치를 만드세요.")
+    if working_tree_dirty(workspace):
+        commit = commit_all(workspace, title or derive_commit_message(workspace))
+        if not commit.ok:
+            return commit
+    push = _run(workspace, ["push", "-u", "origin", branch], timeout=60)
+    if push is None or push.returncode != 0:
+        detail = (push.stderr.strip() if push else "") or "git push 실패"
+        return GitActionResult(ok=False, message=f"브랜치 푸시 실패: {detail}")
+    args = ["pr", "create"]
+    if title:
+        args += ["--title", title, "--body", body or ""]
+    else:
+        args += ["--fill"]
+    try:
+        completed = subprocess.run(["gh", "-C", str(workspace), *args], capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return GitActionResult(ok=False, message=f"gh 실행 실패(설치/인증 확인): {exc}")
+    if completed.returncode != 0:
+        return GitActionResult(ok=False, message=(completed.stderr.strip() or "gh pr create 실패"))
+    url = completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
+    return GitActionResult(ok=True, message=f"PR을 생성했습니다: {url}", sha=branch)
+
+
 def undo_last_allcode_commit(root: str | Path) -> GitActionResult:
     """Reset the tip commit if (and only if) it is an allCode auto-commit.
 

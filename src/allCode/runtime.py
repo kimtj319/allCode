@@ -285,8 +285,15 @@ def _maybe_auto_commit(config: AppConfig, result: TurnResult, prompt: str) -> No
     root = config.workspace.root
     if not is_git_repo(root):
         return
-    subject = " ".join(prompt.split())[:72] or "allCode change"
-    git_commit_all(root, f"allCode: {subject}")
+    # Prefer a Conventional-Commit message derived from the actual diff; fall
+    # back to the prompt subject when nothing classifiable changed.
+    from allCode.workspace.git_ops import derive_commit_message
+
+    message = derive_commit_message(root)
+    if message == "chore: update workspace":
+        subject = " ".join(prompt.split())[:72] or "allCode change"
+        message = f"allCode: {subject}"
+    git_commit_all(root, message)
 
 
 def _remember_result_targets(context_builder: ContextBuilder, result: TurnResult) -> None:
