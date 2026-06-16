@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
 from allCode.core.event_bus import EventBus
 from allCode.core.models import ToolCall, ToolResult
 from allCode.tools.base import ToolContext, ToolDefinition
+from allCode.tools.builtin.background_jobs import JOBS
 from allCode.tools.builtin.file_ops import resolve_under_root
 from allCode.tools.builtin.shell_sandbox import sandbox_command
 from allCode.workspace.project_locator import ProjectLocator
@@ -27,13 +29,18 @@ def _truncate(value: str, limit: int = MAX_STREAM_CHARS) -> str:
 class RunCommandTool:
     definition = ToolDefinition(
         name="run_command",
-        description="Run a non-interactive shell command in the workspace.",
+        description=(
+            "Run a non-interactive shell command in the workspace. Set background=true to "
+            "launch a long-running process (dev server, watcher) without blocking; it returns "
+            "a job_id to poll with get_command_output and stop with kill_command."
+        ),
         parameters={
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
                 "cwd": {"type": "string"},
                 "timeout_seconds": {"type": "integer"},
+                "background": {"type": "boolean"},
             },
             "required": ["command"],
             "additionalProperties": False,
@@ -47,7 +54,108 @@ class RunCommandTool:
         self._shell_sandbox = shell_sandbox
 
     async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
+        if bool(call.arguments.get("background")):
+            return run_background_call(call, context)
         return await run_shell_call(call, context, validation=False, sandbox_mode=self._shell_sandbox)
+
+
+class GetCommandOutputTool:
+    definition = ToolDefinition(
+        name="get_command_output",
+        description="Return new stdout/stderr from a background job (started via run_command background=true) since the last poll.",
+        parameters={
+            "type": "object",
+            "properties": {"job_id": {"type": "string"}},
+            "required": ["job_id"],
+            "additionalProperties": False,
+        },
+        read_only=True,
+        group="shell",
+    )
+
+    async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
+        job_id = str(call.arguments.get("job_id", ""))
+        job = JOBS.get(job_id)
+        if job is None:
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error=f"unknown job: {job_id}", error_type="unknown_job")
+        out, err = job.read_new()
+        running = job.running()
+        status = "running" if running else f"exited (code {job.returncode()})"
+        body = _truncate(out)
+        if err.strip():
+            body = f"{body}\n[stderr]\n{_truncate(err)}" if body.strip() else f"[stderr]\n{_truncate(err)}"
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            ok=True,
+            content=f"[{status}]\n{body}" if body.strip() else f"[{status}] (no new output)",
+            metadata={"job_id": job_id, "running": running, "returncode": job.returncode()},
+        )
+
+
+class KillCommandTool:
+    definition = ToolDefinition(
+        name="kill_command",
+        description="Terminate a background job started via run_command background=true.",
+        parameters={
+            "type": "object",
+            "properties": {"job_id": {"type": "string"}},
+            "required": ["job_id"],
+            "additionalProperties": False,
+        },
+        read_only=False,
+        group="shell",
+    )
+
+    async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
+        job_id = str(call.arguments.get("job_id", ""))
+        job = JOBS.get(job_id)
+        if job is None:
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error=f"unknown job: {job_id}", error_type="unknown_job")
+        job.kill()
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            ok=True,
+            content=f"terminated {job_id} (code {job.returncode()})",
+            metadata={"job_id": job_id, "running": job.running(), "returncode": job.returncode()},
+        )
+
+
+def run_background_call(call: ToolCall, context: ToolContext) -> ToolResult:
+    try:
+        cwd = resolve_under_root(context.workspace.root, str(call.arguments.get("cwd", ".")))
+        command = _command_to_string(call.arguments.get("command"))
+        if not command:
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error="command is required", error_type="missing_command")
+        execution_command = _portable_command(command)
+        env = _allowed_environment(context.environment)
+        popen = subprocess.Popen(
+            execution_command,
+            shell=True,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            text=True,
+            bufsize=1,
+        )
+        job = JOBS.register(command=command, cwd=str(cwd), popen=popen)
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            ok=True,
+            content=f"started background job {job.job_id}: {command}\nPoll with get_command_output(job_id='{job.job_id}'), stop with kill_command.",
+            metadata={
+                "job_id": job.job_id,
+                "command": command,
+                "cwd": str(cwd),
+                "background": True,
+                "observation": {"kind": "background_job", "target": command, "summary": f"background {job.job_id}", "risk": "medium"},
+            },
+        )
+    except Exception as exc:
+        return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
 
 
 class RunTestsTool:
