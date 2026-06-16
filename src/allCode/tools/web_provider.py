@@ -208,12 +208,6 @@ class DuckDuckGoHtmlSearchProvider:
                 page_results = await self._fetch_page_with_retry(query, offset=page * 30, top_n=top_n)
             except WebSearchUnavailable as exc:
                 last_error = exc
-                # A later page failing is fine if earlier pages already produced
-                # evidence; the first page failing (after retries) is fatal.
-                if evidence:
-                    break
-                if page == 0:
-                    raise
                 break
             for item in page_results:
                 if item.url in seen_urls:
@@ -225,11 +219,90 @@ class DuckDuckGoHtmlSearchProvider:
             # A short page means there is nothing more to page into.
             if len(page_results) < top_n:
                 break
-        if not evidence:
-            if last_error is not None:
-                raise last_error
-            raise WebSearchUnavailable("DuckDuckGo HTML search returned no parseable evidence.")
-        return evidence
+        if evidence:
+            return evidence
+        # The HTML scrape produced nothing (commonly a sustained anti-bot
+        # throttle). Fall back to the Instant Answer API, a different endpoint
+        # that is not throttled the same way, before giving up.
+        fallback = await self._instant_answer_search(query, top_n=top_n)
+        if fallback:
+            return fallback
+        if last_error is not None:
+            raise last_error
+        raise WebSearchUnavailable("DuckDuckGo HTML search returned no parseable evidence.")
+
+    async def _instant_answer_search(self, query: str, *, top_n: int) -> list[WebEvidence]:
+        url = "https://api.duckduckgo.com/"
+        params = {"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"}
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+        }
+        try:
+            if self._http_client is not None:
+                response = await self._http_client.get(url, params=params, headers=headers)
+            else:
+                async with httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=True) as client:
+                    response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            return []
+        return self._parse_instant_answer(payload, query=query, top_n=top_n)
+
+    def _parse_instant_answer(self, payload: Any, *, query: str, top_n: int) -> list[WebEvidence]:
+        if not isinstance(payload, dict):
+            return []
+        collected: list[WebEvidence] = []
+
+        def add(title: str, url: str, snippet: str) -> None:
+            title = _collapse_ws(title)
+            url = (url or "").strip()
+            snippet = _collapse_ws(snippet)[:800]
+            if not title or not url:
+                return
+            collected.append(
+                WebEvidence(
+                    title=title[:120],
+                    url=url,
+                    snippet=snippet,
+                    source="duckduckgo_instant_answer",
+                    display_domain=_display_domain(url),
+                    snippet_hash=_snippet_hash(snippet),
+                    retrieved_at=_utc_timestamp(),
+                    rank=len(collected) + 1,
+                )
+            )
+
+        abstract = payload.get("AbstractText") or ""
+        if abstract and payload.get("AbstractURL"):
+            add(payload.get("Heading") or query, payload.get("AbstractURL", ""), abstract)
+
+        def walk(topics: list) -> None:
+            for topic in topics:
+                if not isinstance(topic, dict):
+                    continue
+                nested = topic.get("Topics")
+                if isinstance(nested, list):
+                    walk(nested)
+                    continue
+                text = topic.get("Text") or ""
+                add(text, topic.get("FirstURL", ""), text)
+
+        walk(payload.get("RelatedTopics") or [])
+
+        deduped: list[WebEvidence] = []
+        seen: set[str] = set()
+        for item in collected:
+            if item.url in seen:
+                continue
+            seen.add(item.url)
+            deduped.append(item.model_copy(update={"rank": len(deduped) + 1}))
+            if len(deduped) >= top_n:
+                break
+        return deduped
 
     async def _fetch_page_with_retry(self, query: str, *, offset: int, top_n: int) -> list[WebEvidence]:
         attempt = 0
