@@ -1,5 +1,6 @@
 """Builtin tool implementations."""
 
+from allCode.tools.builtin.ast_edit import ApplyEditsTool, ReplaceSymbolTool
 from allCode.tools.builtin.file_ops import file_tools
 from allCode.tools.builtin.glob import GlobFilesTool
 from allCode.tools.builtin.search import SearchFilesTool
@@ -24,6 +25,8 @@ def builtin_tools(
 ) -> list:
     return [
         *file_tools(),
+        ReplaceSymbolTool(),
+        ApplyEditsTool(),
         SearchFilesTool(),
         GlobFilesTool(),
         ListTreeTool(),
