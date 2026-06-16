@@ -34,7 +34,7 @@ def build_runtime_context_builder(config: AppConfig) -> ContextBuilder:
     selector = ContextMemorySelector(
         store=store,
         recent_targets=recent_targets,
-        repo_map_builder=RepoMapBuilder(),
+        repo_map_builder=RepoMapBuilder(cache_path=root_path / ".allCode" / "repo_map_cache.json"),
         session_summary=SessionSummary(root_path),
         workspace_index=workspace_index,
         compactor=compactor,

@@ -16,43 +16,73 @@ class RepoMapBuilder:
         self.symbol_indexer = symbol_indexer or SymbolIndexer()
         self.ranker = ranker or RepoRanker()
         self.cache_path = cache_path
+        # In-memory cache of entries keyed by relative path; seeded from disk on
+        # the first build, then reused across turns so unchanged files are never
+        # re-parsed. None means "not loaded yet".
+        self._memo: dict[str, RepoMapEntry] | None = None
 
     def build_entries(self, index: WorkspaceIndex) -> list[RepoMapEntry]:
+        if self._memo is None:
+            self._memo = {entry.path: entry for entry in self._safe_load_cache()}
+        cached = self._memo
         entries: list[RepoMapEntry] = []
+        seen: set[str] = set()
+        changed = False
         for record in index.source_files():
-            symbols = self.symbol_indexer.extract(record.path)
-            definitions = [symbol.signature for symbol in symbols.definitions]
-            summary = self._summary(record.relative_path, definitions, symbols.imports)
-            analysis = symbols.analysis
-            entries.append(
-                RepoMapEntry(
-                    path=record.relative_path,
-                    language=record.language,
-                    definitions=definitions,
-                    references=symbols.references,
-                    imports=symbols.imports,
-                    symbols=[
-                        symbol.model_dump(mode="json")
-                        for symbol in (analysis.symbols if analysis is not None else [])
-                    ],
-                    imports_detail=[
-                        item.model_dump(mode="json")
-                        for item in (analysis.imports if analysis is not None else [])
-                    ],
-                    references_detail=[
-                        item.model_dump(mode="json")
-                        for item in (analysis.references if analysis is not None else [])
-                    ],
-                    analysis_backend=analysis.backend if analysis is not None else "",
-                    analysis_quality=dict(analysis.quality if analysis is not None else {}),
-                    summary=summary,
-                    mtime=record.mtime,
-                )
-            )
-        if self.cache_path is not None:
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            self.cache_path.write_text(json.dumps([entry.model_dump(mode="json") for entry in entries], ensure_ascii=False, indent=2), encoding="utf-8")
+            seen.add(record.relative_path)
+            prior = cached.get(record.relative_path)
+            # Reuse the cached entry when the file is unchanged (same mtime); only
+            # changed/new files are re-read and re-parsed.
+            if prior is not None and prior.mtime == record.mtime:
+                entries.append(prior)
+                continue
+            entry = self._extract_entry(record)
+            cached[record.relative_path] = entry
+            entries.append(entry)
+            changed = True
+        for path in list(cached.keys()):
+            if path not in seen:
+                del cached[path]
+                changed = True
+        if self.cache_path is not None and (changed or not self.cache_path.exists()):
+            self._save_cache(entries)
         return entries
+
+    def _extract_entry(self, record) -> RepoMapEntry:
+        symbols = self.symbol_indexer.extract(record.path)
+        definitions = [symbol.signature for symbol in symbols.definitions]
+        summary = self._summary(record.relative_path, definitions, symbols.imports)
+        analysis = symbols.analysis
+        return RepoMapEntry(
+            path=record.relative_path,
+            language=record.language,
+            definitions=definitions,
+            references=symbols.references,
+            imports=symbols.imports,
+            symbols=[symbol.model_dump(mode="json") for symbol in (analysis.symbols if analysis is not None else [])],
+            imports_detail=[item.model_dump(mode="json") for item in (analysis.imports if analysis is not None else [])],
+            references_detail=[item.model_dump(mode="json") for item in (analysis.references if analysis is not None else [])],
+            analysis_backend=analysis.backend if analysis is not None else "",
+            analysis_quality=dict(analysis.quality if analysis is not None else {}),
+            summary=summary,
+            mtime=record.mtime,
+        )
+
+    def _save_cache(self, entries: list[RepoMapEntry]) -> None:
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self.cache_path.write_text(
+                json.dumps([entry.model_dump(mode="json") for entry in entries], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            return
+
+    def _safe_load_cache(self) -> list[RepoMapEntry]:
+        try:
+            return self.load_cache()
+        except (OSError, ValueError):
+            return []
 
     def load_cache(self) -> list[RepoMapEntry]:
         if self.cache_path is None or not self.cache_path.exists():
