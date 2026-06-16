@@ -25,9 +25,33 @@ def normalize_agent_markdown(source: str) -> str:
     """Apply conservative model-output fixes without becoming a full parser."""
 
     text = strip_control_tokens(source)
+    text = rejoin_orphaned_closing_quote(text)
+    text = drop_bold_around_quote(text)
     text = unwrap_markdown_table_fences(text)
     text = normalize_citation_artifacts(text)
     return close_unclosed_fence(text)
+
+
+# Models frequently emit a newline right before a closing quotation mark, e.g.
+# `있지?\n"` or `것인가?\n"**라는`. That orphans the quote on its own line (and
+# breaks the surrounding **bold** span so the markers leak as raw text). Pull the
+# closing quote back onto the sentence it belongs to.
+_ORPHAN_QUOTE_RE = re.compile(r'([?!.])[ \t]*\n[ \t]*(["”])')
+
+
+def rejoin_orphaned_closing_quote(source: str) -> str:
+    return _ORPHAN_QUOTE_RE.sub(r"\1\2", source)
+
+
+# CommonMark will not form emphasis when the "**" delimiters hug a quotation
+# mark (e.g. `**"성공"**`), so the markers leak as raw text. The quotes already
+# convey the emphasis, so drop the redundant bold markers to keep the output
+# clean instead of leaking "**".
+_BOLD_QUOTE_RE = re.compile(r'\*\*\s*("[^"\n]{1,100}")\s*\*\*')
+
+
+def drop_bold_around_quote(source: str) -> str:
+    return _BOLD_QUOTE_RE.sub(r"\1", source)
 
 
 def strip_control_tokens(source: str) -> str:
