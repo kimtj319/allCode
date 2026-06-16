@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,32 @@ from allCode.workspace.path_resolver import safe_resolve_under_root
 
 DEFAULT_READ_MAX_BYTES = 12_000
 LARGE_FILE_BYTES = 20_000
+
+
+def syntax_warning(path: Path, content: str) -> str | None:
+    """Parse just-written content and return a human-readable syntax error, if any.
+
+    AST-aware post-edit check: a ``.py`` file is parsed with ``ast.parse`` and a
+    ``.json`` file with ``json.loads`` so a broken edit is reported back to the
+    model immediately (and before the slower test step) instead of surfacing as
+    an opaque import/runtime failure later. Returns None when the content parses
+    or the language is not checked.
+    """
+
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        try:
+            ast.parse(content, filename=str(path))
+        except SyntaxError as exc:
+            location = f"line {exc.lineno}" if exc.lineno else "unknown line"
+            return f"Python 구문 오류 ({location}): {exc.msg}"
+        return None
+    if suffix == ".json" and content.strip():
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as exc:
+            return f"JSON 구문 오류 (line {exc.lineno}, col {exc.colno}): {exc.msg}"
+    return None
 
 
 class PatchApplicationError(ValueError):

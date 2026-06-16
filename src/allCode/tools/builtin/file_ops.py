@@ -15,6 +15,7 @@ from allCode.tools.builtin.file_common import (
     content_hash,
     read_text_if_exists,
     resolve_under_root,
+    syntax_warning,
 )
 from allCode.tools.builtin.file_read import ReadFileTool
 from allCode.tools.diff import EditTransaction
@@ -85,22 +86,28 @@ class WriteFileTool:
             transaction = EditTransaction.from_contents(path=path, before=before, after=content, action=action)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+            warning = syntax_warning(path, content)
+            summary = f"{action}: {path}"
+            metadata: dict[str, Any] = {
+                "transaction": transaction.model_dump(mode="json"),
+                "created_files": [str(path)] if action == "created" else [],
+                "changed_files": [str(path)],
+                "observation": {
+                    "kind": "file_write",
+                    "target": str(path),
+                    "summary": f"{action}: {path.name}",
+                    "risk": "medium",
+                },
+            }
+            if warning:
+                metadata["syntax_warning"] = warning
+                summary = f"{summary}\n⚠ {warning} — 수정이 필요합니다."
             return ToolResult(
                 call_id=call.id,
                 name=call.name,
                 ok=True,
-                content=f"{action}: {path}",
-                metadata={
-                    "transaction": transaction.model_dump(mode="json"),
-                    "created_files": [str(path)] if action == "created" else [],
-                    "changed_files": [str(path)],
-                    "observation": {
-                        "kind": "file_write",
-                        "target": str(path),
-                        "summary": f"{action}: {path.name}",
-                        "risk": "medium",
-                    },
-                },
+                content=summary,
+                metadata=metadata,
             )
         except Exception as exc:
             return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
@@ -145,21 +152,27 @@ class PatchFileTool:
             after = self._apply_patches(before, call.arguments.get("patches", []))
             transaction = EditTransaction.from_contents(path=path, before=before, after=after, action="modified")
             path.write_text(after, encoding="utf-8")
+            warning = syntax_warning(path, after)
+            summary = f"patched: {path}"
+            metadata: dict[str, Any] = {
+                "transaction": transaction.model_dump(mode="json"),
+                "changed_files": [str(path)],
+                "observation": {
+                    "kind": "file_patch",
+                    "target": str(path),
+                    "summary": f"patched: {path.name}",
+                    "risk": "medium",
+                },
+            }
+            if warning:
+                metadata["syntax_warning"] = warning
+                summary = f"{summary}\n⚠ {warning} — 수정이 필요합니다."
             return ToolResult(
                 call_id=call.id,
                 name=call.name,
                 ok=True,
-                content=f"patched: {path}",
-                metadata={
-                    "transaction": transaction.model_dump(mode="json"),
-                    "changed_files": [str(path)],
-                    "observation": {
-                        "kind": "file_patch",
-                        "target": str(path),
-                        "summary": f"patched: {path.name}",
-                        "risk": "medium",
-                    },
-                },
+                content=summary,
+                metadata=metadata,
             )
         except PatchApplicationError as exc:
             path_text = str(call.arguments.get("file_path", ""))

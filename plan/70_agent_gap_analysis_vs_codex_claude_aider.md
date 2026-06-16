@@ -145,3 +145,27 @@
 - 컨텍스트/`/compact`/비용: `agent/context_condensation.py`, `tui/slash_commands.py`, `tui/terminal.py`(미터)
 - MCP 확장: `tools/mcp/`
 - Tier3: `tools/builtin/file_common.py`, `agent/validation_runner.py`, `headless.py`, `workspace/indexer.py`, `memory/store.py`, `tui/terminal_completion.py`
+
+---
+
+## 구현 진척 (이 플랜 기준)
+
+| # | 항목 | 상태 | 핵심 변경 |
+|---|---|---|---|
+| 3 | 세션 재개 | ✅ 완료 | `--continue`/`--resume`, `memory/conversation_store.py`, `runtime.seed_resumed_session` |
+| 4 | 권한 정밀도 | ✅ 완료 | `tools/permission_rules.py`(allow/deny, deny 우선), `approval`·`config.approval` 연동 |
+| 7 | 체크포인트/rewind | ✅ 완료 | `workspace/checkpoint_store.py`, 턴별 스냅샷, `/rewind` |
+| 8 | /compact + 비용 미터 | ✅ 완료 | `context.compact_session`, `/compact`·`/cost`, 세션 토큰 누적 |
+| 10 | 모델 티어링 | ✅ 완료 | `implementation_model_name`(=max-v1.2.1), 라우팅/요약/플래너=ultra-v1.1.0 |
+| 11 | AST 인지 편집 | ✅ 완료(경량) | `file_common.syntax_warning`: write/patch 후 `.py`/`.json` 파싱→오류 즉시 피드백 |
+| 12 | lint/typecheck 검증 | ✅ 완료 | `agent/validation_lint.py`: 프로젝트가 옵트인한 ruff/mypy/tsc/eslint를 테스트 전에 실행 |
+| 13 | 헤드리스 강화 | ✅ 완료(JSON/스트림) | `--output-format text\|json\|stream-json`. 이미지 입력은 향후 |
+| 14 | 시작 인덱싱 비용 | ✅ 완료 | `indexer` 디스크 해시 캐시(`.allCode/index_cache.json`), 미변경 파일 재해시 생략 |
+| 15 | 변경 리뷰 뷰 | ✅ 완료(diff) | `/review`(=`/diff`) → `git_ops.working_tree_diff` |
+| 16 | 지시문 처리 | ✅ 완료 | `store._condense_instruction_text`: 절단 대신 head+tail 요약 |
+| 17 | @-멘션 | ✅ 완료 | `tui/mentions.py`: `@경로` 파일/디렉터리 내용을 턴 컨텍스트로 첨부 |
+| 1 | 턴 중간 개입 | ⏳ 예정 | |
+| 2 | 플랜 승인 | ⏳ 예정 | |
+| 5 | 셸 스트리밍/백그라운드 | ⏳ 예정 | |
+| 6 | 병렬 도구/서브에이전트 | ⏳ 예정 | |
+| 9 | MCP HTTP/SSE + resources/prompts | ⏳ 예정 | |
