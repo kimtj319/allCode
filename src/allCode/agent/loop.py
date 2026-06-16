@@ -183,14 +183,24 @@ class AgentLoop:
                 context_bundle=context_bundle,
                 recent_targets=recent_targets,
             )
-            # Guardrail: the LLM router sometimes downgrades a clear change/run
-            # request ("...추가해줘", "...수정해줘") to a chat answer, so it
-            # describes edits instead of applying them. When the deterministic
-            # rule router sees an explicit mutation/operation command, prefer that
-            # so the agent actually performs the work (incremental build-up).
-            if routing.kind == "answer":
+            # Guardrails against LLM-router misroutes, using the deterministic rule
+            # router as a cross-check:
+            #  - a clear change/run request ("...추가해줘", "...수정해줘") wrongly
+            #    downgraded to a chat answer (so it describes edits instead of
+            #    applying them);
+            #  - a web/external-knowledge question ("spring cloud ... 검색해서
+            #    정리해줘") wrongly sent into local source inspection (so it probes
+            #    the repo and contaminates the answer with package analysis).
+            if routing.kind in {"answer", "inspect"}:
                 rule_routing = self._router.classify(turn_input.user_prompt)
-                if rule_routing.kind in {"modify", "operate"}:
+                if routing.kind == "answer" and rule_routing.kind in {"modify", "operate"}:
+                    routing = rule_routing
+                elif (
+                    routing.kind == "inspect"
+                    and rule_routing.kind == "answer"
+                    and rule_routing.requires_external_knowledge
+                    and not routing.target_hint
+                ):
                     routing = rule_routing
         else:
             routing = self._router.classify(turn_input.user_prompt)

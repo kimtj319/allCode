@@ -192,10 +192,32 @@ def _is_list_line(line: str) -> bool:
 def _consume_list(lines: list[str], start: int) -> tuple[MarkdownBlock, int]:
     items: list[str] = []
     index = start
-    while index < len(lines) and lines[index].strip() and _is_list_line(lines[index]):
-        items.append(lines[index])
-        index += 1
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            break
+        if _is_list_line(line):
+            items.append(line)
+            index += 1
+            continue
+        # Lazy continuation: a non-blank line that does not start a new block
+        # belongs to the previous item. This reabsorbs stray fragments the model
+        # puts on their own line (e.g. a closing quotation mark after "...?"),
+        # which would otherwise render as an orphaned line at the left margin.
+        if items and not _starts_new_block(lines, index):
+            items[-1] = items[-1].rstrip() + " " + line.strip()
+            index += 1
+            continue
+        break
     return MarkdownBlock(kind="list", lines=items), index
+
+
+def _starts_new_block(lines: list[str], index: int) -> bool:
+    line = lines[index]
+    stripped = line.strip()
+    if _FENCE_START_RE.match(stripped) or _HEADING_RE.match(line) or _is_quote_line(line):
+        return True
+    return _is_table_start(lines, index)
 
 
 def _consume_code_block(lines: list[str], start: int, language: str) -> tuple[MarkdownBlock, int]:
