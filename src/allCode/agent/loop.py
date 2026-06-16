@@ -183,6 +183,15 @@ class AgentLoop:
                 context_bundle=context_bundle,
                 recent_targets=recent_targets,
             )
+            # Guardrail: the LLM router sometimes downgrades a clear change/run
+            # request ("...추가해줘", "...수정해줘") to a chat answer, so it
+            # describes edits instead of applying them. When the deterministic
+            # rule router sees an explicit mutation/operation command, prefer that
+            # so the agent actually performs the work (incremental build-up).
+            if routing.kind == "answer":
+                rule_routing = self._router.classify(turn_input.user_prompt)
+                if rule_routing.kind in {"modify", "operate"}:
+                    routing = rule_routing
         else:
             routing = self._router.classify(turn_input.user_prompt)
         if routing.kind in {"inspect", "modify", "operate"}:
