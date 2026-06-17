@@ -31,6 +31,7 @@ from allCode.tui.status_view import (
 from allCode.tui.renderers import EventRenderer
 from allCode.tui.slash_commands import SlashCommandHandler
 from allCode.tui.streaming import MarkdownStreamBuffer
+from allCode.llm.response_parser import sanitize_channel_markup
 from allCode.tui.terminal_activity import ActivityProps
 from allCode.tui.terminal_answer_renderer import TerminalAnswerRenderer
 from allCode.tui.terminal_input import TerminalInputEditor
@@ -457,12 +458,12 @@ class TerminalSession:
 
     def _print_assistant_block(self, text: str) -> None:
         self._prepare_body_output()
-        self.answer_renderer.render(text)
+        self.answer_renderer.render(sanitize_channel_markup(text))
         self.console.print()
 
     def _print_assistant_stream_chunk(self, text: str) -> None:
         self._prepare_body_output()
-        self.answer_renderer.render(text)
+        self.answer_renderer.render(sanitize_channel_markup(text))
 
     def _print_rendered_block(self, role: str, text: str) -> None:
         if role == "error":

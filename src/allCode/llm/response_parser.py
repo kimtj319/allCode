@@ -4,8 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from typing import Any, Literal
+
+# Harmony/channel control tokens some providers (e.g. wise-lloa) leak into the
+# visible text instead of a separate reasoning channel — e.g.
+# "<|channel>thought<channel|>실제 답변". Strip the control tokens and a
+# leftover channel-name label so they never reach the user.
+_CHANNEL_TOKEN = re.compile(
+    r"<\|?\s*(?:channel|message|start|end|return|assistant|system|user|developer|tool|constrain)\s*\|?>",
+    re.IGNORECASE,
+)
+_CHANNEL_LABEL_LINE = re.compile(r"(?im)^[ \t]*(?:thought|analysis|commentary|final)[ \t]*$")
+
+
+def sanitize_channel_markup(text: str) -> str:
+    """Remove leaked harmony/channel control tokens from user-visible text."""
+    if "<|" not in text and "|>" not in text and "<channel" not in text.lower():
+        return text
+    cleaned = _CHANNEL_TOKEN.sub("", text)
+    cleaned = _CHANNEL_LABEL_LINE.sub("", cleaned)
+    cleaned = re.sub(r"^\s*(?:thought|analysis|commentary)\b[:\s]*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip("\n")
+    return cleaned or text
 
 from pydantic import Field
 
@@ -218,7 +240,7 @@ class ResponseParser:
                     tool_argument_repairs=tool_argument_repairs,
                 )
 
-        text = "".join(text_parts)
+        text = sanitize_channel_markup("".join(text_parts))
         if failed_error:
             return ParsedResponse(
                 status="malformed_tool_call",
