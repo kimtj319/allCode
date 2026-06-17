@@ -41,6 +41,7 @@ class ModelWorkflowEditor:
             settings=self._settings,
         )
         content = _strip_markdown_fence(response.final_text)
+        content = _normalize_relative_imports(content, planned_file.path, plan)
         if _looks_valid_for_path(planned_file.path, content) and _preserves_planned_public_contract(
             planned_file.path,
             planned_file.content,
@@ -112,9 +113,15 @@ def _editor_messages(
             f"Purpose: {planned_file.purpose}",
             f"Stage: {planned_file.stage}",
             "",
-            "Existing generated file context:",
+            "Planned project files (the agreed cross-file contract — your code MUST match",
+            "the public API these siblings rely on; tests are the executable specification):",
+            _planned_contract_context(plan, exclude_path=planned_file.path),
+            "",
+            "Existing generated file context (already written to disk):",
             _existing_file_context(plan, turn_input, exclude_path=planned_file.path),
             "",
+            "Use exactly the import paths shown for the planned package layout. "
+            "Implement the full module so every symbol the tests and sibling files import exists and behaves as specified. "
             "Write the full file content now.",
         ]
     )
@@ -166,6 +173,67 @@ def _repair_messages(
         ]
     )
     return [Message(role="system", content=system_prompt), Message(role="user", content=user_prompt)]
+
+
+def _normalize_relative_imports(content: str, path: str, plan: ProjectPlan) -> str:
+    """Rewrite ``from .sibling import`` to ``from sibling import`` in a flat layout.
+
+    Multi-file plans frequently ship sibling modules at the target root (no
+    package ``__init__.py``) while the tests import them as top-level modules
+    (``from broker import ...``). A model that writes a relative import
+    (``from .models import ...``) in that flat layout produces an unrunnable
+    package — "attempted relative import with no known parent package" — exactly
+    the import fragility these multi-file tasks are prone to. When the file's
+    directory has no package marker, normalize relative sibling imports to the
+    flat form the tests use."""
+    if Path(path).suffix.lower() != ".py":
+        return content
+    file_dir = str(Path(path).parent)
+    siblings: set[str] = set()
+    has_package_marker = False
+    for planned_file in plan.files:
+        candidate = Path(planned_file.path)
+        if str(candidate.parent) != file_dir or candidate.suffix.lower() != ".py":
+            continue
+        if candidate.name == "__init__.py":
+            has_package_marker = True
+        else:
+            siblings.add(candidate.stem)
+    if has_package_marker or not siblings:
+        return content
+
+    def _rewrite(match: "re.Match[str]") -> str:
+        module = match.group(1)
+        return f"from {module} import" if module in siblings else match.group(0)
+
+    return re.sub(r"from \.([A-Za-z_][A-Za-z0-9_]*) import", _rewrite, content)
+
+
+def _planned_contract_context(plan: ProjectPlan, *, exclude_path: str | None = None) -> str:
+    """Other planned files' content as the agreed cross-file contract.
+
+    Reads from the plan (not disk) so a file can be generated consistently with
+    its siblings — especially the test files, which are the executable spec —
+    even before those siblings have been written. Test files are listed first
+    and given the most room, since matching them is what makes validation pass."""
+    others = [planned_file for planned_file in plan.files if planned_file.path != exclude_path]
+    if not others:
+        return "No sibling files are planned."
+    others.sort(key=lambda f: (not _looks_test_path(f.path), f.path))
+    chunks: list[str] = []
+    used = 0
+    for planned_file in others:
+        is_test = _looks_test_path(planned_file.path)
+        label = "TEST CONTRACT" if is_test else "module"
+        limit = MAX_CONTEXT_FILE_CHARS * 2 if is_test else MAX_CONTEXT_FILE_CHARS
+        excerpt = _compact_text(planned_file.content, limit=limit)
+        chunk = f"# {label}: {planned_file.path}\n{excerpt}"
+        if used + len(chunk) > MAX_TOTAL_CONTEXT_CHARS:
+            chunks.append("[additional planned files omitted from contract context]")
+            break
+        chunks.append(chunk)
+        used += len(chunk)
+    return "\n\n".join(chunks)
 
 
 def _existing_file_context(plan: ProjectPlan, turn_input: TurnInput, *, exclude_path: str | None = None) -> str:

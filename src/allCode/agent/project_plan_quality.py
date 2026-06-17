@@ -42,11 +42,16 @@ def _api_obligation_errors(plan: ProjectPlan, test_files: list[PlannedFile]) -> 
     if not plan.api_obligations:
         return []
     errors: list[str] = []
-    declared = declared_public_api_symbols(plan)
+    # The obligation's target file must be in the plan, but we do NOT require the
+    # symbol to be declared in the planner's (often skeleton) inline content: the
+    # model editor generates the real implementation for each source/test file,
+    # and the post-generation completion check validates obligations against the
+    # final written files. Requiring inline declaration here would reject good
+    # skeleton-first plans whose bodies are filled in downstream.
+    planned_paths = {file.path for file in plan.files}
     for obligation in plan.api_obligations:
-        symbols = declared.get(obligation.path, set())
-        if not any(_symbol_matches(actual, obligation.symbol) for actual in symbols):
-            errors.append(f"api obligation is not declared in planned source: {obligation.path}:{obligation.symbol}")
+        if obligation.path not in planned_paths:
+            errors.append(f"api obligation references a file not in the plan: {obligation.path}:{obligation.symbol}")
     expected = _contract_symbol_names({obligation.symbol for obligation in plan.api_obligations})
     if expected and not test_files:
         errors.append("api obligations have no planned test coverage")

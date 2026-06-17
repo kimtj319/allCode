@@ -10,6 +10,7 @@ from allCode.agent.project_plan_paths import looks_like_planned_file_path
 from allCode.agent.task_plan import ApiObligation, PlannedFile, ProjectPlan, ValidationCommand
 from allCode.agent.workflow_report_artifact import ensure_requested_report_artifact
 from allCode.core.models import Message
+from allCode.core.path_patterns import looks_like_test_path
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings
 
@@ -347,6 +348,60 @@ def _extract_json_object(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+# File suffixes/names that are package markers, config, or documentation: their
+# planned content is sufficient, so they stay "skeleton" (no model regeneration).
+_NON_SOURCE_NAMES = {"__init__.py", "conftest.py", "setup.py", "setup.cfg", "pyproject.toml"}
+_NON_SOURCE_SUFFIXES = (".md", ".rst", ".txt", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json")
+
+
+def _stage_for_path(path: str) -> str:
+    """Deterministically classify a planned file into a generation stage.
+
+    Models tend to mark every file "skeleton", which bypasses the model editor
+    and ships the planner's terse inline drafts (frequently inconsistent across
+    files). Reclassifying tests → ``tests`` and substantive source modules →
+    ``implementation`` makes the editor regenerate them with full cross-file
+    context, while leaving markers/config/docs as ``skeleton``."""
+    name = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if looks_like_test_path(path):
+        return "tests"
+    if name in _NON_SOURCE_NAMES or name.startswith("requirements") or name.endswith(_NON_SOURCE_SUFFIXES):
+        return "skeleton"
+    return "implementation"
+
+
+def _normalize_file_stages(files: list[PlannedFile]) -> list[PlannedFile]:
+    return [planned_file.model_copy(update={"stage": _stage_for_path(planned_file.path)}) for planned_file in files]
+
+
+def _obligation_leaf(symbol: str) -> str:
+    """The bare symbol an obligation requires (HierarchicalEventBroker.publish ->
+    publish, __all__:run -> run)."""
+    name = symbol
+    if name.startswith("__all__:"):
+        name = name.split(":", 1)[1]
+    if "." in name:
+        name = name.rsplit(".", 1)[1]
+    return name
+
+
+def _prune_untested_obligations(obligations: list, files: list[PlannedFile]) -> list:
+    """Drop obligations no planned test references.
+
+    Models routinely invent obligation symbols that drift from the names their
+    own tests (the executable contract) actually use — e.g. declaring
+    ``HierarchicalEventBroker.get_dlq_messages`` while the test calls
+    ``get_dlq_entries``. Keeping such an obligation makes the post-generation
+    completion check fail against passing tests and sends the repair loop chasing
+    a phantom symbol. Tests are the contract, so only enforce obligations the
+    tests exercise. With no test files we keep every obligation."""
+    test_text = "\n".join(f.content for f in files if looks_like_test_path(f.path))
+    if not test_text.strip():
+        return obligations
+    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", test_text))
+    return [ob for ob in obligations if _obligation_leaf(ob.symbol) in tokens]
+
+
 def _sanitize_plan(plan: ProjectPlan, *, prompt: str = "", target_hint: str | None = None) -> ProjectPlan | None:
     original_root = _safe_root(plan.target_root)
     forced_root = _safe_root(target_hint) if target_hint else None
@@ -368,11 +423,13 @@ def _sanitize_plan(plan: ProjectPlan, *, prompt: str = "", target_hint: str | No
     files = _normalize_python_package_layout(files, prompt=prompt, target_root=target_root, language=plan.language)
     files = _ensure_artifact_obligations(files, prompt=prompt, target_root=target_root)
     files = ensure_requested_report_artifact(files, prompt=prompt)
+    files = _normalize_file_stages(files)
     api_obligations = _sanitize_api_obligations(
         plan.api_obligations,
         target_root=target_root,
         original_root=original_root,
     )
+    api_obligations = _prune_untested_obligations(api_obligations, files)
     if not files:
         return None
     commands: list[ValidationCommand] = []

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from allCode.agent.api_obligation_checker import declared_public_api_symbols, planned_public_api_symbols
+from allCode.agent.api_obligation_checker import planned_public_api_symbols
 from allCode.agent.completion_checker import CompletionChecker
 from allCode.agent.final_reporter import FinalReporter
 from allCode.agent.language import detect_response_language
@@ -163,24 +163,11 @@ class GenerationWorkflow:
             )
             task_loop_digests.append(skeleton_digest)
             await self.actions.write_step_files("skeleton", plan, turn_input, turn_id, routing, completion_evidence, step_history)
-            implementation_digest = workflow_digest(
-                turn_input,
-                routing,
-                completion_evidence,
-                plan=plan,
-                current_step="implementation",
-                next_required_action="Write implementation files and preserve requested behavior.",
-            )
-            task_loop_digests.append(implementation_digest)
-            for file in plan.files_for_step("implementation"):
-                if self.model_editor is not None:
-                    file.content = await self.model_editor.generate_file(
-                        file,
-                        plan,
-                        turn_input,
-                        task_digest=implementation_digest.render(),
-                    )
-            await self.actions.write_step_files("implementation", plan, turn_input, turn_id, routing, completion_evidence, step_history)
+            # Test-driven order: generate and write the tests first so they are the
+            # fixed executable contract, then generate the implementation against the
+            # already-written tests. Generating the implementation first and the tests
+            # afterwards let the regenerated tests drift from the implementation
+            # (e.g. retry-count or return-value mismatches that never converge).
             tests_digest = workflow_digest(
                 turn_input,
                 routing,
@@ -199,6 +186,24 @@ class GenerationWorkflow:
                         task_digest=tests_digest.render(),
                     )
             await self.actions.write_step_files("tests", plan, turn_input, turn_id, routing, completion_evidence, step_history)
+            implementation_digest = workflow_digest(
+                turn_input,
+                routing,
+                completion_evidence,
+                plan=plan,
+                current_step="implementation",
+                next_required_action="Write implementation files that satisfy the already-written tests.",
+            )
+            task_loop_digests.append(implementation_digest)
+            for file in plan.files_for_step("implementation"):
+                if self.model_editor is not None:
+                    file.content = await self.model_editor.generate_file(
+                        file,
+                        plan,
+                        turn_input,
+                        task_digest=implementation_digest.render(),
+                    )
+            await self.actions.write_step_files("implementation", plan, turn_input, turn_id, routing, completion_evidence, step_history)
 
             validation_digest = workflow_digest(
                 turn_input,
@@ -419,7 +424,7 @@ def _model_plan_acceptable(plan: ProjectPlan, prompt: str) -> bool:
     contract_symbols = _contract_symbol_names(source_symbols)
     if len(contract_symbols) < 4:
         return False
-    if not _api_obligations_declared_in_plan(plan):
+    if not _api_obligations_target_planned_files(plan):
         return False
     test_content = "\n".join(file.content for file in plan.files if file.stage == "tests")
     if not test_content.strip():
@@ -456,15 +461,18 @@ def _contract_symbol_names(symbols: set[str]) -> set[str]:
     return names
 
 
-def _api_obligations_declared_in_plan(plan: ProjectPlan) -> bool:
+def _api_obligations_target_planned_files(plan: ProjectPlan) -> bool:
+    """Every API obligation must target a file that is in the plan.
+
+    We deliberately do not require the obligation symbol to be declared in the
+    planner's inline (skeleton) content: the model editor generates each source
+    file's real body downstream, and the completion check validates obligations
+    against the final written files. Requiring inline declaration here rejected
+    sound skeleton-first plans whose implementations are filled in later."""
     if not plan.api_obligations:
         return True
-    declared = declared_public_api_symbols(plan)
-    for obligation in plan.api_obligations:
-        symbols = declared.get(obligation.path, set())
-        if not symbols or obligation.symbol not in symbols:
-            return False
-    return True
+    planned_paths = {file.path for file in plan.files}
+    return all(obligation.path in planned_paths for obligation in plan.api_obligations)
 
 
 def _plan_summary(plan: ProjectPlan) -> str:
