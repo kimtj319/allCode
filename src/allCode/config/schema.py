@@ -201,6 +201,13 @@ class HooksConfig(StrictConfigModel):
     # post_tool hooks run after a tool (observe-only).
     pre_tool: list[HookSpec] = Field(default_factory=list)
     post_tool: list[HookSpec] = Field(default_factory=list)
+    # user_prompt_submit hooks run before a turn (env ALLCODE_USER_PROMPT); a
+    # non-zero exit blocks the turn with the hook's stderr as the reason, and any
+    # stdout is injected into the turn as extra context (Claude-Code-style).
+    user_prompt_submit: list[HookSpec] = Field(default_factory=list)
+    # stop hooks run after a turn finishes (observe-only; env ALLCODE_TURN_STATUS,
+    # ALLCODE_FINAL_ANSWER) — e.g. auto-format, lint, or notify.
+    stop: list[HookSpec] = Field(default_factory=list)
 
 
 class GitConfig(StrictConfigModel):

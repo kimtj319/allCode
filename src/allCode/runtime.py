@@ -12,7 +12,7 @@ from allCode.agent.model_router import ModelRouter
 from allCode.agent.steering import SteeringQueue
 from allCode.config.schema import AppConfig
 from allCode.core.event_bus import AsyncEventBus
-from allCode.core.events import AgentEvent
+from allCode.core.events import AgentEvent, TurnFinalized
 from allCode.core.models import TurnInput, WorkspaceRef
 from allCode.core.result import TurnResult
 from allCode.llm.client import LLMClient
@@ -81,6 +81,7 @@ async def run_agent_turn(
         checkpoint_store.snapshot(path)
 
     plan_approval = _build_plan_approval(config, approval_handler)
+    hook_runner = HookRunner(config.hooks)
     loop = AgentLoop(
         llm_client=effective_llm,
         settings=settings,
@@ -96,7 +97,7 @@ async def run_agent_turn(
         approval_handler=approval_handler,
         context_builder=effective_context_builder,
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
-        hook_runner=HookRunner(config.hooks),
+        hook_runner=hook_runner,
         checkpoint=_checkpoint,
         plan_approval=plan_approval,
         steering=steering,
@@ -121,7 +122,32 @@ async def run_agent_turn(
                 "approval_mode": config.approval.mode,
             },
         )
+        # user_prompt_submit hooks: may block the turn or inject extra context.
+        if hook_runner.active:
+            outcome = await hook_runner.user_prompt_submit(prompt)
+            if outcome.blocked:
+                blocked = _hook_blocked_result(reason=outcome.reason)
+                if event_handler is not None:
+                    await event_handler(
+                        TurnFinalized(
+                            turn_id=blocked.turn_id,
+                            message="Turn blocked by user_prompt_submit hook.",
+                            status=blocked.status,
+                            final_answer=blocked.final_answer,
+                        )
+                    )
+                await event_bus.close()
+                event_bus_closed = True
+                return blocked
+            if outcome.injected_context:
+                turn_input = turn_input.model_copy(
+                    update={"user_prompt": f"{prompt}\n\n[hook context]\n{outcome.injected_context}"}
+                )
         result = await loop.run_turn(turn_input)
+        # stop hooks observe the finished turn (e.g. format/lint) before auto-commit
+        # so any changes they make are captured.
+        if hook_runner.active:
+            await hook_runner.stop(status=result.status, final_answer=result.final_answer)
         await _save_persisted_session_state(config, turn_input.session_id, effective_context_builder)
         _maybe_auto_commit(config, result, prompt)
         _remember_result_targets(effective_context_builder, result)
@@ -279,6 +305,13 @@ def seed_resumed_session(config: AppConfig, context_builder: ContextBuilder, ses
         elif role == "assistant":
             context_builder.remember_assistant_summary(session_id, text)
     return restored
+
+
+def _hook_blocked_result(*, reason: str) -> TurnResult:
+    from uuid import uuid4
+
+    message = f"요청이 user_prompt_submit 훅에 의해 차단되었습니다: {reason}".strip()
+    return TurnResult(turn_id=uuid4().hex, status="cancelled", final_answer=message, error_message=reason)
 
 
 def _maybe_auto_commit(config: AppConfig, result: TurnResult, prompt: str) -> None:

@@ -15,20 +15,53 @@ import json
 import os
 from typing import TYPE_CHECKING
 
+from dataclasses import dataclass
+
 from allCode.core.models import ToolCall, ToolResult
 
 if TYPE_CHECKING:
     from allCode.config.schema import HooksConfig
 
 
+@dataclass
+class HookOutcome:
+    blocked: bool = False
+    reason: str = ""
+    injected_context: str = ""
+
+
 class HookRunner:
     def __init__(self, hooks: "HooksConfig | None" = None) -> None:
         self._pre = list(hooks.pre_tool) if hooks else []
         self._post = list(hooks.post_tool) if hooks else []
+        self._user_prompt = list(hooks.user_prompt_submit) if hooks else []
+        self._stop = list(hooks.stop) if hooks else []
 
     @property
     def active(self) -> bool:
-        return bool(self._pre or self._post)
+        return bool(self._pre or self._post or self._user_prompt or self._stop)
+
+    async def user_prompt_submit(self, prompt: str) -> "HookOutcome":
+        """Run user_prompt_submit hooks. A non-zero exit blocks the turn (reason
+        = stderr); stdout from allowed hooks is collected as extra context."""
+        context_parts: list[str] = []
+        for spec in self._user_prompt:
+            env = dict(os.environ)
+            env["ALLCODE_USER_PROMPT"] = prompt or ""
+            code, out, err = await _run(spec.command, env, spec.timeout_seconds)
+            if code != 0:
+                return HookOutcome(blocked=True, reason=(err.strip() or f"blocked by user_prompt_submit hook (exit {code})")[:500])
+            if out.strip():
+                context_parts.append(out.strip())
+        return HookOutcome(blocked=False, injected_context="\n".join(context_parts))
+
+    async def stop(self, *, status: str, final_answer: str) -> None:
+        """Run stop hooks after a turn (observe-only)."""
+        for spec in self._stop:
+            env = dict(os.environ)
+            env["ALLCODE_TURN_STATUS"] = status or ""
+            env["ALLCODE_FINAL_ANSWER"] = (final_answer or "")[:4000]
+            await _run(spec.command, env, spec.timeout_seconds)
 
     async def pre_tool(self, call: ToolCall) -> str | None:
         """Return a denial reason if a matching pre-hook blocks the tool, else None."""
