@@ -7,7 +7,7 @@ from __future__ import annotations
 # Estimated tokens a heavy developer burns through a full day of agentic coding
 # (large contexts × many turns). Used as the gauge's maximum; the bar fills with
 # the day's actual usage. Tunable.
-DAILY_TOKEN_BUDGET = 1_000_000
+DAILY_TOKEN_BUDGET = 5_000_000
 
 
 def fmt_tokens(value: int) -> str:

@@ -451,24 +451,30 @@ class TerminalSession:
         self._print_assistant_block(text)
 
     def _print_diff(self, diff: str, *, max_lines: int = 80) -> None:
-        # Render a file edit as a colored unified diff (Codex-style): green for
-        # additions, red for removals, dim cyan for hunk headers. Indented two
-        # columns so it reads as detail under the "• tool" summary row.
+        # Render a file edit as a colored unified diff (Codex-style): added lines
+        # on a green wash, removed lines on a red wash, hunk headers on a slate
+        # wash. The line-spanning background (padded to the screen width) makes a
+        # change read as a real diff. Indented two columns so it sits under the
+        # "• tool" summary row.
         if not diff.strip():
             return
         self._prepare_body_output()
         lines = diff.splitlines()
+        width = max(40, self.screen.width)
         for raw in lines[:max_lines]:
-            text = Text("  ")
             if raw.startswith("@@"):
-                text.append(raw, style="cyan")
+                style = "bold cyan on #1c2230"
             elif raw.startswith("+"):
-                text.append(raw, style="green")
+                style = "green on #11281b"
             elif raw.startswith("-"):
-                text.append(raw, style="red")
+                style = "red on #2b1418"
             else:
-                text.append(raw, style="dim")
-            self.console.print(text)
+                style = "grey70 on #14171c"
+            text = Text("  ")
+            # Pad the line to the screen width so the background wash spans the
+            # whole row rather than just the characters.
+            text.append(raw.ljust(width - 2), style=style)
+            self.console.print(text, no_wrap=True, crop=True)
         if len(lines) > max_lines:
             self.console.print(Text(f"  ... {len(lines) - max_lines} more diff lines ...", style="dim"))
         self._render_running_composer()
@@ -515,6 +521,9 @@ class TerminalSession:
             body.append(Text("모델별 토큰 사용량", style="bold"))
             body.append(model_gauges)
             body.append(Text())
+        body.append(Text("상태 분석", style="bold"))
+        body.append(self._metric_table(self._status_analysis_pairs()))
+        body.append(Text())
         if pairs:
             body.append(Text("세션 진단", style="bold"))
             body.append(self._metric_table(pairs))
@@ -588,6 +597,63 @@ class TerminalSession:
                 f"{fmt_tokens(tokens)} 토큰",
             )
         return table
+
+    def _status_analysis_pairs(self) -> list[tuple[str, str]]:
+        """Status-analysis facts (separate from the backend session diagnostics):
+        workspace, session, model/approval, git state, and today's usage against
+        the daily budget. Helps a developer size up the session at a glance."""
+        pairs: list[tuple[str, str]] = []
+        cwd_disp = str(self._cwd)
+        try:
+            home = str(Path.home())
+            if cwd_disp.startswith(home):
+                cwd_disp = "~" + cwd_disp[len(home):]
+        except Exception:  # noqa: BLE001 - display only
+            pass
+        pairs.append(("작업 디렉터리", cwd_disp))
+        pairs.append(("세션", self._session_id[:8] if self._session_id else "신규 세션"))
+        for token in self.app_info.split("|"):
+            token = token.strip()
+            if token.lower().startswith("model:"):
+                pairs.append(("모델", token.split(":", 1)[1].strip()))
+            elif token.lower().startswith("approval:"):
+                pairs.append(("승인 모드", token.split(":", 1)[1].strip()))
+        git = self._git_brief()
+        if git:
+            pairs.append(("Git", git))
+        used = self._usage.today_total()
+        remaining = max(0, DAILY_TOKEN_BUDGET - used)
+        pct = (used / DAILY_TOKEN_BUDGET * 100) if DAILY_TOKEN_BUDGET else 0
+        pairs.append(("오늘 사용량", f"{fmt_tokens(used)} / {fmt_tokens(DAILY_TOKEN_BUDGET)} ({pct:.0f}%)"))
+        pairs.append(("남은 예산", fmt_tokens(remaining)))
+        pairs.append(("최근 컨텍스트", f"{fmt_tokens(self._last_context_tokens)} 토큰"))
+        pairs.append(("세션 출력", f"{fmt_tokens(self._session_output_tokens)} 토큰"))
+        models = self._usage.today_by_model()
+        if models:
+            pairs.append(("활성 모델 수", str(len(models))))
+        return pairs
+
+    def _git_brief(self) -> str:
+        """Current branch and dirty-file count for the workspace, or '' if not a
+        git repo. Uses git directly (no agent imports) and fails quiet."""
+        import subprocess
+
+        try:
+            branch = subprocess.run(
+                ["git", "-C", str(self._cwd), "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if branch.returncode != 0:
+                return ""
+            status = subprocess.run(
+                ["git", "-C", str(self._cwd), "status", "--porcelain"],
+                capture_output=True, text=True, timeout=2,
+            )
+            changed = len([line for line in status.stdout.splitlines() if line.strip()])
+            state = "clean" if changed == 0 else f"{changed} changed"
+            return f"{branch.stdout.strip()} ({state})"
+        except Exception:  # noqa: BLE001 - status panel must still render
+            return ""
 
     def _metric_table(self, pairs: list[tuple[str, str]]) -> Table:
         groups = max(1, columns_for_width(self.screen.width))
