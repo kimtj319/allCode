@@ -8,7 +8,7 @@ import hashlib
 from allCode.agent.router import RoutingDecision
 from allCode.agent.task_plan import ProjectPlan, ValidationCommand
 from allCode.agent.tool_evidence import ToolEvidenceRecorder
-from allCode.agent.validation_lint import lint_candidates
+from allCode.agent.validation_lint import lint_candidates, syntax_check_candidates
 from allCode.agent.validation_repair import attach_validation_failure_summary
 from allCode.core.event_bus import EventBus
 from allCode.core.events import ToolCallRequested
@@ -39,12 +39,19 @@ class ValidationRunner:
 
     def candidates(self, plan: ProjectPlan) -> list[ValidationCommand]:
         base = plan.validation_commands if plan.validation_commands else self._infer_candidates(plan)
-        # Project-opted-in lint/typecheck (ruff/mypy/tsc/eslint) runs before the
-        # test step so style/type regressions surface — and repair triggers —
-        # without waiting on the slower tests.
-        lint = lint_candidates(plan.target_root)
+        # A dependency-free byte-compile diagnostic runs first (fast, no deps, no
+        # execution) so a syntactically broken edit fails validation and triggers
+        # repair even without tests; then project-opted-in lint/typecheck
+        # (ruff/mypy/tsc/eslint); then the test step.
+        prefix_candidates = [*syntax_check_candidates(plan.target_root), *lint_candidates(plan.target_root)]
         existing = {command.command for command in base}
-        prefix = [command for command in lint if command.command not in existing]
+        seen: set[str] = set()
+        prefix: list[ValidationCommand] = []
+        for command in prefix_candidates:
+            if command.command in existing or command.command in seen:
+                continue
+            seen.add(command.command)
+            prefix.append(command)
         return prefix + base
 
     async def run_all(

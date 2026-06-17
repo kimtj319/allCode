@@ -51,6 +51,29 @@ def _eslint_configured(root: Path) -> bool:
     return any((root / name).exists() for name in names)
 
 
+def syntax_check_candidates(target_root: str, *, environment: dict[str, str] | None = None) -> list[ValidationCommand]:
+    """Always-on, dependency-free Python diagnostic.
+
+    Byte-compiles every ``.py`` under the target (without executing it) via
+    ``compileall``, so a syntactically broken edit fails validation and triggers
+    the repair loop even when the project has no tests, ruff, or mypy. This is
+    the lightweight stand-in for editor/LSP diagnostics on the edit→validate loop.
+    """
+
+    root = Path(target_root).expanduser()
+    if not root.is_dir():
+        return []
+    has_python = any(
+        part not in {".venv", "venv", "__pycache__", "node_modules", ".git"}
+        for path in root.rglob("*.py")
+        for part in (path.relative_to(root).parts[0],)
+    )
+    if not has_python:
+        return []
+    env = dict(environment or {})
+    return [ValidationCommand(command="python -m compileall -q .", cwd=target_root, environment=env)]
+
+
 def lint_candidates(target_root: str, *, environment: dict[str, str] | None = None) -> list[ValidationCommand]:
     """Return lint/typecheck commands the project has opted into, in run order.
 
