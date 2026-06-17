@@ -121,7 +121,7 @@ class TerminalScreen:
         reserved area. A partial (un-newline-terminated) last body line pushes the
         floor down one row so the composer never overwrites uncommitted text."""
 
-        bottom_start = self.height - self.reserved_rows + 1
+        bottom_start = max(1, self.height - self.reserved_rows + 1)
         floor_row = self._body_row + (1 if self._body_partial else 0)
         if floor_row >= self.body_bottom:
             return bottom_start
@@ -263,7 +263,15 @@ class TerminalScreen:
         # running composer needs N rows we keep them, so the scroll region does
         # not thrash smaller↔larger every turn (which scrolled committed body
         # lines and produced visible jumps). It only ever grows.
-        rows = max(self.reserved_rows, min(self.max_reserved_rows, rows, self.height - 1))
+        # Grow monotonically toward the requested size (capped at the absolute
+        # max), but never let the reserved area meet or exceed the current
+        # terminal height: the height cap is applied LAST so that when the
+        # terminal shrinks below the prior high-water mark the reserved area
+        # shrinks with it. Otherwise a stale (too-large) reserved value pushes
+        # the composer's top off the screen (negative start row) and the prompt
+        # box — including its "›" marker — vanishes.
+        grown = max(self.reserved_rows, min(self.max_reserved_rows, rows))
+        rows = max(4, min(grown, self.height - 1))
         if rows == self.reserved_rows:
             return
         delta = rows - self.reserved_rows
