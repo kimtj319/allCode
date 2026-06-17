@@ -17,8 +17,15 @@ from rich.text import Text
 from allCode.core.events import AgentEvent
 from allCode.tui import messages
 from allCode.tui.approval_preview_view import approval_preview_from_payload
+from allCode.memory.usage_store import UsageStore
 from allCode.tui.markdown import logo_text
 from allCode.tui.mentions import expand_mentions
+from allCode.tui.status_view import (
+    columns_for_width,
+    format_metric_columns,
+    metric_pairs_from_summary,
+    render_token_gauge,
+)
 from allCode.tui.renderers import EventRenderer
 from allCode.tui.slash_commands import SlashCommandHandler
 from allCode.tui.streaming import MarkdownStreamBuffer
@@ -124,6 +131,8 @@ class TerminalSession:
         # Used to print a resume hint on exit once the session has real history.
         self._session_id = session_id
         self._had_turn = False
+        # Per-day token tally for the /status usage gauge (survives across launches).
+        self._usage = UsageStore(self._cwd)
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
@@ -382,6 +391,9 @@ class TerminalSession:
         if stripped.split(maxsplit=1)[0] == "/theme":
             self._print_assistant_block(self._switch_theme(stripped))
             return None
+        if stripped.split(maxsplit=1)[0] == "/status":
+            self._print_assistant_block(self._status_view(stripped))
+            return None
         result = asyncio.run(self.slash_handler.handle(command))
         if result.clear_transcript:
             self._clear_screen()
@@ -483,6 +495,31 @@ class TerminalSession:
             "- 줄이려면 /compact 로 대화를 압축하세요."
         )
 
+    def _status_view(self, command: str) -> str:
+        """Render /status as a token-usage gauge plus multi-column diagnostics.
+
+        The gauge shows today's token spend against an estimated heavy-developer
+        daily budget and renders even on first launch (0 usage). Diagnostics come
+        from the status backend and are reformatted into 2–3 columns by width."""
+        gauge = render_token_gauge(self._usage.today_total())
+        try:
+            backend = asyncio.run(self.slash_handler.handle(command)).message
+        except Exception:  # noqa: BLE001 - the gauge must still render
+            backend = ""
+        pairs = metric_pairs_from_summary(backend)
+        if pairs:
+            lines = backend.splitlines()
+            header = lines[0].strip() if lines and not lines[0].startswith("- ") else "세션 진단:"
+            table = format_metric_columns(
+                pairs,
+                columns=columns_for_width(self.screen.width),
+                total_width=max(60, self.screen.width - 4),
+            )
+            body = f"{header}\n{table}"
+        else:
+            body = backend or "아직 세션 진단 정보가 없습니다."
+        return f"{gauge}\n\n{body}"
+
     def _switch_theme(self, command: str) -> str:
         parts = command.split(maxsplit=1)
         if len(parts) < 2 or parts[1].strip().lower() not in {"dark", "light"}:
@@ -503,6 +540,17 @@ class TerminalSession:
             completion = usage.get("completion_tokens")
             if isinstance(completion, int) and completion > 0:
                 self._session_output_tokens += completion
+            # Record this round's real token spend toward today's usage gauge.
+            prompt_t = usage.get("prompt_tokens")
+            round_total = 0
+            if isinstance(prompt_t, int) and prompt_t > 0:
+                round_total += prompt_t
+            if isinstance(completion, int) and completion > 0:
+                round_total += completion
+            if round_total == 0 and isinstance(usage.get("total_tokens"), int):
+                round_total = usage["total_tokens"]
+            if round_total > 0:
+                self._usage.add(round_total)
         if isinstance(tokens, int) and tokens > 0:
             self._last_context_tokens = tokens
         approx = False
