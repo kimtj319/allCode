@@ -21,6 +21,9 @@ class ActivityProps:
     running: bool = False
     elapsed_seconds: int = 0
     spinner_index: int = 0
+    # Deterministic task-plan checklist lines (header + "✔/▶/☐ step"), shown
+    # above the spinner while a multi-step turn runs. Empty for single-step turns.
+    plan_lines: tuple[str, ...] = ()
 
 
 class TerminalActivityRenderer:
@@ -29,19 +32,29 @@ class TerminalActivityRenderer:
     def render(self, props: ActivityProps) -> list[StyledLine]:
         if not props.running:
             return []
+        plan_lines = self._plan_lines(props.plan_lines)
         label = _label_for_status(props.status)
         head = f"{_SPINNER} {label}"
         suffix = f" ({props.elapsed_seconds}s • esc to interrupt)"
         level = _PULSE[props.spinner_index % len(_PULSE)]
         return [
+            *plan_lines,
             StyledLine(
                 text=head + suffix,
                 style="dim",
                 fg=(level, level, level),
                 bold=True,
                 dim_suffix_at=len(head),
-            )
+            ),
         ]
+
+    @staticmethod
+    def _plan_lines(lines: tuple[str, ...]) -> list[StyledLine]:
+        rendered: list[StyledLine] = []
+        for index, line in enumerate(lines):
+            # Header (first line) bold; "✔" steps dim; the active "▶" step plain.
+            rendered.append(StyledLine(text=line, style="dim", bold=(index == 0)))
+        return rendered
 
 
 def _label_for_status(status: str) -> str:

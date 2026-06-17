@@ -33,6 +33,7 @@ from allCode.tui.slash_commands import SlashCommandHandler
 from allCode.tui.streaming import MarkdownStreamBuffer
 from allCode.llm.response_parser import sanitize_channel_markup
 from allCode.tui.terminal_activity import ActivityProps
+from allCode.tui.turn_plan import TurnPlan
 from allCode.tui.terminal_answer_renderer import TerminalAnswerRenderer
 from allCode.tui.terminal_input import TerminalInputEditor
 from allCode.tui.terminal_screen import TerminalScreen, TerminalTheme
@@ -170,6 +171,9 @@ class TerminalSession:
         self._spinner_index = 0
         self._composer_render_at = 0.0
         self._composer_status: str | None = None
+        # Deterministic per-turn task plan shown live in the activity area
+        # (model-independent; advanced from observed routing + tool events).
+        self._turn_plan: TurnPlan | None = None
         # Persistent context/session meta shown in the always-redrawn footer.
         self._base_footer = app_info.replace(" | ", " · ")
         self._context_label = ""
@@ -272,6 +276,14 @@ class TerminalSession:
         if event.event_type == "approval_requested":
             self._print_status(messages.APPROVAL_STATUS)
             return
+        if event.event_type == "routing_decided":
+            self._turn_plan = TurnPlan.for_route(str((event.data or {}).get("kind", "")))
+            # fall through: routing_decided has no transcript output of its own.
+        if event.event_type == "tool_execution_finished" and self._turn_plan is not None:
+            result = getattr(event, "result", None)
+            if result is not None and getattr(result, "ok", False):
+                self._turn_plan.note_tool(getattr(result, "name", ""))
+            # fall through so the tool timeline still renders normally.
         rendered = self.renderer.render(event)
         if rendered.transcript_role == "allCode_stream":
             if rendered.status:
@@ -318,6 +330,7 @@ class TerminalSession:
         self.answer_renderer.reset()
         self._final_answer_rendered = False
         self._last_status = ""
+        self._turn_plan = None
         self._running_started_at = time.monotonic()
         self._render_running_composer(messages.MODEL_REQUEST_STATUS)
         try:
@@ -829,12 +842,14 @@ class TerminalSession:
         self._composer_render_at = now
         self._composer_status = effective_status
         elapsed = max(0, int(now - self._running_started_at))
+        plan_lines = tuple(self._turn_plan.display_lines()) if self._turn_plan is not None else ()
         self.input_editor.render_runtime_frame(
             activity=ActivityProps(
                 status=effective_status,
                 running=True,
                 elapsed_seconds=elapsed,
                 spinner_index=self._spinner_index,
+                plan_lines=plan_lines,
             )
         )
 
