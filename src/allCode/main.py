@@ -124,7 +124,11 @@ def main(
         if out is None and err is None:
             _validate_interactive_model_config(config)
             context_builder = build_runtime_context_builder(config)
-            resume_id = _resolve_resume_session_id(config, args)
+            if getattr(args, "resume", None) == "" and not getattr(args, "fork_session", None) and sys.stdin.isatty():
+                # Bare `--resume` (no id): show an interactive picker with titles.
+                resume_id = _select_resume_session(config, stdin=sys.stdin, stdout=stdout)
+            else:
+                resume_id = _resolve_resume_session_id(config, args)
             forked_from = _maybe_fork_session(config, args)
             if forked_from is not None:
                 resume_id = forked_from
@@ -184,6 +188,44 @@ def _resolve_resume_session_id(config, args) -> str | None:
     if requested:  # explicit id or registered name
         return store.resolve(requested)
     return store.latest_session_id()
+
+
+def _select_resume_session(config, *, stdin, stdout) -> str | None:
+    """Interactive picker for bare `--resume`: list prior sessions with a derived
+    title so the user can tell what each one contains, then resolve a choice.
+
+    Accepts a list number, or a typed session id/name. Empty input cancels."""
+    from datetime import datetime
+
+    from allCode.memory.conversation_store import ConversationStore
+
+    store = ConversationStore(config.workspace.root)
+    entries = store.list_sessions_with_meta()
+    if not entries:
+        stdout.write("재개할 이전 세션이 없습니다. 새 세션으로 시작합니다.\n")
+        return None
+    shown = entries[:20]
+    stdout.write("재개할 세션을 선택하세요:\n")
+    for index, entry in enumerate(shown, start=1):
+        when = datetime.fromtimestamp(entry.mtime).strftime("%m-%d %H:%M")
+        label = f"[{entry.name}] " if entry.name else ""
+        stdout.write(f"  {index}. {label}{entry.title}  ({entry.turns}턴 · {when} · {entry.session_id[:8]})\n")
+    stdout.write("번호 또는 id/이름 입력 (취소: Enter): ")
+    stdout.flush()
+    choice = stdin.readline().strip()
+    if not choice:
+        stdout.write("선택을 취소했습니다. 새 세션으로 시작합니다.\n")
+        return None
+    if choice.isdigit():
+        number = int(choice)
+        if 1 <= number <= len(shown):
+            return shown[number - 1].session_id
+        stdout.write("범위를 벗어난 번호입니다. 새 세션으로 시작합니다.\n")
+        return None
+    resolved = store.resolve(choice)
+    if resolved is None:
+        stdout.write("해당 세션을 찾지 못했습니다. 새 세션으로 시작합니다.\n")
+    return resolved
 
 
 def _maybe_fork_session(config, args) -> str | None:

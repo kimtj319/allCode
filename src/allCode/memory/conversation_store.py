@@ -9,7 +9,34 @@ telemetry logs.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class SessionEntry:
+    """A resumable session with enough metadata to identify it in a picker."""
+
+    session_id: str
+    name: str  # human-assigned name, or "" if none
+    title: str  # short title derived from the work history
+    turns: int  # number of user/assistant exchanges
+    mtime: float  # last-modified timestamp (for ordering / display)
+
+
+def _derive_title(exchanges: list[tuple[str, str]], *, limit: int = 60) -> str:
+    """Build a short, single-line title from a session's work history.
+
+    Uses the first substantive user prompt (what the session was about). Strips
+    code fences/newlines so the title stays on one line in a list."""
+    for role, text in exchanges:
+        if role != "user":
+            continue
+        cleaned = " ".join(text.replace("`", "").split())
+        if not cleaned:
+            continue
+        return cleaned[: limit - 1] + "…" if len(cleaned) > limit else cleaned
+    return "(내용 없음)"
 
 
 class ConversationStore:
@@ -67,6 +94,34 @@ class ConversationStore:
         files = [p for p in self.dir.glob("*.jsonl") if p.is_file()]
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return [p.stem for p in files]
+
+    def session_title(self, session_id: str) -> str:
+        """A short title for a session, derived from its work history."""
+        return _derive_title(self.load(session_id))
+
+    def list_sessions_with_meta(self) -> list[SessionEntry]:
+        """Sessions (newest first) with a derived title and a registered name,
+        so a picker can show what each session contains."""
+        if not self.dir.exists():
+            return []
+        id_to_name = {sid: name for name, sid in self._load_names().items()}
+        entries: list[SessionEntry] = []
+        for path in self.dir.glob("*.jsonl"):
+            if not path.is_file():
+                continue
+            session_id = path.stem
+            exchanges = self.load(session_id)
+            entries.append(
+                SessionEntry(
+                    session_id=session_id,
+                    name=id_to_name.get(session_id, ""),
+                    title=_derive_title(exchanges),
+                    turns=sum(1 for role, _ in exchanges if role == "user"),
+                    mtime=path.stat().st_mtime,
+                )
+            )
+        entries.sort(key=lambda e: e.mtime, reverse=True)
+        return entries
 
     # -- naming & fork --------------------------------------------------------
 
