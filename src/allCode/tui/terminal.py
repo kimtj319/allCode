@@ -10,8 +10,10 @@ import time
 from pathlib import Path
 from typing import Any, TextIO
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from allCode.core.events import AgentEvent
@@ -21,10 +23,11 @@ from allCode.memory.usage_store import UsageStore
 from allCode.tui.markdown import logo_text
 from allCode.tui.mentions import expand_mentions
 from allCode.tui.status_view import (
+    DAILY_TOKEN_BUDGET,
     columns_for_width,
-    format_metric_columns,
+    fmt_tokens,
+    gauge_fraction,
     metric_pairs_from_summary,
-    render_token_gauge,
 )
 from allCode.tui.renderers import EventRenderer
 from allCode.tui.slash_commands import SlashCommandHandler
@@ -392,7 +395,7 @@ class TerminalSession:
             self._print_assistant_block(self._switch_theme(stripped))
             return None
         if stripped.split(maxsplit=1)[0] == "/status":
-            self._print_assistant_block(self._status_view(stripped))
+            self._render_status(stripped)
             return None
         result = asyncio.run(self.slash_handler.handle(command))
         if result.clear_transcript:
@@ -495,30 +498,79 @@ class TerminalSession:
             "- 줄이려면 /compact 로 대화를 압축하세요."
         )
 
-    def _status_view(self, command: str) -> str:
-        """Render /status as a token-usage gauge plus multi-column diagnostics.
-
-        The gauge shows today's token spend against an estimated heavy-developer
-        daily budget and renders even on first launch (0 usage). Diagnostics come
-        from the status backend and are reformatted into 2–3 columns by width."""
-        gauge = render_token_gauge(self._usage.today_total())
+    def _render_status(self, command: str) -> None:
+        """Render /status as a polished panel: a colored token-usage gauge plus
+        the session diagnostics in an aligned multi-column table. Drawn with Rich
+        (not the markdown renderer) so alignment is preserved. Renders even on
+        first launch (0% gauge)."""
         try:
             backend = asyncio.run(self.slash_handler.handle(command)).message
         except Exception:  # noqa: BLE001 - the gauge must still render
             backend = ""
         pairs = metric_pairs_from_summary(backend)
+
+        body: list = [self._gauge_renderable(), Text()]
         if pairs:
-            lines = backend.splitlines()
-            header = lines[0].strip() if lines and not lines[0].startswith("- ") else "세션 진단:"
-            table = format_metric_columns(
-                pairs,
-                columns=columns_for_width(self.screen.width),
-                total_width=max(60, self.screen.width - 4),
-            )
-            body = f"{header}\n{table}"
+            body.append(Text("세션 진단", style="bold"))
+            body.append(self._metric_table(pairs))
         else:
-            body = backend or "아직 세션 진단 정보가 없습니다."
-        return f"{gauge}\n\n{body}"
+            body.append(Text(backend.strip() or "아직 세션 진단 정보가 없습니다.", style="dim"))
+
+        panel = Panel(
+            Group(*body),
+            title="상태",
+            title_align="left",
+            border_style="#61afef",
+            padding=(1, 2),
+        )
+        self._prepare_body_output()
+        # Render through a console pinned to the real screen width: the default
+        # console falls back to 80 cols for non-tty/captured output and would crop
+        # the wider multi-column layout. Writes through the body-counting proxy.
+        status_console = Console(
+            file=self.screen.stdout,
+            force_terminal=self.screen.interactive,
+            color_system="truecolor" if self.screen.interactive else None,
+            width=self.screen.width,
+            highlight=False,
+        )
+        status_console.print(panel)
+        self.console.print()
+
+    def _gauge_renderable(self) -> Text:
+        used = self._usage.today_total()
+        maximum = DAILY_TOKEN_BUDGET
+        ratio = gauge_fraction(used, maximum)
+        width = 30
+        filled = min(width, max(1 if used > 0 else 0, round(ratio * width)))
+        color = "green" if ratio < 0.75 else "yellow" if ratio < 1.0 else "red"
+        line = Text()
+        line.append("오늘 토큰 사용량 ", style="bold")
+        line.append(f"(하루 추정치 {fmt_tokens(maximum)})\n", style="dim")
+        line.append("█" * filled, style=color)
+        line.append("░" * (width - filled), style="grey37")
+        line.append(f"  {ratio * 100:.0f}%  ", style="bold")
+        line.append(f"{fmt_tokens(used)} / {fmt_tokens(maximum)} 토큰", style="dim")
+        return line
+
+    def _metric_table(self, pairs: list[tuple[str, str]]) -> Table:
+        groups = max(1, columns_for_width(self.screen.width))
+        table = Table(show_header=False, box=None, pad_edge=False, padding=(0, 2, 0, 0))
+        for _ in range(groups):
+            table.add_column(style="dim", no_wrap=True)  # label
+            table.add_column(justify="right", style="cyan", no_wrap=True)  # value
+        rows = (len(pairs) + groups - 1) // groups
+        for row in range(rows):
+            cells: list[str] = []
+            for col in range(groups):
+                index = row + col * rows  # column-major so each column reads top-to-bottom
+                if index < len(pairs):
+                    label, value = pairs[index]
+                    cells.extend([label, str(value)])
+                else:
+                    cells.extend(["", ""])
+            table.add_row(*cells)
+        return table
 
     def _switch_theme(self, command: str) -> str:
         parts = command.split(maxsplit=1)

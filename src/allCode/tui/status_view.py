@@ -10,12 +10,20 @@ from __future__ import annotations
 DAILY_TOKEN_BUDGET = 5_000_000
 
 
-def _fmt_tokens(value: int) -> str:
+def fmt_tokens(value: int) -> str:
     if value >= 1_000_000:
         return f"{value / 1_000_000:.1f}M"
     if value >= 1_000:
         return f"{value / 1_000:.1f}k"
     return str(int(value))
+
+
+_fmt_tokens = fmt_tokens  # backwards-compatible alias
+
+
+def gauge_fraction(used: int, maximum: int) -> float:
+    """Clamped used/maximum ratio in [0, 1] for the token gauge."""
+    return min(1.0, max(0, int(used)) / max(1, int(maximum)))
 
 
 def render_token_gauge(used: int, maximum: int = DAILY_TOKEN_BUDGET, *, width: int = 28) -> str:
