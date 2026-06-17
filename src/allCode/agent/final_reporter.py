@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from allCode.agent.language import ResponseLanguage, generation_report_labels, normalize_response_language
 from allCode.agent.obligation_matrix import build_obligation_matrix
 from allCode.agent.task_plan import ProjectPlan
 from allCode.agent.validation_runner import ValidationResult
+from allCode.core.path_patterns import looks_like_test_path
 from allCode.core.result import CompletionEvidence, RecoveryState
 
 
@@ -46,8 +49,7 @@ class FinalReporter:
             *[f"- `{path}`" for path in changed],
             "",
             f"{labels.core_functionality}:",
-            f"- Generated a {plan.language} scaffold using skeleton-first workflow.",
-            "- Added implementation files and validation coverage.",
+            *self._functionality_lines(plan),
             "",
             *(obligation_lines + [""] if obligation_lines else []),
             f"{labels.validation}:",
@@ -65,6 +67,24 @@ class FinalReporter:
             "",
         ]
         return "\n".join(sections)
+
+    def _functionality_lines(self, plan: ProjectPlan) -> list[str]:
+        """Describe what was built from the plan's implementation files and their
+        purposes, instead of a generic 'scaffold' boilerplate that says nothing
+        about the actual project."""
+        lines: list[str] = []
+        for planned_file in plan.files:
+            if looks_like_test_path(planned_file.path):
+                continue
+            purpose = (planned_file.purpose or "").strip()
+            if not purpose:
+                continue
+            lines.append(f"- `{Path(planned_file.path).name}`: {purpose}")
+            if len(lines) >= 6:
+                break
+        if not lines:
+            lines = [f"- Built a {plan.language} project with {len(plan.files)} file(s)."]
+        return lines
 
     def _relative_files(self, plan: ProjectPlan, files: list[str]) -> list[str]:
         seen: list[str] = []
