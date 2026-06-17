@@ -61,7 +61,7 @@ def validation_repair_gate(
             workspace_root=workspace_root,
             repair_context_read_paths=read_paths,
         )
-        if has_current_read:
+        if has_current_read or bool(read_paths):
             allowed = {"write_file"}
             preferred = ["write_file"]
             action = "Rewrite the repeatedly failing target with write_file using the inspected file context."
@@ -84,7 +84,7 @@ def validation_repair_gate(
             workspace_root=workspace_root,
             repair_context_read_paths=read_paths,
         )
-        if has_current_read:
+        if has_current_read or bool(read_paths):
             allowed = {"read_file", "write_file"}
             preferred = ["write_file", "read_file"]
             action = "Rewrite the file with write_file, or read a narrower range if more context is needed."
@@ -100,14 +100,20 @@ def validation_repair_gate(
             repair_context_read_paths=read_paths,
         )
         fallback_source_targets = repair_targets[0].reason == "changed_source_after_validation_failure"
+        # Once the model has read any file during this repair cycle it has enough
+        # context to attempt the fix. Insisting it read the *exact* ranked target
+        # traps the loop when the relevant file it read (e.g. the changed source)
+        # differs from the ranked target (often the test), so the repair mutation
+        # is never allowed and the turn fails. Treat any repair-cycle read as
+        # satisfying the read-before-repair requirement.
         if fallback_source_targets and not has_current_read:
             allowed = {"read_file", *MUTATION_TOOLS}
             preferred = ["write_file", "patch_file", "read_file"]
             action = "Repair the changed source file, or read it first if more context is needed."
-        elif has_current_read:
+        elif has_current_read or bool(read_paths):
             allowed = set(MUTATION_TOOLS)
             preferred = ["write_file", "patch_file"]
-            action = "Repair the already inspected validation target with write_file or patch_file."
+            action = "Repair the inspected validation target with write_file or patch_file."
         else:
             allowed = {"read_file"}
             preferred = ["read_file"]
