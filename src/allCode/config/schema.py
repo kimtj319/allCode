@@ -57,11 +57,12 @@ class WorkspaceConfig(StrictConfigModel):
     root: str = "."
     extra_roots: list[str] = Field(default_factory=list)
     sandbox_enabled: bool = True
-    # OS-level confinement for run_command/run_tests. "workspace-write" runs the
-    # command under an OS sandbox (macOS sandbox-exec) that allows reads + network
-    # but blocks writes outside the workspace and temp dirs. "off" keeps the
-    # prior behavior (path-confinement + approval only).
-    shell_sandbox: Literal["off", "workspace-write"] = "off"
+    # OS-level confinement for run_command/run_tests, enforced by macOS
+    # sandbox-exec or Linux bwrap. "workspace-write" allows reads + network but
+    # blocks writes outside the workspace and temp dirs; "read-only" additionally
+    # blocks workspace writes (temp only); "off" keeps the prior behavior
+    # (path-confinement + approval only). No-op when the backend is unavailable.
+    shell_sandbox: Literal["off", "read-only", "workspace-write"] = "off"
 
     @field_validator("root")
     @classmethod
