@@ -176,7 +176,18 @@ class TerminalSession:
         # (model-independent; advanced from observed routing + tool events).
         self._turn_plan: TurnPlan | None = None
         # Persistent context/session meta shown in the always-redrawn footer.
-        self._base_footer = app_info.replace(" | ", " · ")
+        # The model segment is split out so it can track the model actually in
+        # use (base tier for routing/planning/answer, implementation tier for
+        # code edits) while the rest (workspace · approval) stays fixed.
+        base_footer = app_info.replace(" | ", " · ")
+        if base_footer.startswith("model: "):
+            head, _sep, tail = base_footer.partition(" · ")
+            self._default_model_name = head[len("model: ") :]
+            self._footer_tail = tail
+        else:
+            self._default_model_name = ""
+            self._footer_tail = base_footer
+        self._active_model_name = self._default_model_name
         self._context_label = ""
         # Cumulative session token accounting for the /cost command.
         self._session_output_tokens = 0
@@ -273,6 +284,9 @@ class TerminalSession:
     async def handle_agent_event(self, event: AgentEvent) -> None:
         if event.event_type == "model_metrics_recorded":
             self._update_context_label(event.data or {})
+            return
+        if event.event_type == "model_invoked":
+            self._set_active_model(str((event.data or {}).get("model", "")))
             return
         if event.event_type == "approval_requested":
             self._print_status(messages.APPROVAL_STATUS)
@@ -780,11 +794,39 @@ class TerminalSession:
         self.screen.theme = TerminalTheme.named(name)
         return f"테마를 '{name}'(으)로 변경했습니다."
 
+    def _compose_footer(self) -> str:
+        parts: list[str] = []
+        if self._active_model_name:
+            parts.append(f"model: {self._active_model_name}")
+        if self._footer_tail:
+            parts.append(self._footer_tail)
+        if self._context_label:
+            parts.append(self._context_label)
+        return " · ".join(parts)
+
+    def _refresh_footer(self) -> None:
+        self.input_editor.footer = self._compose_footer()
+
+    def _set_active_model(self, name: str) -> None:
+        """Reflect the model actually used by the latest operation in the footer."""
+        name = (name or "").strip()
+        if not name or name == self._active_model_name:
+            return
+        self._active_model_name = name
+        self._refresh_footer()
+
+    def _reset_active_model(self) -> None:
+        if self._active_model_name != self._default_model_name:
+            self._active_model_name = self._default_model_name
+            self._refresh_footer()
+
     def _update_context_label(self, data: dict) -> None:
         """Refresh the persistent context-usage indicator in the footer from the
         latest model round metrics. Uses real token counts when the model reports
         them, otherwise approximates from the request size (~4 chars/token)."""
 
+        if isinstance(data, dict):
+            self._set_active_model(str(data.get("model") or ""))
         usage = data.get("usage") if isinstance(data, dict) else None
         tokens = None
         if isinstance(usage, dict):
@@ -820,10 +862,7 @@ class TerminalSession:
         else:
             shown = f"{prefix}{tokens}"
         self._context_label = f"컨텍스트 {shown} 토큰"
-        footer = self._base_footer
-        if self._context_label:
-            footer = f"{footer} · {self._context_label}"
-        self.input_editor.footer = footer
+        self._refresh_footer()
 
     def _print_status(self, status: str) -> None:
         if not status:
@@ -875,6 +914,8 @@ class TerminalSession:
         if self._running_started_at is None:
             return
         self._running_started_at = None
+        # Back to idle: the footer shows the base tier again until the next turn.
+        self._reset_active_model()
         if self.screen.interactive:
             self.screen.clear_input_panel()
             self.input_editor.render_runtime_frame(activity=None)

@@ -77,6 +77,17 @@ class ModelResponseParsed(AgentEvent):
     severity: EventSeverity = "debug_only"
 
 
+class ModelInvoked(AgentEvent):
+    """Emitted whenever a non-streaming model call (router/planner = base model,
+    file editor = implementation model) reaches the provider, carrying the model
+    actually used so the UI can reflect the active tier. turn_id is optional
+    because the wrapper that emits it does not always know the current turn."""
+
+    event_type: Literal["model_invoked"] = "model_invoked"
+    severity: EventSeverity = "debug_only"
+    turn_id: str = ""
+
+
 class ModelMetricsRecorded(AgentEvent):
     event_type: Literal["model_metrics_recorded"] = "model_metrics_recorded"
     severity: EventSeverity = "debug_only"

@@ -63,7 +63,7 @@ async def run_agent_turn(
     # Attribute every non-streaming model call (router, planner, file editor) to
     # its model so /status can break down usage per model. Streaming round usage
     # is recorded separately via the ModelMetricsRecorded event.
-    effective_llm = UsageRecordingLLMClient(effective_llm, UsageStore(config.workspace.root))
+    effective_llm = UsageRecordingLLMClient(effective_llm, UsageStore(config.workspace.root), event_bus=event_bus)
     settings = ModelSettings.from_config(config)
     implementation_settings = ModelSettings.implementation_from_config(config)
     effective_context_builder = context_builder or build_runtime_context_builder(config)
