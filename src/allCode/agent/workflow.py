@@ -59,6 +59,7 @@ class GenerationWorkflow:
         editor_settings: ModelSettings | None = None,
         model_planner: ModelProjectPlanner | None = None,
         max_repair_attempts: int = 5,
+        planner_attempts: int = 3,
         plan_approval=None,
     ) -> None:
         # Optional async gate: called with the plan summary after the plan is
@@ -86,6 +87,10 @@ class GenerationWorkflow:
             else None
         )
         self.max_repair_attempts = max_repair_attempts
+        # Model planners are non-deterministic, so a degenerate first plan often
+        # becomes acceptable on a retry. Try up to N times for an acceptable plan
+        # before falling back to the deterministic strategy plan.
+        self.planner_attempts = max(1, planner_attempts)
         self.tool_executor = tool_executor or ToolExecutor(
             registry=ToolRegistry(builtin_tools()),
             approval=ApprovalManager(mode="auto"),
@@ -376,16 +381,25 @@ class GenerationWorkflow:
     ) -> ProjectPlan:
         target_hint = routing.target_hint or request.target_root
         if self.model_planner is not None:
-            try:
-                model_plan = await self.model_planner.create_plan(
-                    request.prompt,
-                    target_hint=target_hint,
-                    task_digest=task_digest.render(),
-                )
-            except Exception:
-                model_plan = None
-            if model_plan is not None and _model_plan_acceptable(model_plan, request.prompt):
-                return model_plan
+            last_plan: ProjectPlan | None = None
+            for _attempt in range(self.planner_attempts):
+                try:
+                    model_plan = await self.model_planner.create_plan(
+                        request.prompt,
+                        target_hint=target_hint,
+                        task_digest=task_digest.render(),
+                    )
+                except Exception:
+                    model_plan = None
+                if model_plan is None:
+                    continue
+                if _model_plan_acceptable(model_plan, request.prompt):
+                    return model_plan
+                last_plan = model_plan  # keep the best-effort plan as a fallback
+            if last_plan is not None and not project_plan_quality_errors(last_plan, request.prompt):
+                # No fully-acceptable plan, but the last one is at least
+                # structurally sound — prefer it over the generic strategy plan.
+                return last_plan
         return strategy.create_plan(request)
 
     async def _repair_files_from_model_or_strategy(
