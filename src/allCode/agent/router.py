@@ -34,16 +34,30 @@ RouteSource = Literal["rule", "model", "fallback"]
 # codebase. Such questions should be answered from chat context.
 _CONVERSATION_RECALL_MARKERS = (
     "1번 턴", "첫 번째 턴", "첫번째 턴", "맨 처음", "처음에", "아까", "이전에",
-    "이전 대화", "앞에서", "앞서", "방금 전", "내가 말한", "내가 준", "내가 강조",
-    "내가 요청한", "내가 했던", "우리가 얘기", "우리가 논의", "위에서 말한",
+    "이전 대화", "앞에서", "앞서", "방금", "방금 전", "방금 설명", "방금 말한", "방금 알려",
+    "내가 말한", "내가 준", "내가 강조", "내가 요청한", "내가 했던", "위 설명", "위에서",
+    "우리가 얘기", "우리가 논의", "위에서 말한", "위에서 설명",
     "earlier", "previously", "first turn", "you said", "i told you", "i asked you",
     "we discussed", "we talked about", "our conversation", "above you said",
+    "that concept", "what you just",
+)
+
+# Markers that a "write/show code" request wants an inline code example in the
+# answer (a snippet, demo, or illustration), not a file written to the workspace.
+_INLINE_CODE_EXAMPLE_MARKERS = (
+    "예시", "예제", "샘플", "보여줘", "보여 줘", "보여주세요", "snippet", "example",
+    "for example", "demonstrate", "show me", "샘플 코드", "코드로 보여",
 )
 
 
 def _references_prior_conversation(prompt: str) -> bool:
     lowered = prompt.lower()
     return any(marker.lower() in lowered for marker in _CONVERSATION_RECALL_MARKERS)
+
+
+def _inline_code_example_requested(prompt: str) -> bool:
+    lowered = prompt.lower()
+    return any(marker.lower() in lowered for marker in _INLINE_CODE_EXAMPLE_MARKERS)
 
 
 class RoutingDecision(CoreModel):
@@ -99,7 +113,10 @@ class RuleBasedRouter:
         # generic structural summary). Only when there is no explicit change/run
         # command — modify/operate requests keep their own routing.
         if _references_prior_conversation(prompt) and not (
-            signals.modify_action or signals.operate_action or signals.explicit_change_request
+            signals.modify_action
+            or signals.operate_action
+            or signals.explicit_change_request
+            or signals.target_hint
         ):
             return self._decision(
                 "answer",
@@ -160,6 +177,27 @@ class RuleBasedRouter:
                 "answer",
                 0.80,
                 "External research write-up requested without a workspace artifact target; answer in conversation.",
+                signals,
+                flags,
+            )
+        # "Show me / write an example snippet" (e.g. "방금 설명한 개념을 예시 코드로
+        # 작성해줘") reads as a change command because of verbs like 작성/만들어, but
+        # the user wants inline code in the answer, not a file written to the
+        # workspace. With no concrete artifact target and either an example/snippet
+        # cue or a reference to the prior conversation, answer in chat instead of
+        # demanding a target file.
+        if (
+            signals.modify_action
+            and not signals.target_hint
+            and not signals.directory_output_hint
+            and not signals.multi_artifact_hint
+            and not signals.project_output_hint
+            and (_inline_code_example_requested(prompt) or _references_prior_conversation(prompt))
+        ):
+            return self._decision(
+                "answer",
+                0.80,
+                "Inline code example requested without a workspace artifact target; answer in conversation.",
                 signals,
                 flags,
             )
