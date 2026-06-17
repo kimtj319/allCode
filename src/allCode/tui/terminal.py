@@ -184,6 +184,7 @@ class TerminalSession:
 
     def run(self) -> int:
         self.screen.enter()
+        self._install_resize_handler()
         try:
             self._print_header()
             while True:
@@ -205,8 +206,47 @@ class TerminalSession:
                     continue
                 self._run_agent_prompt(prompt)
         finally:
+            self._remove_resize_handler()
             self.screen.exit()
             self._print_resume_hint()
+
+    def _install_resize_handler(self) -> None:
+        """Redraw the composer immediately when the terminal is resized.
+
+        Without this, the prompt box keeps the old width until the next keystroke.
+        SIGWINCH exists only on POSIX and signal handlers can only be set from the
+        main thread, so both are guarded."""
+        self._prev_winch_handler = None
+        if not self.screen.interactive:
+            return
+        import signal
+        import threading
+
+        if not hasattr(signal, "SIGWINCH") or threading.current_thread() is not threading.main_thread():
+            return
+
+        def _on_resize(_signum, _frame) -> None:
+            try:
+                self.screen.redraw()
+            except Exception:  # noqa: BLE001 - a redraw must never crash the session
+                pass
+
+        try:
+            self._prev_winch_handler = signal.signal(signal.SIGWINCH, _on_resize)
+        except (ValueError, OSError):
+            self._prev_winch_handler = None
+
+    def _remove_resize_handler(self) -> None:
+        if getattr(self, "_prev_winch_handler", None) is None:
+            return
+        import signal
+
+        if not hasattr(signal, "SIGWINCH"):
+            return
+        try:
+            signal.signal(signal.SIGWINCH, self._prev_winch_handler)
+        except (ValueError, OSError, TypeError):
+            pass
 
     def _print_resume_hint(self) -> None:
         """On exit, tell the user how to resume this conversation later.

@@ -123,6 +123,9 @@ class TerminalScreen:
         # between the header and the prompt. It migrates down to the bottom as body
         # content grows. None means "not yet drawn" → defaults to the bottom.
         self._composer_top: int | None = None
+        # Last bottom frame drawn, so a terminal resize (SIGWINCH) can redraw the
+        # composer immediately at the new width instead of waiting for a keystroke.
+        self._last_frame: TerminalFrame | None = None
         self._raw_stdout = stdout
         self.stdout: TextIO = _BodyRowCounter(stdout, self)
 
@@ -209,6 +212,7 @@ class TerminalScreen:
     def render_bottom_frame(self, frame: TerminalFrame) -> None:
         if not self.interactive:
             return
+        self._last_frame = frame
         self._raw_stdout.write("\x1b[?25l")
         try:
             # +2 rows for the input box's top and bottom borders.
@@ -325,6 +329,21 @@ class TerminalScreen:
             return
         self._clear_prompt_area()
         self._raw_stdout.flush()
+
+    def redraw(self) -> None:
+        """Re-render the last composer frame at the current terminal size.
+
+        Called on a terminal resize (SIGWINCH) so the prompt box reflows to the
+        new width immediately, rather than staying at the old width until the
+        next keystroke. Re-applies the scroll region because height may have
+        changed. Safe to call from a signal handler: it only touches Python-level
+        state and writes ANSI to the output stream."""
+        if not self.interactive or self._last_frame is None:
+            return
+        # Height may have changed; force the scroll region to re-apply.
+        self._applied_height = None
+        self._apply_scroll_region()
+        self.render_bottom_frame(self._last_frame)
 
     def prepare_body_output(self) -> None:
         """Clear composer rows and move the cursor back into the scrollback area."""
