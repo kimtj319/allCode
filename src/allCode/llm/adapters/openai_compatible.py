@@ -107,6 +107,11 @@ class OpenAICompatibleClient:
             "max_tokens": settings.max_output_tokens,
             "temperature": settings.temperature,
         }
+        if stream:
+            # Ask the provider to emit a final usage chunk; OpenAI-compatible
+            # servers (e.g. vLLM) otherwise omit token counts in streaming mode,
+            # which would leave the /status usage gauge stuck at zero.
+            payload["stream_options"] = {"include_usage": True}
         self._merge_extra_body(payload, settings.extra_body)
         if tools:
             payload["tools"] = [

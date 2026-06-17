@@ -31,6 +31,11 @@ class ModelStreamCollector:
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stream_timeout_seconds = stream_timeout_seconds
 
+    @property
+    def model_name(self) -> str:
+        """Model name this collector streams from (for per-model usage tally)."""
+        return self._settings.model_name
+
     async def collect(
         self,
         *,

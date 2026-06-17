@@ -18,6 +18,8 @@ from allCode.core.result import TurnResult
 from allCode.llm.client import LLMClient
 from allCode.llm.factory import create_llm_client
 from allCode.llm.settings import ModelSettings
+from allCode.llm.usage_tracking import UsageRecordingLLMClient
+from allCode.memory.usage_store import UsageStore
 from allCode.memory.session_summary import SessionSummary
 from allCode.memory.session_state_store import SessionStateStore
 from allCode.memory.conversation_store import ConversationStore
@@ -58,6 +60,10 @@ async def run_agent_turn(
         event_bus.subscribe(None, event_handler)
     use_model_router = llm_client is None
     effective_llm = llm_client or create_llm_client(config)
+    # Attribute every non-streaming model call (router, planner, file editor) to
+    # its model so /status can break down usage per model. Streaming round usage
+    # is recorded separately via the ModelMetricsRecorded event.
+    effective_llm = UsageRecordingLLMClient(effective_llm, UsageStore(config.workspace.root))
     settings = ModelSettings.from_config(config)
     implementation_settings = ModelSettings.implementation_from_config(config)
     effective_context_builder = context_builder or build_runtime_context_builder(config)

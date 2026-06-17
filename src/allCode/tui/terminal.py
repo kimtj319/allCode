@@ -510,6 +510,11 @@ class TerminalSession:
         pairs = metric_pairs_from_summary(backend)
 
         body: list = [self._gauge_renderable(), Text()]
+        model_rows = self._model_usage_renderable()
+        if model_rows is not None:
+            body.append(Text("모델별 사용량", style="bold"))
+            body.append(model_rows)
+            body.append(Text())
         if pairs:
             body.append(Text("세션 진단", style="bold"))
             body.append(self._metric_table(pairs))
@@ -552,6 +557,23 @@ class TerminalSession:
         line.append(f"  {ratio * 100:.0f}%  ", style="bold")
         line.append(f"{fmt_tokens(used)} / {fmt_tokens(maximum)} 토큰", style="dim")
         return line
+
+    def _model_usage_renderable(self) -> Table | None:
+        """Per-model token usage for today, aggregated from the models the agent
+        actually ran (e.g. the ultra routing model vs the implementation/max
+        editor model). Returns None until at least one model has reported usage."""
+        by_model = self._usage.today_by_model()
+        if not by_model:
+            return None
+        total = self._usage.today_total() or sum(by_model.values())
+        table = Table(show_header=False, box=None, pad_edge=False, padding=(0, 2, 0, 0))
+        table.add_column(style="dim", no_wrap=True)  # model name
+        table.add_column(justify="right", style="cyan", no_wrap=True)  # tokens
+        table.add_column(justify="right", style="grey62", no_wrap=True)  # share
+        for name, tokens in by_model.items():
+            share = (tokens / total * 100) if total > 0 else 0
+            table.add_row(name, f"{fmt_tokens(tokens)} 토큰", f"{share:.0f}%")
+        return table
 
     def _metric_table(self, pairs: list[tuple[str, str]]) -> Table:
         groups = max(1, columns_for_width(self.screen.width))
@@ -602,7 +624,8 @@ class TerminalSession:
             if round_total == 0 and isinstance(usage.get("total_tokens"), int):
                 round_total = usage["total_tokens"]
             if round_total > 0:
-                self._usage.add(round_total)
+                model = data.get("model") if isinstance(data, dict) else None
+                self._usage.add(round_total, model=model if isinstance(model, str) else None)
         if isinstance(tokens, int) and tokens > 0:
             self._last_context_tokens = tokens
         approx = False

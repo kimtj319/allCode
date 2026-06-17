@@ -37,7 +37,9 @@ async def publish_model_request(
     )
 
 
-async def publish_parsed_response(event_bus, *, state: TurnState, parsed, runtime: RoundRuntime, round_index: int) -> None:
+async def publish_parsed_response(
+    event_bus, *, state: TurnState, parsed, runtime: RoundRuntime, round_index: int, model: str | None = None
+) -> None:
     await event_bus.publish(
         ModelResponseParsed(
             turn_id=state.turn_id,
@@ -62,6 +64,7 @@ async def publish_parsed_response(event_bus, *, state: TurnState, parsed, runtim
             message=f"Model metrics recorded for round {round_index + 1}.",
             data={
                 "round": round_index + 1,
+                "model": model,
                 "request_message_count": len(runtime.messages),
                 "request_chars": message_chars(runtime.messages),
                 "prompt_chars": message_chars(runtime.messages),

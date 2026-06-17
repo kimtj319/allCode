@@ -323,6 +323,7 @@ class RoundRunner:
                 parsed=parsed,
                 runtime=runtime,
                 round_index=round_index,
+                model=self._stream_collector.model_name,
             )
             if parsed.usage is not None:
                 state.token_usage = parsed.usage
