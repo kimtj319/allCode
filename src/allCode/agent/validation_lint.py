@@ -51,13 +51,22 @@ def _eslint_configured(root: Path) -> bool:
     return any((root / name).exists() for name in names)
 
 
-def syntax_check_candidates(target_root: str, *, environment: dict[str, str] | None = None) -> list[ValidationCommand]:
-    """Always-on, dependency-free Python diagnostic.
+_PYFLAKES_LITE = str(Path(__file__).with_name("pyflakes_lite.py"))
 
-    Byte-compiles every ``.py`` under the target (without executing it) via
-    ``compileall``, so a syntactically broken edit fails validation and triggers
-    the repair loop even when the project has no tests, ruff, or mypy. This is
-    the lightweight stand-in for editor/LSP diagnostics on the edit→validate loop.
+
+def syntax_check_candidates(target_root: str, *, environment: dict[str, str] | None = None) -> list[ValidationCommand]:
+    """Always-on, dependency-free Python diagnostics.
+
+    Two checks, both stdlib-only so they need nothing installed in the target:
+
+    1. ``compileall`` byte-compiles every ``.py`` (without executing it), so a
+       syntactically broken edit fails validation and triggers repair even when
+       the project has no tests, ruff, or mypy.
+    2. ``pyflakes_lite --undefined-only`` catches what compileall cannot: names
+       that are used but bound nowhere in the module (typos / missing imports).
+       It runs in undefined-only mode so re-export hubs never trip an
+       unused-import false failure; it is tuned to never flag a legitimately
+       defined name, so it does not manufacture spurious failures.
     """
 
     root = Path(target_root).expanduser()
@@ -71,7 +80,10 @@ def syntax_check_candidates(target_root: str, *, environment: dict[str, str] | N
     if not has_python:
         return []
     env = dict(environment or {})
-    return [ValidationCommand(command="python -m compileall -q .", cwd=target_root, environment=env)]
+    return [
+        ValidationCommand(command="python -m compileall -q .", cwd=target_root, environment=env),
+        ValidationCommand(command=f'python "{_PYFLAKES_LITE}" --undefined-only .', cwd=target_root, environment=env),
+    ]
 
 
 def lint_candidates(target_root: str, *, environment: dict[str, str] | None = None) -> list[ValidationCommand]:
