@@ -5,10 +5,20 @@ from __future__ import annotations
 import shutil
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TextIO
 
 from allCode.tui.terminal_frame import StyledLine, TerminalFrame
 from allCode.tui.terminal_width import clip_display_width, display_width
+
+
+@lru_cache(maxsize=256)
+def _fg_code(rgb: tuple[int, int, int]) -> str:
+    """ANSI truecolor foreground escape for an rgb tuple. Cached because theme
+    colors are reused across nearly every line of every frame; distinct colors
+    (e.g. after a /theme switch) simply get their own cache entry."""
+    red, green, blue = rgb
+    return f"\x1b[38;2;{red};{green};{blue}m"
 
 @dataclass(frozen=True)
 class TerminalTheme:
@@ -126,11 +136,19 @@ class TerminalScreen:
         # Last bottom frame drawn, so a terminal resize (SIGWINCH) can redraw the
         # composer immediately at the new width instead of waiting for a keystroke.
         self._last_frame: TerminalFrame | None = None
+        # When set, `size`/`width`/`height` read this instead of issuing a
+        # syscall — held only for the duration of one render so a single frame
+        # makes one get_terminal_size() call instead of ~30 (it is queried by
+        # nearly every render helper). Resizes are still picked up because the
+        # cache is refreshed at the start of each render.
+        self._size_cache: os.terminal_size | None = None
         self._raw_stdout = stdout
         self.stdout: TextIO = _BodyRowCounter(stdout, self)
 
     @property
     def size(self) -> os.terminal_size:
+        if self._size_cache is not None:
+            return self._size_cache
         return shutil.get_terminal_size(fallback=(80, 24))
 
     @property
@@ -213,6 +231,8 @@ class TerminalScreen:
         if not self.interactive:
             return
         self._last_frame = frame
+        # One size syscall per frame; helpers read the cached value transparently.
+        self._size_cache = shutil.get_terminal_size(fallback=(80, 24))
         self._raw_stdout.write("\x1b[?25l")
         try:
             # +2 rows for the input box's top and bottom borders.
@@ -268,6 +288,7 @@ class TerminalScreen:
             cursor_screen_col = max(1, min(self.width, 3 + frame.cursor_col))
             self._raw_stdout.write(f"\x1b[{cursor_screen_row};{cursor_screen_col}H")
         finally:
+            self._size_cache = None
             self._raw_stdout.write("\x1b[?25h")
             self._raw_stdout.flush()
 
@@ -282,8 +303,9 @@ class TerminalScreen:
         if row > self.height:
             return
         inner = max(0, self.width - 4)  # content between "│ " and " │"
-        body_text = clip_display_width(text, max(0, inner - display_width(prefix)))
-        used = display_width(prefix) + display_width(body_text)
+        prefix_width = display_width(prefix)
+        body_text = clip_display_width(text, max(0, inner - prefix_width))
+        used = prefix_width + display_width(body_text)
         pad = " " * max(0, inner - used)
         border = self._fg(self.theme.dim_fg)
         prompt = self._fg(self.theme.prompt_fg)
@@ -402,5 +424,4 @@ class TerminalScreen:
 
     @staticmethod
     def _fg(rgb: tuple[int, int, int]) -> str:
-        red, green, blue = rgb
-        return f"\x1b[38;2;{red};{green};{blue}m"
+        return _fg_code(rgb)
