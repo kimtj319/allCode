@@ -17,6 +17,10 @@ class ToolTimelineEntry(CoreModel):
 def build_tool_timeline_entry(result: ToolResult) -> ToolTimelineEntry:
     """Render one tool observation without leaking long raw output."""
 
+    # The task plan is the one read-only tool whose output is meant to be seen:
+    # render its checklist as a visible block rather than a folded one-liner.
+    if result.name == "update_plan" and result.ok and (result.content or "").strip():
+        return ToolTimelineEntry(line=result.content.rstrip())
     quiet_status = _quiet_readonly_tool_status(result)
     if quiet_status:
         return ToolTimelineEntry(quiet_status=quiet_status)

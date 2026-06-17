@@ -34,6 +34,14 @@ def routing_instruction(routing: RoutingDecision) -> str:
     answer_instruction = answer_route_instruction(routing)
     if answer_instruction:
         lines.append(answer_instruction)
+    if routing.kind in {"inspect", "modify", "operate"}:
+        lines.append(
+            "Task plan: if the task has 3 or more distinct steps, your FIRST action must be an "
+            "update_plan call listing those steps (all pending), then call update_plan again to mark "
+            "progress (exactly one step in_progress, finished steps completed) before each new phase. "
+            "This is the only way the user sees progress, so do not skip it for a genuinely multi-step "
+            "task; skip it only for a trivial single-step request."
+        )
     if routing.read_only_requested:
         lines.extend(
             [

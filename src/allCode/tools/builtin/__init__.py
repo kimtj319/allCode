@@ -3,6 +3,7 @@
 from allCode.tools.builtin.ast_edit import ApplyEditsTool, ReplaceSymbolTool
 from allCode.tools.builtin.file_ops import file_tools
 from allCode.tools.builtin.glob import GlobFilesTool
+from allCode.tools.builtin.plan import UpdatePlanTool
 from allCode.tools.builtin.search import SearchFilesTool
 from allCode.tools.builtin.shell import (
     GetCommandOutputTool,
@@ -32,6 +33,7 @@ def builtin_tools(
         ListTreeTool(),
         SourceOverviewTool(),
         SourceProbeTool(),
+        UpdatePlanTool(),
         RunCommandTool(shell_sandbox=shell_sandbox),
         RunTestsTool(shell_sandbox=shell_sandbox),
         GetCommandOutputTool(),
