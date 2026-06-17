@@ -289,13 +289,30 @@ class TerminalInputEditor:
             return completion
         return self._slash_menu_overlay(area) or self._mention_menu_overlay(area)
 
+    _COMPLETION_WINDOW = 6
+
     def _completion_overlay(self) -> OverlayView | None:
         state = self._completion_state
         if state is None:
             return None
+        # Show a scrolling window of candidates that always keeps the selected
+        # item visible. A fixed candidates[:5] slice froze the menu (and hid the
+        # highlight) once the selection moved past the first few with ↑/↓.
+        total = len(state.candidates)
+        window = self._COMPLETION_WINDOW
+        if total <= window:
+            start = 0
+        else:
+            start = min(max(0, state.selected - window // 2), total - window)
         items: list[OverlayItem] = []
-        for index, candidate in enumerate(state.candidates[:5]):
-            items.append(OverlayItem(label=candidate.label, description=candidate.description, selected=index == state.selected))
+        for offset, candidate in enumerate(state.candidates[start : start + window]):
+            items.append(
+                OverlayItem(
+                    label=candidate.label,
+                    description=candidate.description,
+                    selected=(start + offset) == state.selected,
+                )
+            )
         return OverlayView(kind="completion", items=items)
 
     def _slash_menu_overlay(self, area: TerminalTextArea) -> OverlayView | None:
