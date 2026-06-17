@@ -40,6 +40,8 @@ class RuntimeStatusCommandService:
             return self._model(args)
         if root == "/approval":
             return self._approval(args)
+        if root == "/permissions":
+            return self._permissions(normalized)
         if root == "/config":
             return self._config()
         if root == "/init":
@@ -164,6 +166,39 @@ class RuntimeStatusCommandService:
             return f"승인 모드를 '{mode}'로 바꿨지만 설정 파일 저장에 실패했습니다: {exc}"
         note = "권한 요청 없이 모두 진행합니다." if mode == "auto" else "변경/셸 실행 전 승인을 요청합니다."
         return f"승인 모드를 '{mode}'로 변경하고 저장했습니다 ({path}). {note}"
+
+    def _permissions(self, command: str) -> str:
+        """Show or persist permission rules (allow/deny) to .allCode/config.yaml.
+
+        Unlike the session-only "allow for session" choice, a rule added here is
+        written to the project config so it persists across runs."""
+        approval = self.config.approval
+        parts = command.split(maxsplit=2)  # ["/permissions", action, pattern]
+        if len(parts) < 2:
+            allow = "\n".join(f"  - {rule}" for rule in approval.allow) or "  (없음)"
+            deny = "\n".join(f"  - {rule}" for rule in approval.deny) or "  (없음)"
+            session = "\n".join(f"  - {rule}" for rule in approval.session_allow) or "  (없음)"
+            return (
+                f"승인 모드: {approval.mode}\n"
+                f"허용(allow) 규칙:\n{allow}\n"
+                f"거부(deny) 규칙:\n{deny}\n"
+                f"이번 세션 한시 허용:\n{session}\n"
+                "추가: /permissions allow <규칙> · /permissions deny <규칙>  "
+                "(예: `Bash(npm run test*)`, `Write(src/**)`) — config.yaml에 영구 저장됩니다."
+            )
+        action = parts[1].strip().lower()
+        pattern = parts[2].strip() if len(parts) > 2 else ""
+        if action not in {"allow", "deny"} or not pattern:
+            return "사용법: /permissions allow <규칙> | /permissions deny <규칙>"
+        rules = approval.allow if action == "allow" else approval.deny
+        if pattern in rules:
+            return f"이미 {action} 목록에 있는 규칙입니다: {pattern}"
+        rules.append(pattern)  # in-place: this turn's ApprovalManager already built, next turn picks it up
+        try:
+            path = self._persist("approval", {"allow": approval.allow, "deny": approval.deny})
+        except Exception as exc:  # noqa: BLE001
+            return f"규칙을 추가했지만 설정 파일 저장에 실패했습니다: {exc}"
+        return f"{action} 규칙을 추가하고 저장했습니다 ({path}): {pattern}"
 
     def _tools(self, command: str) -> str:
         detailed = "desc" in command.split()[1:]

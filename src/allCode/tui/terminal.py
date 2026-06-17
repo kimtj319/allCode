@@ -434,6 +434,7 @@ class TerminalSession:
             "doctor": "진단",
             "tools": "도구",
             "approval": "승인 모드",
+            "permissions": "권한",
         }
         return titles.get(name, f"/{name}" if name else "명령")
 
