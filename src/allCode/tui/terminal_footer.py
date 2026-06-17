@@ -7,6 +7,11 @@ from typing import Literal
 
 from allCode.tui.terminal_frame import StyledLine
 
+# Leading glyph for the persistent context/info line (model · workspace · …) so
+# it reads as an intentional status row instead of starting flush against text.
+# Rendered dim like the rest of the line.
+_INFO_GLYPH = "✦"
+
 FooterMode = Literal[
     "composer_empty",
     "composer_has_draft",
@@ -40,7 +45,8 @@ class TerminalFooterRenderer:
     def render(self, props: FooterProps, *, width: int) -> list[StyledLine]:
         line = self._line_for_mode(props)
         if line is None:
-            line = self._context_line(props)
+            context = self._context_line(props)
+            line = f"{_INFO_GLYPH} {context}" if context is not None else None
         if line is None:
             return []
         return [StyledLine(text=self._clip(line, width), style="dim")]
