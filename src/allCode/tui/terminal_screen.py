@@ -14,12 +14,42 @@ from allCode.tui.terminal_width import clip_display_width, display_width
 class TerminalTheme:
     prompt_fg: tuple[int, int, int] = (247, 247, 247)
     dim_fg: tuple[int, int, int] = (138, 138, 138)
+    # Accent for panel borders/titles and the rule under prompts.
+    accent: str = "#61afef"
+    title_fg: str = "#d7e3ff"
+    # Unified diff palette (Rich style fragments) — high-contrast text on a
+    # saturated wash so additions/removals are unmistakable.
+    diff_add_fg: str = "#86efac"
+    diff_add_bg: str = "#0c3a22"
+    diff_del_fg: str = "#ff9aa2"
+    diff_del_bg: str = "#4a161c"
+    diff_hunk_fg: str = "#a6c8ff"
+    diff_hunk_bg: str = "#1d2740"
+    diff_ctx_fg: str = "#c9d1d9"
+    diff_ctx_bg: str = "#15171c"
 
     @classmethod
     def named(cls, name: str) -> "TerminalTheme":
-        """Return a named preset: 'light' for light terminals, else the dark default."""
+        """Return a named preset: 'light' for light terminals, else the dark default.
+
+        The two presets differ across everything allCode colors itself — the
+        composer prompt, panel borders/titles, and the diff palette — so
+        switching themes is visibly different, not just a prompt tint."""
         if (name or "").strip().lower() == "light":
-            return cls(prompt_fg=(20, 20, 20), dim_fg=(110, 110, 110))
+            return cls(
+                prompt_fg=(20, 20, 20),
+                dim_fg=(110, 110, 110),
+                accent="#1f6feb",
+                title_fg="#0a3069",
+                diff_add_fg="#116329",
+                diff_add_bg="#ccf2d8",
+                diff_del_fg="#a40e26",
+                diff_del_bg="#ffd2d0",
+                diff_hunk_fg="#0a3069",
+                diff_hunk_bg="#dbe7ff",
+                diff_ctx_fg="#24292f",
+                diff_ctx_bg="#eef0f2",
+            )
         return cls()
 
 

@@ -386,13 +386,13 @@ class TerminalSession:
         if stripped == "/cost":
             # Session token accounting lives here (collected from round metrics),
             # so answer /cost directly rather than via the slash backend.
-            self._print_assistant_block(self._cost_summary())
+            self._render_command_panel("비용", self._cost_summary())
             return None
         if stripped == "/context":
-            self._print_assistant_block(self._context_summary())
+            self._render_command_panel("컨텍스트", self._context_summary())
             return None
         if stripped.split(maxsplit=1)[0] == "/theme":
-            self._print_assistant_block(self._switch_theme(stripped))
+            self._render_command_panel("테마", self._switch_theme(stripped))
             return None
         if stripped.split(maxsplit=1)[0] == "/status":
             self._render_status(stripped)
@@ -402,13 +402,37 @@ class TerminalSession:
             self._clear_screen()
         if result.message:
             self.answer_renderer.reset()
-            self._print_assistant_block(result.message)
+            # Present informational command output in the same polished framed
+            # panel as /status; a command that expands into a turn prompt is left
+            # to render as a normal turn below.
+            if result.submit_prompt:
+                self._print_assistant_block(result.message)
+            else:
+                self._render_command_panel(self._command_title(stripped), result.message)
         if result.exit_requested:
             return 0
         if result.submit_prompt:
             # A custom command expands to a prompt that runs as a normal turn.
             self._run_agent_prompt(result.submit_prompt)
         return None
+
+    @staticmethod
+    def _command_title(command: str) -> str:
+        """A friendly panel title for a slash command (falls back to the name)."""
+        name = command.strip().split(maxsplit=1)[0].lstrip("/").lower()
+        titles = {
+            "help": "도움말",
+            "agents": "에이전트",
+            "resume": "세션 재개",
+            "memory": "메모리",
+            "compact": "대화 압축",
+            "init": "초기화",
+            "mcp": "MCP",
+            "model": "모델",
+            "config": "설정",
+            "clear": "화면 정리",
+        }
+        return titles.get(name, f"/{name}" if name else "명령")
 
     def _print_header(self) -> None:
         # No trailing blank line here: the composer draws its own one-line
@@ -459,17 +483,18 @@ class TerminalSession:
         if not diff.strip():
             return
         self._prepare_body_output()
+        theme = self.screen.theme
         lines = diff.splitlines()
         width = max(40, self.screen.width)
         for raw in lines[:max_lines]:
             if raw.startswith("@@"):
-                style = "bold cyan on #1c2230"
+                style = f"bold {theme.diff_hunk_fg} on {theme.diff_hunk_bg}"
             elif raw.startswith("+"):
-                style = "green on #11281b"
+                style = f"bold {theme.diff_add_fg} on {theme.diff_add_bg}"
             elif raw.startswith("-"):
-                style = "red on #2b1418"
+                style = f"bold {theme.diff_del_fg} on {theme.diff_del_bg}"
             else:
-                style = "grey70 on #14171c"
+                style = f"{theme.diff_ctx_fg} on {theme.diff_ctx_bg}"
             text = Text("  ")
             # Pad the line to the screen width so the background wash spans the
             # whole row rather than just the characters.
@@ -534,22 +559,41 @@ class TerminalSession:
             Group(*body),
             title="상태",
             title_align="left",
-            border_style="#61afef",
+            border_style=self.screen.theme.accent,
             padding=(1, 2),
         )
+        self._print_panel(panel)
+
+    def _print_panel(self, panel: Panel) -> None:
+        """Render a Rich Panel through a width-pinned console so the polished
+        framed layout is preserved (the default console falls back to 80 cols
+        for non-tty/captured output and would crop wider content). Writes flow
+        through the body-counting proxy so the composer stays positioned."""
         self._prepare_body_output()
-        # Render through a console pinned to the real screen width: the default
-        # console falls back to 80 cols for non-tty/captured output and would crop
-        # the wider multi-column layout. Writes through the body-counting proxy.
-        status_console = Console(
+        panel_console = Console(
             file=self.screen.stdout,
             force_terminal=self.screen.interactive,
             color_system="truecolor" if self.screen.interactive else None,
             width=self.screen.width,
             highlight=False,
         )
-        status_console.print(panel)
+        panel_console.print(panel)
         self.console.print()
+
+    def _render_command_panel(self, title: str, message: str) -> None:
+        """Render a slash command's output in the same polished framed style as
+        /status: the message (markdown) inside an accent-bordered panel."""
+        if not message.strip():
+            return
+        theme = self.screen.theme
+        panel = Panel(
+            Markdown(message),
+            title=title,
+            title_align="left",
+            border_style=theme.accent,
+            padding=(1, 2),
+        )
+        self._print_panel(panel)
 
     @staticmethod
     def _gauge_bar(used: int, maximum: int, *, width: int = 30) -> Text:
