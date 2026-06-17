@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pydantic import Field
+
 from allCode.core.models import CoreModel
 
 
@@ -9,6 +11,10 @@ class CommandSpec(CoreModel):
     name: str
     description: str
     usage: str
+    # Selectable sub-option tokens for commands that take an argument (e.g.
+    # /theme -> ["dark", "light"]). Offered as arrow-navigable completions once
+    # the command name and a space have been typed.
+    options: list[str] = Field(default_factory=list)
 
 
 class CommandRegistry:
@@ -28,6 +34,9 @@ class CommandRegistry:
     def all(self) -> list[CommandSpec]:
         return list(self._commands.values())
 
+    def get(self, name: str) -> CommandSpec | None:
+        return self._commands.get(name.strip().lower())
+
     def filter(self, query: str) -> list[CommandSpec]:
         normalized = query.lstrip("/").strip().lower()
         if not normalized:
@@ -45,25 +54,23 @@ def default_commands() -> list[CommandSpec]:
         CommandSpec(name="/memory add", description="Add project memory.", usage="/memory add <text>"),
         CommandSpec(name="/memory refresh", description="Reload active memory.", usage="/memory refresh"),
         CommandSpec(name="/tools", description="Show available tools.", usage="/tools"),
-        CommandSpec(name="/model", description="Show or change the model (writes .allCode/config.yaml).", usage="/model [<name>|impl <name>|base <url>]"),
-        CommandSpec(name="/approval", description="Show or set approval mode: auto (no prompts) or ask.", usage="/approval [auto|ask]"),
+        CommandSpec(name="/model", description="Show or change the model (writes .allCode/config.yaml).", usage="/model [<name>|impl <name>|base <url>]", options=["impl", "base"]),
+        CommandSpec(name="/approval", description="Show or set approval mode: auto (no prompts) or ask.", usage="/approval [auto|ask]", options=["auto", "ask"]),
         CommandSpec(name="/config", description="Show active runtime configuration.", usage="/config"),
-        CommandSpec(name="/init", description="Generate an AGENTS.md draft from the project.", usage="/init [force]"),
+        CommandSpec(name="/init", description="Generate an AGENTS.md draft from the project.", usage="/init [force]", options=["force"]),
         CommandSpec(name="/doctor", description="Diagnose config, API key, and setup.", usage="/doctor"),
         CommandSpec(name="/export", description="Save the conversation transcript to a file.", usage="/export [path]"),
-        CommandSpec(name="/context", description="Show context-window usage.", usage="/context"),
-        CommandSpec(name="/theme", description="Switch the color theme (dark|light).", usage="/theme [dark|light]"),
+        CommandSpec(name="/theme", description="Switch the color theme (dark|light).", usage="/theme [dark|light]", options=["dark", "light"]),
         CommandSpec(name="/pr", description="Commit, push, and open a GitHub PR (gh).", usage="/pr [title]"),
         CommandSpec(name="/agents", description="List defined sub-agents (.allCode/agents).", usage="/agents"),
-        CommandSpec(name="/status last", description="Show latest session diagnostics.", usage="/status last"),
-        CommandSpec(name="/debug last", description="Show raw latest session diagnostics.", usage="/debug last"),
+        CommandSpec(name="/status", description="Show usage gauges and session status (append 'last' for diagnostics).", usage="/status [last]", options=["last"]),
         CommandSpec(name="/stop", description="Cancel the active turn.", usage="/stop"),
         CommandSpec(name="/exit", description="Exit allCode.", usage="/exit"),
         CommandSpec(name="/undo", description="Undo allCode's last auto-commit.", usage="/undo"),
         CommandSpec(name="/rewind", description="Revert the last turn's file changes (checkpoint).", usage="/rewind"),
         CommandSpec(name="/review", description="Show uncommitted changes (git diff).", usage="/review"),
         CommandSpec(name="/compact", description="Summarize and compact the conversation context.", usage="/compact"),
-        CommandSpec(name="/cost", description="Show this session's token usage.", usage="/cost"),
+        CommandSpec(name="/cost", description="Show this session's token and context-window usage.", usage="/cost"),
         CommandSpec(name="/clear", description="Clear transcript view.", usage="/clear"),
         CommandSpec(name="/help", description="Show slash commands.", usage="/help"),
     ]

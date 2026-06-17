@@ -319,6 +319,15 @@ class TerminalInputEditor:
         text = area.text
         if "\n" in text or not text.startswith("/"):
             return None
+        # When a command name + space is typed, preview its selectable sub-options
+        # (e.g. /theme -> dark|light) so the user knows ↑/↓ will pick one.
+        option_state = self.completer.slash_option_completion(text, len(text))
+        if option_state is not None:
+            items = [
+                OverlayItem(label=candidate.label, description=candidate.description)
+                for candidate in option_state.candidates[:6]
+            ]
+            return OverlayView(kind="completion", items=items)
         query = text.strip().lower()
         commands = self.completer.registry.all()
         matches = [command for command in commands if command.name.lower().startswith(query)]

@@ -382,18 +382,17 @@ class TerminalSession:
     def _run_slash_command(self, command: str) -> int | None:
         self._print_user_prompt(command)
         stripped = command.strip()
-        if stripped == "/cost":
-            # Session token accounting lives here (collected from round metrics),
-            # so answer /cost directly rather than via the slash backend.
-            self._render_command_panel("비용", self._cost_summary())
-            return None
-        if stripped == "/context":
-            self._render_command_panel("컨텍스트", self._context_summary())
+        # /cost and /context are one unified usage view (session tokens +
+        # context window), collected here from round metrics.
+        if stripped in {"/cost", "/context"}:
+            self._render_command_panel("사용량", self._usage_summary())
             return None
         if stripped.split(maxsplit=1)[0] == "/theme":
             self._render_command_panel("테마", self._switch_theme(stripped))
             return None
-        if stripped.split(maxsplit=1)[0] == "/status":
+        # Bare /status shows the usage/status panel; "/status last" (and other
+        # args) fall through to the diagnostics backend.
+        if stripped == "/status":
             self._render_status(stripped)
             return None
         result = asyncio.run(self.slash_handler.handle(command))
@@ -430,6 +429,10 @@ class TerminalSession:
             "model": "모델",
             "config": "설정",
             "clear": "화면 정리",
+            "status": "상태",
+            "doctor": "진단",
+            "tools": "도구",
+            "approval": "승인 모드",
         }
         return titles.get(name, f"/{name}" if name else "명령")
 
@@ -503,29 +506,20 @@ class TerminalSession:
             self.console.print(Text(f"  ... {len(lines) - max_lines} more diff lines ...", style="dim"))
         self._render_running_composer()
 
-    def _cost_summary(self) -> str:
+    def _usage_summary(self) -> str:
+        """Unified /cost · /context view: this session's token spend and the
+        current context-window size."""
+
         def fmt(value: int) -> str:
             return f"{value / 1000:.1f}k" if value >= 1000 else str(value)
 
         if not self._session_output_tokens and not self._last_context_tokens:
-            return "아직 이 세션의 토큰 사용량 정보가 없습니다."
+            return "아직 이 세션의 토큰 사용량 정보가 없습니다. 한 번 질문한 뒤 다시 확인하세요."
         return (
-            f"이번 세션 토큰 사용량\n"
+            "이번 세션 토큰·컨텍스트 사용 현황\n"
             f"- 누적 생성(출력) 토큰: {fmt(self._session_output_tokens)}\n"
-            f"- 현재 컨텍스트 크기: {fmt(self._last_context_tokens)} 토큰"
-        )
-
-    def _context_summary(self) -> str:
-        def fmt(value: int) -> str:
-            return f"{value / 1000:.1f}k" if value >= 1000 else str(value)
-
-        if not self._last_context_tokens:
-            return "아직 컨텍스트 정보가 없습니다. 한 번 질문한 뒤 다시 확인하세요."
-        return (
-            "컨텍스트 윈도 사용 현황\n"
             f"- 최근 요청 컨텍스트: {fmt(self._last_context_tokens)} 토큰\n"
-            f"- 누적 생성(출력) 토큰: {fmt(self._session_output_tokens)}\n"
-            "- 줄이려면 /compact 로 대화를 압축하세요."
+            "- 컨텍스트를 줄이려면 `/compact` 로 대화를 압축하세요."
         )
 
     def _render_status(self, command: str) -> None:

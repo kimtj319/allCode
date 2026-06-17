@@ -56,6 +56,41 @@ class TerminalCompleter:
         before = text[:cursor]
         if "\n" in before or not before.startswith("/"):
             return None
+        return self.slash_option_completion(text, cursor) or self._slash_name_completion(text, cursor)
+
+    def slash_option_completion(self, text: str, cursor: int) -> CompletionState | None:
+        """Offer a command's sub-options (e.g. ``/theme dark|light``) once the
+        command name and a space have been typed, navigable with ↑/↓. The whole
+        line is replaced with ``/<cmd> <option>``."""
+        before = text[:cursor]
+        if "\n" in before or " " not in before or not before.startswith("/"):
+            return None
+        head, _, arg = before.partition(" ")
+        command = self.registry.get(head)
+        if command is None or not command.options:
+            return None
+        arg_prefix = arg.strip().lower()
+        # Only the first argument token is completed; once the user has typed a
+        # value plus another space, step aside.
+        if " " in arg.strip():
+            return None
+        options = [option for option in command.options if option.lower().startswith(arg_prefix)]
+        if not options:
+            return None
+        candidates = [
+            CompletionCandidate(
+                replacement=f"{command.name} {option}",
+                label=f"{command.name} {option}",
+                description=command.description,
+            )
+            for option in options
+        ]
+        return CompletionState(start=0, end=cursor, candidates=candidates)
+
+    def _slash_name_completion(self, text: str, cursor: int) -> CompletionState | None:
+        before = text[:cursor]
+        if "\n" in before or not before.startswith("/"):
+            return None
         query = before.lower()
         commands = self.registry.all()
         matches = [command for command in commands if command.name.lower().startswith(query)]
