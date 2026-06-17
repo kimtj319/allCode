@@ -42,6 +42,30 @@ def test_prepare_body_output_clears_composer_and_flows_from_top_when_empty(monke
     assert output.endswith("\x1b[1;1H")
 
 
+def test_exit_lands_just_below_body_not_terminal_bottom(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "allCode.tui.terminal_screen.shutil.get_terminal_size",
+        lambda fallback=None: os.terminal_size((80, 24)),
+    )
+    stream = TTYBuffer()
+    screen = TerminalScreen(stdin=stream, stdout=stream)
+    screen.set_reserved_rows(6)
+    screen.enter()
+    screen._advance_body_rows(2)  # short session: two lines of body output
+    landing = screen._composer_start()
+
+    stream.seek(0)
+    stream.truncate(0)
+    screen.exit()
+
+    output = stream.getvalue()
+    # The FINAL cursor position lands right below the body (so the resume hint
+    # follows immediately), not at the terminal's bottom row which left a gap.
+    # (Row 24 still appears from the clear loop; what matters is the last move.)
+    assert landing < 24
+    assert output.endswith(f"\x1b[{landing};1H")
+
+
 def test_prepare_body_output_clamps_to_body_bottom_once_filled(monkeypatch) -> None:
     monkeypatch.setattr(
         "allCode.tui.terminal_screen.shutil.get_terminal_size",

@@ -140,8 +140,13 @@ class TerminalScreen:
         if not self.interactive or not self._entered:
             return
         self._raw_stdout.write("\x1b[r")
+        # Land the cursor right below the last body line (where the composer was)
+        # rather than the terminal's bottom row. Jumping to the bottom left a big
+        # gap of blank lines between short output and anything printed after exit
+        # (e.g. the resume hint).
+        landing = self._composer_start()
         self._clear_prompt_area()
-        self._raw_stdout.write(f"\x1b[{self.height};1H")
+        self._raw_stdout.write(f"\x1b[{landing};1H")
         self._raw_stdout.flush()
         self._entered = False
 
