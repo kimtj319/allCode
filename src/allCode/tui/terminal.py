@@ -510,10 +510,10 @@ class TerminalSession:
         pairs = metric_pairs_from_summary(backend)
 
         body: list = [self._gauge_renderable(), Text()]
-        model_rows = self._model_usage_renderable()
-        if model_rows is not None:
-            body.append(Text("모델별 사용량", style="bold"))
-            body.append(model_rows)
+        model_gauges = self._model_gauges_renderable()
+        if model_gauges is not None:
+            body.append(Text("모델별 토큰 사용량", style="bold"))
+            body.append(model_gauges)
             body.append(Text())
         if pairs:
             body.append(Text("세션 진단", style="bold"))
@@ -542,37 +542,51 @@ class TerminalSession:
         status_console.print(panel)
         self.console.print()
 
+    @staticmethod
+    def _gauge_bar(used: int, maximum: int, *, width: int = 30) -> Text:
+        """A single colored fill/empty bar for `used` against `maximum`."""
+        ratio = gauge_fraction(used, maximum)
+        filled = min(width, max(1 if used > 0 else 0, round(ratio * width)))
+        color = "green" if ratio < 0.75 else "yellow" if ratio < 1.0 else "red"
+        bar = Text()
+        bar.append("█" * filled, style=color)
+        bar.append("░" * (width - filled), style="grey37")
+        return bar
+
     def _gauge_renderable(self) -> Text:
         used = self._usage.today_total()
         maximum = DAILY_TOKEN_BUDGET
         ratio = gauge_fraction(used, maximum)
-        width = 30
-        filled = min(width, max(1 if used > 0 else 0, round(ratio * width)))
-        color = "green" if ratio < 0.75 else "yellow" if ratio < 1.0 else "red"
         line = Text()
         line.append("오늘 토큰 사용량 ", style="bold")
         line.append(f"(하루 추정치 {fmt_tokens(maximum)})\n", style="dim")
-        line.append("█" * filled, style=color)
-        line.append("░" * (width - filled), style="grey37")
+        line.append_text(self._gauge_bar(used, maximum))
         line.append(f"  {ratio * 100:.0f}%  ", style="bold")
         line.append(f"{fmt_tokens(used)} / {fmt_tokens(maximum)} 토큰", style="dim")
         return line
 
-    def _model_usage_renderable(self) -> Table | None:
-        """Per-model token usage for today, aggregated from the models the agent
-        actually ran (e.g. the ultra routing model vs the implementation/max
-        editor model). Returns None until at least one model has reported usage."""
+    def _model_gauges_renderable(self) -> Table | None:
+        """One gauge bar per model for today, aggregated from the models the
+        agent actually ran (e.g. the ultra routing model vs the implementation/
+        max editor model). Each bar fills against the same daily budget so the
+        models are directly comparable. Returns None until a model reports usage."""
         by_model = self._usage.today_by_model()
         if not by_model:
             return None
-        total = self._usage.today_total() or sum(by_model.values())
+        maximum = DAILY_TOKEN_BUDGET
         table = Table(show_header=False, box=None, pad_edge=False, padding=(0, 2, 0, 0))
-        table.add_column(style="dim", no_wrap=True)  # model name
+        table.add_column(style="bold", no_wrap=True)  # model name
+        table.add_column(no_wrap=True)  # bar
+        table.add_column(justify="right", style="bold", no_wrap=True)  # percent
         table.add_column(justify="right", style="cyan", no_wrap=True)  # tokens
-        table.add_column(justify="right", style="grey62", no_wrap=True)  # share
         for name, tokens in by_model.items():
-            share = (tokens / total * 100) if total > 0 else 0
-            table.add_row(name, f"{fmt_tokens(tokens)} 토큰", f"{share:.0f}%")
+            ratio = gauge_fraction(tokens, maximum)
+            table.add_row(
+                name.split("/")[-1],
+                self._gauge_bar(tokens, maximum),
+                f"{ratio * 100:.0f}%",
+                f"{fmt_tokens(tokens)} 토큰",
+            )
         return table
 
     def _metric_table(self, pairs: list[tuple[str, str]]) -> Table:
