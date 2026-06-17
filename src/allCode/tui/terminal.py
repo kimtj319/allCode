@@ -27,7 +27,6 @@ from allCode.tui.status_view import (
     columns_for_width,
     fmt_tokens,
     gauge_fraction,
-    metric_pairs_from_summary,
 )
 from allCode.tui.renderers import EventRenderer
 from allCode.tui.slash_commands import SlashCommandHandler
@@ -530,16 +529,10 @@ class TerminalSession:
         )
 
     def _render_status(self, command: str) -> None:
-        """Render /status as a polished panel: a colored token-usage gauge plus
-        the session diagnostics in an aligned multi-column table. Drawn with Rich
-        (not the markdown renderer) so alignment is preserved. Renders even on
-        first launch (0% gauge)."""
-        try:
-            backend = asyncio.run(self.slash_handler.handle(command)).message
-        except Exception:  # noqa: BLE001 - the gauge must still render
-            backend = ""
-        pairs = metric_pairs_from_summary(backend)
-
+        """Render /status as a polished panel: a colored daily token-usage gauge,
+        per-model usage bars, and a status-analysis table. Drawn with Rich (not the
+        markdown renderer) so alignment is preserved. Renders even on first launch
+        (0% gauge)."""
         body: list = [self._gauge_renderable(), Text()]
         model_gauges = self._model_gauges_renderable()
         if model_gauges is not None:
@@ -548,12 +541,6 @@ class TerminalSession:
             body.append(Text())
         body.append(Text("상태 분석", style="bold"))
         body.append(self._metric_table(self._status_analysis_pairs()))
-        body.append(Text())
-        if pairs:
-            body.append(Text("세션 진단", style="bold"))
-            body.append(self._metric_table(pairs))
-        else:
-            body.append(Text(backend.strip() or "아직 세션 진단 정보가 없습니다.", style="dim"))
 
         panel = Panel(
             Group(*body),

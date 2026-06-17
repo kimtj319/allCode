@@ -82,10 +82,23 @@ class RoundToolHandler:
             round_index,
         )
         if validated_complete(routing, evidence):
-            return LoopOutcome(
-                status="success",
-                answer=evidence_answer(turn_input.user_prompt, evidence, turn_input.workspace.root),
+            # Give the model one tool-free round to write the actual final
+            # answer (e.g. explaining *why* validation had failed, or the summary
+            # the user asked for) before falling back to the deterministic
+            # evidence template — otherwise a validation-passing turn always
+            # returns the terse "작업을 완료했습니다 …" stub and never addresses a
+            # request to explain or summarize. Mirrors the mutation_complete path.
+            if runtime.final_answer_after_change_requested:
+                return LoopOutcome(
+                    status="success",
+                    answer=evidence_answer(turn_input.user_prompt, evidence, turn_input.workspace.root),
+                )
+            runtime.final_answer_after_change_requested = True
+            runtime.messages = self._runner._prompt_builder.final_answer_request(
+                runtime.messages,
+                response_language=response_language(turn_input.user_prompt),
             )
+            return None
         if mutation_complete(routing, evidence):
             if runtime.final_answer_after_change_requested:
                 return LoopOutcome(

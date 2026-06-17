@@ -213,10 +213,10 @@ class RoundRunner:
             suppress_tools_for_final_answer = (
                 runtime.inspect_final_answer_requested
                 or runtime.external_final_answer_requested
-                or (
-                    runtime.final_answer_after_change_requested
-                    and mutation_complete(routing, completion_evidence)
-                )
+                # Once a final answer has been requested after the change is done
+                # (mutation- or validation-complete), suppress tools so the model
+                # writes the narrative answer instead of calling another tool.
+                or runtime.final_answer_after_change_requested
             )
             allowed_only = None
             if suppress_tools_for_final_answer:
