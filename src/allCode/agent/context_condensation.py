@@ -15,6 +15,10 @@ MAX_SUMMARY_CHARS = 6000
 MAX_RECENT_MESSAGE_CHARS = 1800
 DEFAULT_RECENT_MESSAGES = 10
 
+# Strips <think>…</think> reasoning blocks; compiled once since _clean_content
+# runs several times per message during every round's context condensation.
+_THINK_BLOCK = re.compile(r"(?is)<think\b[^>]*>.*?</think>")
+
 
 class CondensedContext(CoreModel):
     preserved_constraints: list[str] = Field(default_factory=list)
@@ -235,7 +239,7 @@ def _bounded_context(context: CondensedContext) -> CondensedContext:
 
 
 def _clean_content(text: str) -> str:
-    stripped_blocks = re.sub(r"(?is)<think\b[^>]*>.*?</think>", "", str(text or ""))
+    stripped_blocks = _THINK_BLOCK.sub("", str(text or ""))
     clean_lines: list[str] = []
     for line in stripped_blocks.splitlines():
         lowered = line.strip().lower()

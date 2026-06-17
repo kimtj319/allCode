@@ -78,11 +78,12 @@ def representative_reads_with_metadata(
         if len(selected) >= limit:
             break
     selected = selected[:limit]
+    entry_by_path = {entry.path: entry for entry in entries}  # O(1) lookup vs per-path scan
     reasons = [
         {
             "path": path,
             "reasons": _representative_reasons(
-                _entry_by_path(entries, path),
+                entry_by_path.get(path),
                 scores=scores,
                 query_tokens=query_tokens,
             ),
@@ -242,13 +243,6 @@ def _representative_reasons(
     if query_relevance_matches(entry, query_tokens):
         reasons.append("query relevance")
     return reasons or ["source file candidate"]
-
-
-def _entry_by_path(entries: list[RepoMapEntry], path: str) -> RepoMapEntry | None:
-    for entry in entries:
-        if entry.path == path:
-            return entry
-    return None
 
 
 def _exported_symbol_count(entry: RepoMapEntry) -> int:

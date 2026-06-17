@@ -125,13 +125,11 @@ class ContextBuilder:
 
     def manifest_recent_paths(self) -> list[str]:
         paths: list[str] = []
-        for manifest in reversed(self._project_manifests):
+        seen: set[str] = set()  # O(1) dedup instead of scanning the growing list
+        for manifest in (*reversed(self._project_manifests), *reversed(self._document_manifests)):
             for target in manifest.candidate_targets():
-                if target and target not in paths:
-                    paths.append(target)
-        for manifest in reversed(self._document_manifests):
-            for target in manifest.candidate_targets():
-                if target and target not in paths:
+                if target and target not in seen:
+                    seen.add(target)
                     paths.append(target)
         return paths
 

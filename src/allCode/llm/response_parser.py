@@ -17,6 +17,7 @@ _CHANNEL_TOKEN = re.compile(
     re.IGNORECASE,
 )
 _CHANNEL_LABEL_LINE = re.compile(r"(?im)^[ \t]*(?:thought|analysis|commentary|final)[ \t]*$")
+_CHANNEL_LABEL_PREFIX = re.compile(r"^\s*(?:thought|analysis|commentary)\b[:\s]*", re.IGNORECASE)
 
 
 def sanitize_channel_markup(text: str) -> str:
@@ -25,7 +26,7 @@ def sanitize_channel_markup(text: str) -> str:
         return text
     cleaned = _CHANNEL_TOKEN.sub("", text)
     cleaned = _CHANNEL_LABEL_LINE.sub("", cleaned)
-    cleaned = re.sub(r"^\s*(?:thought|analysis|commentary)\b[:\s]*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = _CHANNEL_LABEL_PREFIX.sub("", cleaned)
     cleaned = cleaned.strip("\n")
     return cleaned or text
 

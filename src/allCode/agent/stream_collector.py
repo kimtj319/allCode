@@ -105,7 +105,8 @@ class ModelStreamCollector:
                     )
                 )
             elif self._show_reasoning and event.kind == "text_delta":
-                reasoning = str((event.metadata or {}).get("reasoning_delta") or "")
+                metadata = event.metadata or {}
+                reasoning = str(metadata.get("reasoning_delta") or "")
                 if reasoning:
                     await self._event_bus.publish(
                         ModelReasoningDelta(

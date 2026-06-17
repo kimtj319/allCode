@@ -95,9 +95,38 @@ class ConversationStore:
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return [p.stem for p in files]
 
+    def _scan_meta(self, path: Path) -> tuple[str, int]:
+        """Stream a session file for (title, user-turn count) without building the
+        full exchange list. The title comes from the first non-empty user line and
+        further user lines are only counted, so a long conversation is not fully
+        materialized just to populate the picker."""
+        title = ""
+        user_turns = 0
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    if str(record.get("role", "")) != "user":
+                        continue
+                    text = str(record.get("text", ""))
+                    if not text:
+                        continue
+                    user_turns += 1
+                    if not title:
+                        title = _derive_title([("user", text)])
+        except OSError:
+            return ("(내용 없음)", 0)
+        return (title or "(내용 없음)", user_turns)
+
     def session_title(self, session_id: str) -> str:
         """A short title for a session, derived from its work history."""
-        return _derive_title(self.load(session_id))
+        return self._scan_meta(self._path(session_id))[0]
 
     def list_sessions_with_meta(self) -> list[SessionEntry]:
         """Sessions (newest first) with a derived title and a registered name,
@@ -109,14 +138,13 @@ class ConversationStore:
         for path in self.dir.glob("*.jsonl"):
             if not path.is_file():
                 continue
-            session_id = path.stem
-            exchanges = self.load(session_id)
+            title, turns = self._scan_meta(path)
             entries.append(
                 SessionEntry(
-                    session_id=session_id,
-                    name=id_to_name.get(session_id, ""),
-                    title=_derive_title(exchanges),
-                    turns=sum(1 for role, _ in exchanges if role == "user"),
+                    session_id=path.stem,
+                    name=id_to_name.get(path.stem, ""),
+                    title=title,
+                    turns=turns,
                     mtime=path.stat().st_mtime,
                 )
             )
