@@ -40,6 +40,8 @@ class RuntimeStatusCommandService:
             return self._model(args)
         if root == "/approval":
             return self._approval(args)
+        if root == "/thinking":
+            return self._thinking(args)
         if root == "/permissions":
             return self._permissions(normalized)
         if root == "/config":
@@ -166,6 +168,27 @@ class RuntimeStatusCommandService:
             return f"승인 모드를 '{mode}'로 바꿨지만 설정 파일 저장에 실패했습니다: {exc}"
         note = "권한 요청 없이 모두 진행합니다." if mode == "auto" else "변경/셸 실행 전 승인을 요청합니다."
         return f"승인 모드를 '{mode}'로 변경하고 저장했습니다 ({path}). {note}"
+
+    def _thinking(self, args: list[str]) -> str:
+        current = self.config.ui.show_thinking
+        if not args:
+            state = "on" if current else "off"
+            return (
+                f"추론 표시(/thinking): {state}\n"
+                "- /thinking on  : 모델의 사고 과정을 흐리게 함께 표시\n"
+                "- /thinking off : 사고 과정을 숨김(기본값)"
+            )
+        choice = args[0].strip().lower()
+        if choice not in {"on", "off"}:
+            return "사용법: /thinking on | /thinking off"
+        value = choice == "on"
+        self.config.ui.show_thinking = value  # in-place: next turn picks it up
+        try:
+            path = self._persist("ui", {"show_thinking": value})
+        except Exception as exc:  # noqa: BLE001
+            return f"추론 표시를 '{choice}'로 바꿨지만 설정 파일 저장에 실패했습니다: {exc}"
+        note = "이제 모델의 사고 과정을 흐리게 표시합니다." if value else "사고 과정을 숨깁니다."
+        return f"추론 표시를 '{choice}'로 변경하고 저장했습니다 ({path}). {note} 다음 턴부터 적용됩니다."
 
     def _permissions(self, command: str) -> str:
         """Show or persist permission rules (allow/deny) to .allCode/config.yaml.

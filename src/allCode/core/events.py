@@ -97,6 +97,12 @@ class ModelTextDelta(AgentEvent):
     delta: str
 
 
+class ModelReasoningDelta(AgentEvent):
+    event_type: Literal["model_reasoning_delta"] = "model_reasoning_delta"
+    severity: EventSeverity = "user_visible"
+    delta: str
+
+
 class ToolCallRequested(AgentEvent):
     event_type: Literal["tool_call_requested"] = "tool_call_requested"
     tool_call: ToolCall

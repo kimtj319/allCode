@@ -223,6 +223,12 @@ class GitConfig(StrictConfigModel):
     auto_commit: bool = False
 
 
+class UIConfig(StrictConfigModel):
+    # When true, the model's reasoning/thought channel is streamed to the UI
+    # (dimmed) instead of being discarded. Toggle at runtime with /thinking.
+    show_thinking: bool = False
+
+
 class AppConfig(StrictConfigModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
@@ -232,6 +238,7 @@ class AppConfig(StrictConfigModel):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     git: GitConfig = Field(default_factory=GitConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
 
 
 class ConfigFileSource(StrictConfigModel):

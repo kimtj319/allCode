@@ -166,6 +166,7 @@ class TerminalSession:
         self._stream_started = False
         self._stream_buffer = ""
         self._stream_markdown_buffer = MarkdownStreamBuffer()
+        self._reasoning_buffer = ""
         self._final_answer_rendered = False
         self._running_started_at: float | None = None
         self._spinner_index = 0
@@ -276,6 +277,9 @@ class TerminalSession:
         if event.event_type == "approval_requested":
             self._print_status(messages.APPROVAL_STATUS)
             return
+        if event.event_type == "model_reasoning_delta":
+            self._print_reasoning_chunk(getattr(event, "delta", ""))
+            return
         if event.event_type == "routing_decided":
             self._turn_plan = TurnPlan.for_route(str((event.data or {}).get("kind", "")))
             # fall through: routing_decided has no transcript output of its own.
@@ -327,6 +331,7 @@ class TerminalSession:
         self._stream_started = False
         self._stream_buffer = ""
         self._stream_markdown_buffer.reset()
+        self._reasoning_buffer = ""
         self.answer_renderer.reset()
         self._final_answer_rendered = False
         self._last_status = ""
@@ -518,6 +523,19 @@ class TerminalSession:
     def _print_assistant_stream_chunk(self, text: str) -> None:
         self._prepare_body_output()
         self.answer_renderer.render(sanitize_channel_markup(text))
+
+    def _print_reasoning_chunk(self, text: str) -> None:
+        """Stream the model's reasoning/thought channel dimmed (when /thinking is
+        on). Buffered to whole lines, each prefixed with 💭 so it reads as a
+        thinking aside distinct from the answer."""
+        if not text:
+            return
+        self._reasoning_buffer += text
+        while "\n" in self._reasoning_buffer:
+            line, self._reasoning_buffer = self._reasoning_buffer.split("\n", 1)
+            self._prepare_body_output()
+            self.console.print(f"[dim]💭 {sanitize_channel_markup(line)}[/]")
+            self._render_running_composer()
 
     def _print_rendered_block(self, role: str, text: str) -> None:
         if role == "error":

@@ -7,7 +7,13 @@ from collections.abc import Sequence
 
 from allCode.agent.recovery import RecoveryTracker
 from allCode.core.event_bus import EventBus
-from allCode.core.events import ModelStreamHeartbeat, ModelStreamTimedOut, ModelTextDelta, RecoveryStateUpdated
+from allCode.core.events import (
+    ModelReasoningDelta,
+    ModelStreamHeartbeat,
+    ModelStreamTimedOut,
+    ModelTextDelta,
+    RecoveryStateUpdated,
+)
 from allCode.core.models import Message, TurnState
 from allCode.llm.client import LLMClient
 from allCode.llm.settings import ModelSettings, ToolSchema
@@ -24,12 +30,14 @@ class ModelStreamCollector:
         event_bus: EventBus,
         heartbeat_interval_seconds: float,
         stream_timeout_seconds: float,
+        show_reasoning: bool = False,
     ) -> None:
         self._llm_client = llm_client
         self._settings = settings
         self._event_bus = event_bus
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stream_timeout_seconds = stream_timeout_seconds
+        self._show_reasoning = show_reasoning
 
     @property
     def model_name(self) -> str:
@@ -96,6 +104,16 @@ class ModelStreamCollector:
                         delta=event.text,
                     )
                 )
+            elif self._show_reasoning and event.kind == "text_delta":
+                reasoning = str((event.metadata or {}).get("reasoning_delta") or "")
+                if reasoning:
+                    await self._event_bus.publish(
+                        ModelReasoningDelta(
+                            turn_id=state.turn_id,
+                            message=reasoning,
+                            delta=reasoning,
+                        )
+                    )
 
     async def _record_recovery(
         self,

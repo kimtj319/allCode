@@ -97,6 +97,7 @@ async def run_agent_turn(
         approval_handler=approval_handler,
         context_builder=effective_context_builder,
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
+        show_reasoning=config.ui.show_thinking,
         hook_runner=hook_runner,
         checkpoint=_checkpoint,
         plan_approval=plan_approval,

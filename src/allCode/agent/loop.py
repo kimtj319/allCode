@@ -68,6 +68,7 @@ class AgentLoop:
         prompt_builder: PromptBuilder | None = None,
         heartbeat_interval_seconds: float = 5.0,
         stream_timeout_seconds: float = 60.0,
+        show_reasoning: bool = False,
         router: RuleBasedRouter | None = None,
         model_router: ModelRouter | None = None,
         tool_policy: ToolPolicy | None = None,
@@ -132,6 +133,7 @@ class AgentLoop:
             event_bus=self._event_bus,
             heartbeat_interval_seconds=self._heartbeat_interval_seconds,
             stream_timeout_seconds=self._stream_timeout_seconds,
+            show_reasoning=show_reasoning,
         )
         self._round_runner = RoundRunner(
             llm_client=self._llm_client,
