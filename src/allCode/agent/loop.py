@@ -242,7 +242,28 @@ class AgentLoop:
                 workflow_result,
                 workspace_root=turn_input.workspace.root,
             )
-            return workflow_result.turn_result
+            workflow_turn_result = workflow_result.turn_result
+            # The workflow path returns directly and skips the main-loop
+            # finalization, so publish the completion report itself — otherwise
+            # the UI is stuck on the "완료 요약 작성 중" status with the report
+            # never rendered.
+            if workflow_turn_result.final_answer.strip():
+                await self._publish(
+                    TurnFinalized(
+                        turn_id=workflow_turn_result.turn_id,
+                        message=f"Turn finalized: {workflow_turn_result.status}.",
+                        status=workflow_turn_result.status,
+                        final_answer=workflow_turn_result.final_answer,
+                    )
+                )
+            await self._publish(
+                TurnResultReady(
+                    turn_id=workflow_turn_result.turn_id,
+                    message=f"Turn result ready: {workflow_turn_result.status}.",
+                    data=workflow_turn_result.model_dump(mode="json"),
+                )
+            )
+            return workflow_turn_result
         state.messages = self._prompt_builder.initial_messages(turn_input, routing, context_bundle)
         recovery = RecoveryTracker()
         loop_guard = ToolLoopGuard()
