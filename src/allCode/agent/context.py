@@ -63,6 +63,18 @@ class ContextBuilder:
         self._assistant_summaries: dict[str, list[str]] = {}
         self._project_manifests: list[ProjectManifest] = []
         self._document_manifests: list[DocumentManifest] = []
+        # session_start hook output, captured once per process and injected into
+        # every turn of that session as session-wide context.
+        self._session_start_context: dict[str, str] = {}
+
+    def session_start_done(self, session_id: str) -> bool:
+        return session_id in self._session_start_context
+
+    def set_session_start_context(self, session_id: str, text: str) -> None:
+        self._session_start_context[session_id] = text or ""
+
+    def session_start_context(self, session_id: str) -> str:
+        return self._session_start_context.get(session_id, "")
 
     async def build(self, turn_input: TurnInput) -> ContextBundle:
         memory_sections = await self.memory_selector.select(turn_input)

@@ -122,6 +122,16 @@ async def run_agent_turn(
                 "approval_mode": config.approval.mode,
             },
         )
+        # session_start hooks: run once per process, inject stdout into every turn.
+        if hook_runner.active and not effective_context_builder.session_start_done(logger.session_id):
+            session_ctx = await hook_runner.session_start(
+                session_id=logger.session_id, workspace=config.workspace.root
+            )
+            effective_context_builder.set_session_start_context(logger.session_id, session_ctx)
+        context_blocks: list[str] = []
+        session_ctx = effective_context_builder.session_start_context(logger.session_id)
+        if session_ctx:
+            context_blocks.append(f"[session context]\n{session_ctx}")
         # user_prompt_submit hooks: may block the turn or inject extra context.
         if hook_runner.active:
             outcome = await hook_runner.user_prompt_submit(prompt)
@@ -140,9 +150,11 @@ async def run_agent_turn(
                 event_bus_closed = True
                 return blocked
             if outcome.injected_context:
-                turn_input = turn_input.model_copy(
-                    update={"user_prompt": f"{prompt}\n\n[hook context]\n{outcome.injected_context}"}
-                )
+                context_blocks.append(f"[hook context]\n{outcome.injected_context}")
+        if context_blocks:
+            turn_input = turn_input.model_copy(
+                update={"user_prompt": prompt + "\n\n" + "\n\n".join(context_blocks)}
+            )
         result = await loop.run_turn(turn_input)
         # stop hooks observe the finished turn (e.g. format/lint) before auto-commit
         # so any changes they make are captured.

@@ -208,6 +208,11 @@ class HooksConfig(StrictConfigModel):
     # stop hooks run after a turn finishes (observe-only; env ALLCODE_TURN_STATUS,
     # ALLCODE_FINAL_ANSWER) — e.g. auto-format, lint, or notify.
     stop: list[HookSpec] = Field(default_factory=list)
+    # session_start hooks run once when a session begins (env ALLCODE_SESSION_ID,
+    # ALLCODE_WORKSPACE). A non-zero exit is ignored (observe-only); stdout is
+    # injected as session-wide context for every turn — e.g. surface the current
+    # branch, open tickets, or environment notes to the model.
+    session_start: list[HookSpec] = Field(default_factory=list)
 
 
 class GitConfig(StrictConfigModel):

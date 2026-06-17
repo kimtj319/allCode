@@ -36,10 +36,24 @@ class HookRunner:
         self._post = list(hooks.post_tool) if hooks else []
         self._user_prompt = list(hooks.user_prompt_submit) if hooks else []
         self._stop = list(hooks.stop) if hooks else []
+        self._session_start = list(hooks.session_start) if hooks else []
 
     @property
     def active(self) -> bool:
-        return bool(self._pre or self._post or self._user_prompt or self._stop)
+        return bool(self._pre or self._post or self._user_prompt or self._stop or self._session_start)
+
+    async def session_start(self, *, session_id: str, workspace: str) -> str:
+        """Run session_start hooks once at session start. Observe-only (a non-zero
+        exit is ignored); stdout is collected and injected as session context."""
+        context_parts: list[str] = []
+        for spec in self._session_start:
+            env = dict(os.environ)
+            env["ALLCODE_SESSION_ID"] = session_id or ""
+            env["ALLCODE_WORKSPACE"] = workspace or ""
+            _code, out, _err = await _run(spec.command, env, spec.timeout_seconds)
+            if out.strip():
+                context_parts.append(out.strip())
+        return "\n".join(context_parts)
 
     async def user_prompt_submit(self, prompt: str) -> "HookOutcome":
         """Run user_prompt_submit hooks. A non-zero exit blocks the turn (reason
