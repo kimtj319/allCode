@@ -398,6 +398,7 @@ class AgentLoop:
                 prompt=turn_input.user_prompt,
                 evidence=finalized.evidence,
                 messages=state.messages,
+                unified=self._unified_loop,
             )
             final_answer = append_git_summary(
                 final_answer,

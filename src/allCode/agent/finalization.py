@@ -17,6 +17,7 @@ def apply_final_answer_policy(
     prompt: str,
     evidence: CompletionEvidence,
     messages: Sequence[Message],
+    unified: bool = False,
 ) -> str:
     language = _prompt_language(prompt)
     answer = apply_output_format_gate(final_answer, prompt=prompt, routing=routing, evidence=evidence)
@@ -30,7 +31,12 @@ def apply_final_answer_policy(
     answer = _apply_no_search_results_wording(answer, messages, evidence, routing=routing, prompt=prompt, language=language)
     answer = _apply_config_wording(answer, prompt, messages, language=language)
     answer = _apply_budget_wording(answer, messages, language=language)
-    answer = _apply_schema_denied_wording(answer, messages, evidence=evidence, routing=routing, language=language)
+    # Under the unified loop the full toolset is exposed; any remaining schema
+    # denials are internal phase-gate scaffolding (the model self-corrects), so
+    # the "a tool call was blocked in this phase" note would only leak internal
+    # state into the user's answer. Skip it.
+    if not unified:
+        answer = _apply_schema_denied_wording(answer, messages, evidence=evidence, routing=routing, language=language)
     answer = _apply_web_unavailable_wording(answer, messages, evidence, language=language)
     answer = _apply_feature_objective_wording(answer, messages, evidence, language=language)
     return answer
