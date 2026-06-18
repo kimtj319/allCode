@@ -234,7 +234,10 @@ class AgentConfig(StrictConfigModel):
     # toolset always exposed and the model deciding which tools to use, instead
     # of pre-classifying into a RouteKind that locks the tool set and pipeline.
     # Rolled out behind this flag; see plan/74_unified_agent_loop_refactor.md.
-    unified_loop: bool = False
+    # Default ON after the unified loop passed a 108-prompt real-PTY eval across
+    # all categories (general/web/analysis/modify/generation/operate). Set to
+    # false to fall back to the legacy route-gated pipelines.
+    unified_loop: bool = True
 
 
 class AppConfig(StrictConfigModel):
