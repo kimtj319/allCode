@@ -239,7 +239,9 @@ class AgentLoop:
                 data=routing.model_dump(mode="json"),
             )
         )
-        if should_use_generation_workflow(turn_input.user_prompt, routing, workspace_root=turn_input.workspace.root):
+        if not self._unified_loop and should_use_generation_workflow(
+            turn_input.user_prompt, routing, workspace_root=turn_input.workspace.root
+        ):
             workflow_result = await self._generation_workflow.run(turn_input, routing=routing)
             remember_generation_workflow_result(
                 self._context_builder,
