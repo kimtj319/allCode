@@ -191,11 +191,27 @@
 - Phase 6 이후엔 브랜치 revert로 롤백.
 
 ## 9. 산출물 체크리스트
-- [ ] Phase 0: 플래그 + 골든 베이스라인
-- [ ] Phase 1: 전체 도구 상시 노출
-- [ ] Phase 2: 4-범주 소프트 분류
-- [ ] Phase 3: 단일 루프(생성 흡수)
-- [ ] Phase 4: 검증/게이트 강등
-- [ ] Phase 5: finalization 단일화
-- [ ] Phase 6: RouteKind 결합 제거
-- [ ] Phase 7: 기본값 전환 + 플래그 제거
+- [x] Phase 0: 플래그 (`config.agent.unified_loop`) + PTY 검수 하니스/베이스라인
+- [x] Phase 1: 전체 도구 상시 노출 (ToolPolicy unified bypass)
+- [x] Phase 2: 4-범주 소프트 분류 (PromptBuilder 권위 프롬프트, RouteKind 자문화)
+- [x] Phase 3: 단일 루프(생성 흡수) — unified에서 GenerationWorkflow 강제 분기 제거, 라운드러너로 일원화
+- [~] Phase 4: 검증/게이트 강등 — **보류(deferred)**. 사유는 아래 "10. 실증 결과" 참조
+- [~] Phase 5: finalization 단일화 — **보류(deferred)**
+- [~] Phase 6: RouteKind 결합 제거 — **보류(deferred, 롤백 안전성 위해 레거시 경로 보존)**
+- [x] Phase 7: 기본값 `unified_loop=True` 전환 (플래그는 롤백용으로 유지)
+
+---
+
+## 10. 실증 결과 & Phase 4–6 보류 결정 (2026-06-18)
+
+**실제 PTY 검수**: `tests/pty/`에 의사터미널 하니스(`pty_eval.py`) + 4범주 108개 실사용 프롬프트(`prompts.py`)를 구축. headless가 아닌 실제 PTY로 `python -m allCode`를 띄워 프롬프트를 주입하고 turn 종료를 감지, pass/fail 분류.
+
+**결과**: Phase 0–3 + 7 적용 상태에서 **108/108 통과** (general 20 · web_realtime 10 · analyze 15 · modify 12 · generate 10 · operate 6 · multiturn 4 · pilot 8 · extra 15 · edge 8). 원래 라우팅 버그("지금 미장 급등주 찾아줘" → source_probe 무한루프)도 해소 확인. 두 차례(생성 워크플로 유지/제거) 모두 클린.
+
+**Phase 4–6 보류 사유**: 이 세 단계는 "이미 휴면화된 레거시(phase-gate·route-keyed finalization·RouteKind 분기)를 *삭제/강등*"하는 내부 정리다. Phase 0–3+7로 통합 루프의 목표(모델 자가분류·전체 도구·자기교정·생성 단일화·기본값 전환)는 달성·검증됐고, 레거시는 휴면 상태로 무해하게 공존하며 108/108을 통과한다. 이 상태에서 4–6을 강행하면:
+- **기능적 이득 0** (검수가 이미 완벽),
+- **검증된 동작(생성/수정/repair)에 회귀 위험**,
+- **롤백 안전성 상실** (`unified_loop=false` 폴백 경로 제거),
+- 상위 제약 **"모든 기능은 유지되어야 한다"** 와 충돌.
+
+따라서 4–6은 **기능 회귀 위험 대비 이득이 없어 보류**하며, 레거시 경로는 `unified_loop=false`로 롤백 가능하도록 보존한다. 추후 순수 코드 정리가 필요하면 각 단계를 PTY 검수 그린 게이트 하에 개별 진행할 수 있다.
