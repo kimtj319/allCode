@@ -21,7 +21,7 @@ from allCode.tui import messages
 from allCode.tui.approval_preview_view import approval_preview_from_payload
 from allCode.memory.usage_store import UsageStore
 from allCode.tui.markdown import logo_text
-from allCode.tui.mentions import expand_mentions
+from allCode.tui.mentions import expand_mentions, extract_image_mentions
 from allCode.tui.status_view import (
     DAILY_TOKEN_BUDGET,
     columns_for_width,
@@ -194,6 +194,7 @@ class TerminalSession:
         self._last_context_tokens = 0
         self.answer_renderer = TerminalAnswerRenderer(self.console)
         self._turn_runner_accepts_approval = self._accepts_approval_handler(turn_runner)
+        self._turn_runner_accepts_images = self._accepts_images(turn_runner)
         # Active mid-turn steering capture (set while a turn runs); lets the user
         # type extra guidance that the agent picks up at the next round boundary.
         self._steering_capture: _SteeringCapture | None = None
@@ -342,6 +343,15 @@ class TerminalSession:
         agent_prompt, mentioned = expand_mentions(prompt, self._cwd)
         if mentioned:
             self._print_status("첨부: " + ", ".join("@" + name for name in mentioned))
+        # @image.png mentions are sent to the model as multimodal image input.
+        image_paths = extract_image_mentions(prompt, self._cwd)
+        images: list[str] = []
+        if image_paths:
+            from allCode.agent.image_input import encode_image_files
+
+            images = encode_image_files(image_paths)
+            if images:
+                self._print_status("이미지 첨부: " + ", ".join(Path(p).name for p in image_paths))
         self._stream_started = False
         self._stream_buffer = ""
         self._stream_markdown_buffer.reset()
@@ -353,7 +363,7 @@ class TerminalSession:
         self._running_started_at = time.monotonic()
         self._render_running_composer(messages.MODEL_REQUEST_STATUS)
         try:
-            asyncio.run(self._run_turn_with_ticker(agent_prompt))
+            asyncio.run(self._run_turn_with_ticker(agent_prompt, images=images))
         except KeyboardInterrupt:
             self.stderr.write("\nInterrupted.\n")
         except Exception as exc:
@@ -376,7 +386,7 @@ class TerminalSession:
         except Exception:  # noqa: BLE001
             pass
 
-    async def _run_turn_with_ticker(self, prompt: str) -> None:
+    async def _run_turn_with_ticker(self, prompt: str, *, images: list[str] | None = None) -> None:
         # Animate the spinner/elapsed counter while the turn runs, including the
         # model "thinking" phase before the first token arrives (no agent events
         # fire then, so without this the spinner would freeze). The ticker shares
@@ -387,7 +397,7 @@ class TerminalSession:
         self._steering_capture = capture
         capture.start()
         try:
-            await self._run_turn(prompt)
+            await self._run_turn(prompt, images=images)
         finally:
             capture.stop()
             self._steering_capture = None
@@ -407,11 +417,12 @@ class TerminalSession:
         except asyncio.CancelledError:
             return
 
-    async def _run_turn(self, prompt: str) -> None:
+    async def _run_turn(self, prompt: str, *, images: list[str] | None = None) -> None:
+        kwargs = {"images": images} if images and self._turn_runner_accepts_images else {}
         if self._turn_runner_accepts_approval:
-            await self.turn_runner(prompt, self.handle_agent_event, self.handle_approval_request)
+            await self.turn_runner(prompt, self.handle_agent_event, self.handle_approval_request, **kwargs)
             return
-        await self.turn_runner(prompt, self.handle_agent_event)
+        await self.turn_runner(prompt, self.handle_agent_event, **kwargs)
 
     async def handle_approval_request(self, request: ApprovalRequest) -> ApprovalAction:
         # Pause mid-turn steering capture so the approval response (read from the
@@ -942,6 +953,16 @@ class TerminalSession:
         if any(parameter.kind == parameter.VAR_POSITIONAL for parameter in signature.parameters.values()):
             return True
         return len(positional) >= 3 or "approval_handler" in signature.parameters
+
+    @staticmethod
+    def _accepts_images(turn_runner: TurnRunner) -> bool:
+        try:
+            signature = inspect.signature(turn_runner)
+        except (TypeError, ValueError):
+            return False
+        if any(p.kind == p.VAR_KEYWORD for p in signature.parameters.values()):
+            return True
+        return "images" in signature.parameters
 
     @staticmethod
     def _approval_preview(preview: str, *, max_lines: int = 120, max_chars: int = 8000) -> str:

@@ -21,6 +21,27 @@ _MENTION_RE = re.compile(r"(?<![^\s(\[])@([^\s@]+)")
 _TRAILING_PUNCT = ".,;:!?)]}"
 _MAX_FILE_BYTES = 64 * 1024
 _MAX_DIR_ENTRIES = 60
+# Image mentions are routed to the model as image input (multimodal), not read
+# as text — reading binary image bytes as text would only garble the context.
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+
+def extract_image_mentions(prompt: str, cwd: Path | str) -> list[str]:
+    """Return resolved paths of @mentioned image files, for multimodal input."""
+    root = Path(cwd).expanduser()
+    paths: list[str] = []
+    seen: set[str] = set()
+    for match in _MENTION_RE.finditer(prompt):
+        token = _clean_token(match.group(1))
+        path_part, _symbol = _split_symbol(token)
+        if not path_part or path_part in seen:
+            continue
+        candidate = Path(path_part).expanduser()
+        resolved = candidate if candidate.is_absolute() else (root / candidate)
+        if resolved.is_file() and resolved.suffix.lower() in IMAGE_SUFFIXES:
+            seen.add(path_part)
+            paths.append(str(resolved))
+    return paths
 
 
 def _clean_token(token: str) -> str:
@@ -126,6 +147,9 @@ def expand_mentions(prompt: str, cwd: Path | str) -> tuple[str, list[str]]:
             continue
         candidate = Path(path_part).expanduser()
         resolved = candidate if candidate.is_absolute() else (root / candidate)
+        # Image mentions are handled as multimodal input, not inlined as text.
+        if resolved.is_file() and resolved.suffix.lower() in IMAGE_SUFFIXES:
+            continue
         if resolved.exists():
             seen[token] = (resolved, symbol)
 

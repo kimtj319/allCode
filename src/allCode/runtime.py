@@ -199,7 +199,13 @@ def make_tui_turn_runner(
     session_logger = session_logger or AgentSessionLogger.create(config=config)
     steering = SteeringQueue()
 
-    async def run(prompt: str, event_handler: EventHandler, approval_handler: ApprovalHandler | None = None) -> None:
+    async def run(
+        prompt: str,
+        event_handler: EventHandler,
+        approval_handler: ApprovalHandler | None = None,
+        *,
+        images: list[str] | None = None,
+    ) -> None:
         # Drop any stale steering left over from a previous turn.
         steering.drain()
         await run_agent_turn(
@@ -212,6 +218,7 @@ def make_tui_turn_runner(
             approval_handler=approval_handler,
             session_logger=session_logger,
             steering=steering,
+            images=images,
         )
 
     # The TUI pushes mid-turn user input here; the running turn drains it at
