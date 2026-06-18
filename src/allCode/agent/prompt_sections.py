@@ -41,6 +41,13 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "- Project code analysis: use read_file / source_probe / search_files / list_tree.",
         "- Project code change: edit with write_file / patch_file, then verify with run_tests when applicable.",
         "- Other / operational: use run_command.",
+        # Anti-loop: don't re-issue a read/overview that returns what you already
+        # have (common on broad 'evaluate/assess' asks over a small codebase) —
+        # once you have enough evidence, synthesize the answer instead of probing
+        # the same target again.",
+        "Do not repeat the same source_overview / source_probe / read_file call "
+        "you have already run; if you already have the structure or file contents, "
+        "stop gathering and answer from that evidence.",
         # Grounding & freshness (#3): keep web answers honest.
         "Grounding: when you answer from web_search, cite the source (site or URL) and, for any "
         "time-sensitive value (prices, rates, versions, 'latest', 'today', 'now'), state that it is "
