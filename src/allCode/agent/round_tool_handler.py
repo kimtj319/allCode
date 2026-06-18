@@ -123,6 +123,19 @@ class RoundToolHandler:
         if any(result.is_final and result.ok for result in results):
             return LoopOutcome(status="success", answer=next(result.content for result in results if result.is_final and result.ok))
         if has_blocking_tool_result(results):
+            # Graceful degradation on a read/inspect loop: instead of failing the
+            # turn with the raw loop-guard block dump, answer from the evidence
+            # already gathered. Switch to a tools-suppressed final-answer round
+            # (no more tool calls → no further loop). Only for non-mutation turns
+            # (a blocked mutation turn must not "complete" without its change),
+            # and only once (the flag guards against re-entry).
+            if not getattr(routing, "requires_mutation", False) and not runtime.inspect_final_answer_requested:
+                runtime.inspect_final_answer_requested = True
+                runtime.messages = self._runner._prompt_builder.final_answer_request(
+                    runtime.messages,
+                    response_language=response_language(turn_input.user_prompt),
+                )
+                return None
             return LoopOutcome(
                 status="partial",
                 answer=blocked_summary(self._runner._prompt_builder, runtime.messages, "tool_progress_blocked"),
