@@ -25,6 +25,7 @@ from allCode.agent.prompt_sections import (
     format_repair_targets,
     join_prompt_parts,
     routing_instruction,
+    unified_agent_instruction,
 )
 from allCode.agent.router import RoutingDecision
 from allCode.agent.source_answer_synthesis import source_analysis_final_answer_instruction
@@ -38,6 +39,11 @@ SYSTEM_PROMPT = (
 )
 
 class PromptBuilder:
+    def __init__(self, *, unified: bool = False) -> None:
+        # Unified loop: prepend authoritative full-toolset guidance and treat the
+        # route as advisory (see plan/74_unified_agent_loop_refactor.md).
+        self._unified = unified
+
     def initial_messages(
         self,
         turn_input: TurnInput,
@@ -46,6 +52,8 @@ class PromptBuilder:
     ) -> list[Message]:
         content = SYSTEM_PROMPT
         content = f"{content}\n\n{language_instruction(detect_response_language(turn_input.user_prompt))}"
+        if self._unified:
+            content = f"{content}\n\n{unified_agent_instruction(routing)}"
         if routing is not None:
             content = f"{content}\n\n{routing_instruction(routing)}"
         objectives = (

@@ -89,7 +89,7 @@ class AgentLoop:
         self._tools = tools or ToolRegistry(builtin_tools())
         self._event_bus = event_bus or AsyncEventBus()
         self._max_rounds = max_rounds
-        self._prompt_builder = prompt_builder or PromptBuilder()
+        self._prompt_builder = prompt_builder or PromptBuilder(unified=unified_loop)
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stream_timeout_seconds = stream_timeout_seconds
         self._router = router or RuleBasedRouter()

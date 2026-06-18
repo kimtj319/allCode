@@ -22,6 +22,33 @@ def feature_objective_instruction(objectives: Sequence[str]) -> str:
     )
 
 
+def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
+    """Authoritative guidance for the unified (Codex/Claude-style) loop.
+
+    The model has the full toolset and decides what the request is and which
+    tools fit. The route below is advisory; the model may ignore it and switch
+    tool types freely. The critical rule fixes the failure where a non-codebase
+    question was routed into source inspection and looped probing the repo."""
+    lines = [
+        "Unified tool use: you have the FULL toolset this turn (read_file, source_probe, "
+        "search_files, list_tree, glob_files, write_file, patch_file, delete_path, run_command, "
+        "run_tests, web_search, update_plan). Decide for yourself what the request is and use the "
+        "tools that fit; you may switch tool types freely within the turn.",
+        "Classify the request yourself and act accordingly:",
+        "- General / real-time / world-knowledge question (NOT about this repository): answer "
+        "directly, or call web_search for fresh or external facts. Do NOT read or probe this "
+        "project's source for questions that are not about this codebase.",
+        "- Project code analysis: use read_file / source_probe / search_files / list_tree.",
+        "- Project code change: edit with write_file / patch_file, then verify with run_tests when applicable.",
+        "- Other / operational: use run_command.",
+    ]
+    if routing is not None:
+        lines.append(
+            f"Advisory routing hint (may be wrong — ignore if it does not fit): {routing.kind}."
+        )
+    return "\n".join(lines)
+
+
 def routing_instruction(routing: RoutingDecision) -> str:
     lines = [
         f"Routing decision: {routing.kind} (confidence {routing.confidence:.2f}).",
