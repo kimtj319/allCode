@@ -380,7 +380,12 @@ class RoundRunner:
                 return outcome
 
         state.messages = runtime.messages
-        if getattr(routing, "kind", "") == "inspect" and has_inspect_summary_evidence(completion_evidence):
+        # Any non-mutation turn that gathered read/inspect evidence answers from
+        # that evidence instead of dumping the raw "max_rounds_reached" block
+        # message (e.g. a follow-up that tries to "run" a non-runnable artifact
+        # like a markdown doc and exhausts rounds). Mutation turns keep their own
+        # change-plan fallback below.
+        if not getattr(routing, "requires_mutation", False) and has_inspect_summary_evidence(completion_evidence):
             return LoopOutcome(
                 status="partial",
                 answer=grounded_inspect_summary(
