@@ -98,6 +98,7 @@ async def run_agent_turn(
         context_builder=effective_context_builder,
         model_router=ModelRouter(llm_client=effective_llm, settings=settings) if use_model_router else None,
         show_reasoning=config.ui.show_thinking,
+        unified_loop=config.agent.unified_loop,
         hook_runner=hook_runner,
         checkpoint=_checkpoint,
         plan_approval=plan_approval,

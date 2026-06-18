@@ -69,6 +69,7 @@ class AgentLoop:
         heartbeat_interval_seconds: float = 5.0,
         stream_timeout_seconds: float = 60.0,
         show_reasoning: bool = False,
+        unified_loop: bool = False,
         router: RuleBasedRouter | None = None,
         model_router: ModelRouter | None = None,
         tool_policy: ToolPolicy | None = None,
@@ -93,7 +94,8 @@ class AgentLoop:
         self._stream_timeout_seconds = stream_timeout_seconds
         self._router = router or RuleBasedRouter()
         self._model_router = model_router
-        self._tool_policy = tool_policy or ToolPolicy()
+        self._unified_loop = unified_loop
+        self._tool_policy = tool_policy or ToolPolicy(unified=unified_loop)
         self._approval = approval or ApprovalManager()
         self._tool_executor = tool_executor or ToolExecutor(
             registry=self._tools,

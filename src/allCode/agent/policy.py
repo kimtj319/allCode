@@ -46,6 +46,13 @@ class ToolPolicy:
     VALIDATION_TOOLS = {"run_tests"}
     WEB_TOOLS = {"web_search", "web_fetch"}
 
+    def __init__(self, *, unified: bool = False) -> None:
+        # Unified loop (Codex/Claude-style): the model sees and may call the full
+        # toolset regardless of the route kind, so a misclassification self-corrects
+        # instead of stranding the turn. Genuine safety gates (read-only, no-shell,
+        # no-network) and the per-call approval/sandbox checks still apply.
+        self._unified = unified
+
     def check(
         self,
         *,
@@ -76,6 +83,14 @@ class ToolPolicy:
             return ToolPolicyDecision(allowed=False, reason="No-shell request blocks shell execution.", category=category)
         if "no_external_network" in routing.flags and category == "web":
             return ToolPolicyDecision(allowed=False, reason="No-network request blocks web tools.", category=category)
+
+        if self._unified:
+            return ToolPolicyDecision(
+                allowed=True,
+                reason="Unified loop: full toolset exposed; the model selects tools.",
+                category=category,
+                approval_required=bool(destructive or (definition and definition.requires_approval)),
+            )
 
         allowed_by_route = self._allowed_by_route_and_capability(routing, category, name)
         if not allowed_by_route:

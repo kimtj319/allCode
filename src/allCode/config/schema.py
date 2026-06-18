@@ -229,6 +229,14 @@ class UIConfig(StrictConfigModel):
     show_thinking: bool = False
 
 
+class AgentConfig(StrictConfigModel):
+    # Unified agent loop (Codex/Claude-style): one ReAct loop with the full
+    # toolset always exposed and the model deciding which tools to use, instead
+    # of pre-classifying into a RouteKind that locks the tool set and pipeline.
+    # Rolled out behind this flag; see plan/74_unified_agent_loop_refactor.md.
+    unified_loop: bool = False
+
+
 class AppConfig(StrictConfigModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
@@ -239,6 +247,7 @@ class AppConfig(StrictConfigModel):
     git: GitConfig = Field(default_factory=GitConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
 
 
 class ConfigFileSource(StrictConfigModel):
