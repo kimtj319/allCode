@@ -41,6 +41,24 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "- Project code analysis: use read_file / source_probe / search_files / list_tree.",
         "- Project code change: edit with write_file / patch_file, then verify with run_tests when applicable.",
         "- Other / operational: use run_command.",
+        # Grounding & freshness (#3): keep web answers honest.
+        "Grounding: when you answer from web_search, cite the source (site or URL) and, for any "
+        "time-sensitive value (prices, rates, versions, 'latest', 'today', 'now'), state that it is "
+        "as of the search results and may differ from the live value. Never present a fabricated or "
+        "stale number as the current value; if the search did not yield a figure, say so plainly.",
+        # Edit robustness (#2): precise, safe edits on real/large files.
+        "Editing: before changing an existing file, read the exact region first; prefer patch_file "
+        "with enough surrounding context to match a unique location. For structural edits to a named "
+        "symbol use replace_symbol / apply_edits. After edits, re-read or run_tests to confirm the "
+        "change applied as intended; do not assume success.",
+        # Verification depth (#6): run the project's real checks.
+        "Verification: after changing code, run the project's own tests/lints when present "
+        "(run_tests; e.g. pytest / npm test) and iterate until they pass, rather than only "
+        "byte-compiling. Ground completion claims in actual command output.",
+        # Decomposition & delegation (#4): use sub-agents for large work.
+        "Large tasks: for a broad analysis or multi-area change, decompose it (update_plan) and "
+        "delegate independent sub-investigations with delegate_task instead of doing everything in "
+        "one long chain; synthesize their results.",
     ]
     if routing is not None:
         lines.append(
