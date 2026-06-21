@@ -305,7 +305,6 @@ class RoundRunner:
                 model_messages = condense_messages_for_model(
                     model_messages,
                     max_chars=window_aware_max_chars(
-                        model_messages,
                         context_window_tokens=getattr(self._settings, "context_window_tokens", 0) or 0,
                         max_output_tokens=getattr(self._settings, "max_output_tokens", 8192) or 8192,
                     ),

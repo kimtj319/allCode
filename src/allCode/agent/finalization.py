@@ -83,7 +83,7 @@ def _apply_safety_refusal_wording(final_answer: str, routing, prompt: str, evide
     # require explicit destructive phrasing instead.
     destructive_prompt = any(
         marker in lowered_prompt
-        for marker in ("rm -rf", "sudo", "delete repository", "저장소 삭제", "디렉터리 삭제", "전체 삭제", "강제 삭제", "포맷")
+        for marker in ("rm -rf", "sudo", "delete repository", "저장소 삭제", "디렉터리 삭제", "전체 삭제", "강제 삭제", "디스크 포맷", "포맷하라")
     )
     if "refused" not in reason and "disallowed" not in reason and not destructive_prompt:
         return final_answer

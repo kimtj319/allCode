@@ -255,9 +255,13 @@ def _split_korean_objective_phrase(value: str) -> list[str]:
         cleaned = _strip_korean_particle(token)
         if not cleaned or cleaned in _KOREAN_STOP_TERMS:
             continue
-        # Also drop truncations/inflections of a stop word (e.g. "최종결" from
-        # "최종결과", "검증기" from "검증") — generic meta words, not features.
-        if any(len(stop) >= 2 and cleaned.startswith(stop) for stop in _KOREAN_STOP_TERMS):
+        # Drop a *truncation* of a stop word (e.g. "최종결" from "최종결과") — but
+        # NOT a real compound that merely begins with one ("검증로직", "기능명세",
+        # "분석엔진"). Only reject when at most one trailing char remains.
+        if any(
+            len(stop) >= 2 and cleaned.startswith(stop) and len(cleaned) - len(stop) <= 1
+            for stop in _KOREAN_STOP_TERMS
+        ):
             continue
         if _is_korean_instruction_fragment(cleaned):
             continue
@@ -299,6 +303,34 @@ _ENGLISH_STOP_TERMS = {
     "update",
     "validation",
     "with",
+    # Generic instruction/programming filler — not feature names. (Domain words
+    # like token/refresh/rate are intentionally NOT here; they can be features.)
+    "implement",
+    "implements",
+    "refactor",
+    "refactoring",
+    "helper",
+    "helpers",
+    "logic",
+    "class",
+    "classes",
+    "function",
+    "functions",
+    "method",
+    "methods",
+    "module",
+    "ensure",
+    "should",
+    "must",
+    "please",
+    "change",
+    "modify",
+    "support",
+    "into",
+    "then",
+    "that",
+    "this",
+    "also",
 }
 
 _KOREAN_STOP_TERMS = {

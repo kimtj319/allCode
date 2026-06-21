@@ -154,6 +154,7 @@ class OpenAICompatibleClient:
     ) -> AsyncIterator[str]:
         attempt = 0
         while True:
+            produced = False
             try:
                 async with client.stream(
                     "POST",
@@ -168,10 +169,15 @@ class OpenAICompatibleClient:
                         continue
                     self._raise_for_status(response)
                     async for line in response.aiter_lines():
+                        produced = True
                         yield line
                     return
             except httpx.TransportError:
-                if attempt >= self._max_retries:
+                # Only safe to retry before any line was streamed. A mid-stream
+                # transport error must propagate, never restart — re-issuing the
+                # request would replay deltas the parser already consumed,
+                # duplicating text and corrupting tool-call argument JSON.
+                if produced or attempt >= self._max_retries:
                     raise
                 attempt += 1
                 await asyncio.sleep(self._retry_sleep_seconds * attempt)

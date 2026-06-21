@@ -52,7 +52,12 @@ class GlobFilesTool:
             matches: list[Path] = []
             omitted = 0
             for path in sorted(root.glob(pattern)):
-                if should_ignore_path(path.relative_to(workspace_root), include_hidden=include_hidden):
+                # Ignore-check relative to the REQUESTED root, not the workspace
+                # root: when the user explicitly globs inside a hidden/ignored
+                # dir (e.g. path=".github"), the leading ".github" prefix must
+                # not filter out every match. Hidden/ignored SUBdirs under the
+                # requested root are still skipped.
+                if should_ignore_path(path.relative_to(root), include_hidden=include_hidden):
                     continue
                 if path.is_dir() and not include_dirs:
                     continue

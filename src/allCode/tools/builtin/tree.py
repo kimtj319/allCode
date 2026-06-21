@@ -95,7 +95,10 @@ def _walk_bounded(root: Path, *, workspace_root: Path, max_depth: int, include_h
             return
         for child in children:
             try:
-                relative = child.relative_to(workspace_root)
+                # Relative to the REQUESTED root, not the workspace root, so an
+                # explicit list_tree inside a hidden/ignored dir is not wiped out
+                # by its prefix (hidden SUBdirs are still pruned).
+                relative = child.relative_to(root)
             except ValueError:
                 continue
             if should_ignore_path(relative, include_hidden=include_hidden):

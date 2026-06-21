@@ -76,7 +76,11 @@ def finalize_completion(
         )
         error_message = "Validation evidence missing: validation did not pass."
         evidence.status = "blocked"
-        evidence.final_answer_ready = bool(outcome_answer.strip())
+        # Only a "partial" (work done, validation reportable) may surface the
+        # answer as-is. A "failed" turn must NOT be marked ready, or the failure
+        # caveat in final_answer_for_result is skipped and a failed turn reads as
+        # a clean success.
+        evidence.final_answer_ready = status == "partial" and bool(outcome_answer.strip())
     return FinalizedCompletion(
         status=status,
         error_message=error_message,

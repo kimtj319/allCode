@@ -20,32 +20,28 @@ _CHARS_PER_TOKEN = 4
 # Fraction of the input window we actually fill, leaving slack for tokenizer
 # variance and the model's own framing.
 _WINDOW_SAFETY = 0.85
-# Floor so the condensed body always keeps a few recent turns usable even when
-# the system/context prefix is large.
-_BODY_CHARS_FLOOR = 6000
 
 
 def window_aware_max_chars(
-    messages: Sequence[Message],
     *,
     context_window_tokens: int,
     max_output_tokens: int,
     default_chars: int = MAX_MODEL_CONTEXT_CHARS,
 ) -> int:
-    """Body char budget for condensation, derived from the model context window.
+    """Total outgoing-message char budget derived from the model context window.
 
-    The leading system messages (system prompt + workspace context bundle) are
-    preserved uncompressed, so the condensable conversation body must fit in
-    ``window - output_reserve - system_prefix``. When the window is unknown
-    (``context_window_tokens <= 0``) the fixed legacy budget is used."""
+    ``condense_messages_for_model`` bounds the WHOLE message list (system prefix
+    + body) against this value, so this returns the *total* input budget —
+    window minus an output reserve and a safety margin — NOT a body-only budget.
+    (A previous version subtracted the system prefix here and then handed the
+    result to a consumer that re-counts the prefix, double-charging it and
+    truncating the live workspace context far too aggressively.) When the window
+    is unknown (``context_window_tokens <= 0``) the fixed legacy budget is used.
+    """
 
     if context_window_tokens and context_window_tokens > 0:
         input_tokens = max(2000, int((context_window_tokens - max_output_tokens) * _WINDOW_SAFETY))
-        total_input_chars = input_tokens * _CHARS_PER_TOKEN
-        clean = [m for m in messages if not m.metadata.get("context_condensed")]
-        system_prefix, _ = _split_system_prefix(clean)
-        body_budget = total_input_chars - _message_chars(system_prefix)
-        return max(_BODY_CHARS_FLOOR, body_budget)
+        return input_tokens * _CHARS_PER_TOKEN
     return default_chars
 
 # Strips <think>…</think> reasoning blocks; compiled once since _clean_content

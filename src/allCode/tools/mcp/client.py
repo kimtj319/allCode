@@ -112,9 +112,12 @@ class MCPStdioClient:
             pass
         try:
             await asyncio.wait_for(process.wait(), timeout=2.0)
-        except (TimeoutError, Exception):
+        except Exception:
             try:
                 process.kill()
+                # Reap the killed child so it does not linger as a zombie and the
+                # SIGKILL is confirmed delivered.
+                await asyncio.wait_for(process.wait(), timeout=2.0)
             except Exception:
                 pass
 

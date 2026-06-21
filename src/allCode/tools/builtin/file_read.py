@@ -65,6 +65,21 @@ class ReadFileTool:
                 return self._large_file_preview(call, path, content, all_lines, content_bytes)
             range_start = max(int(start_line or 1), 1)
             range_end = min(int(end_line or len(all_lines)), len(all_lines))
+            # A start past EOF (or start>end) yields an empty slice that would
+            # otherwise return ok=True with a nonsensical range like [100, 3],
+            # giving the model no signal to fix a stale line number. Fail clearly.
+            if range_requested and all_lines and range_start > range_end:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    ok=False,
+                    error=(
+                        f"requested range start_line={range_start} is past end of file "
+                        f"({len(all_lines)} lines); choose start_line within 1..{len(all_lines)}."
+                    ),
+                    error_type="line_range_out_of_bounds",
+                    metadata={"file_path": str(path), "line_count": len(all_lines)},
+                )
             selected = "".join(all_lines[range_start - 1 : range_end])
             selected, truncated = self._truncate(selected, max_bytes)
             if include_line_numbers:

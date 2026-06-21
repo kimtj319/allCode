@@ -110,7 +110,11 @@ def _korean_fallback(
     lines = [
         "수집한 웹 근거를 기준으로 정리합니다.",
         "",
-        f"- 전환 사유: 모델이 최종 답변 대신 추가 도구 호출을 반복해 `{reason}`에서 중단했습니다.",
+        (
+            f"- 전환 사유: 최대 라운드(`{reason}`)에 도달해 수집한 근거로 정리했습니다."
+            if reason == "max_rounds_reached"
+            else f"- 전환 사유: 모델이 최종 답변 대신 추가 도구 호출을 반복해 `{reason}`에서 중단했습니다."
+        ),
     ]
     if evidence.web_evidence_queries:
         lines.append("- 근거 수집 쿼리/URL: " + ", ".join(evidence.web_evidence_queries[:4]))
@@ -148,7 +152,11 @@ def _english_fallback(
     lines = [
         "Summary from collected web evidence.",
         "",
-        f"- Stop reason: the model kept requesting tools instead of writing the final answer at `{reason}`.",
+        (
+            f"- Stop reason: reached the max-round limit (`{reason}`); summarizing from the evidence gathered so far."
+            if reason == "max_rounds_reached"
+            else f"- Stop reason: the model kept requesting tools instead of writing the final answer at `{reason}`."
+        ),
     ]
     if evidence.web_evidence_queries:
         lines.append("- Evidence queries/URLs: " + ", ".join(evidence.web_evidence_queries[:4]))
