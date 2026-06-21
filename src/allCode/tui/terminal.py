@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import select
 import threading
 import time
@@ -374,14 +375,21 @@ class TerminalSession:
             self._notify_turn_complete(elapsed)
 
     def _notify_turn_complete(self, elapsed: float) -> None:
-        """Ring the terminal bell after a long turn so the user can step away.
+        """Alert the user after a long turn so they can step away and return.
 
-        Only fires when the turn ran past a threshold, so quick answers don't
-        beep. The bell is portable; an OS notification is attempted best-effort."""
+        Only fires past a threshold so quick answers don't beep. Rings the
+        portable terminal bell and, best-effort, emits an OSC 9 desktop
+        notification (supported by iTerm2/kitty/WezTerm; silently ignored by
+        terminals that don't). For richer or cross-terminal notifications,
+        configure a `stop` hook (e.g. osascript / notify-send) in config.yaml."""
         if elapsed < self._NOTIFY_AFTER_SECONDS:
             return
         try:
             self.stdout.write("\a")
+            # OSC 9 desktop notification. Skipped under tmux, where a bare OSC 9
+            # can leak unless passthrough-wrapped; the bell still fires there.
+            if not os.environ.get("TMUX"):
+                self.stdout.write(f"\033]9;allCode 작업 완료 ({int(elapsed)}s)\007")
             self.stdout.flush()
         except Exception:  # noqa: BLE001
             pass
