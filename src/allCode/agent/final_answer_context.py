@@ -127,7 +127,10 @@ def _system_content(messages: Sequence[Message], *, response_language: ResponseL
         "For source-analysis answers, prefer precise `path:Lx-Ly` or symbol anchors from the evidence brief "
         "for concrete architecture, flow, and module-role claims. If the evidence brief includes an answer synthesis "
         "outline, follow it as the answer plan unless the user requested a stricter output format. "
-        "When Package/directory roles are present for a broad source-tree request, include those roles before representative file details."
+        "When Package/directory roles are present for a broad source-tree request, include those roles before representative file details. "
+        "Report the FINAL verified outcome of the work: if your tests/validation ultimately passed, state plainly that the "
+        "task is complete; do NOT describe earlier transient failures, or items you have already fixed, as unresolved, "
+        "pending, or remaining work."
     )
     if response_language == "ko":
         guard = (
@@ -136,7 +139,9 @@ def _system_content(messages: Sequence[Message], *, response_language: ResponseL
             "사용자에게 보이는 assistant content의 첫 내용부터 최종 답변을 작성하세요. "
             "소스 분석 답변에서는 구체적인 구조, 흐름, 모듈 역할 주장에 대해 근거 brief의 `path:Lx-Ly` 또는 symbol anchor를 우선 사용하세요."
             "근거 brief에 답변 합성 outline이 있으면 사용자가 더 엄격한 출력 형식을 요청하지 않은 한 이를 답변 계획으로 따르세요. "
-            "넓은 소스 트리 요청에서 디렉터리/패키지 역할이 제공되면 대표 파일 세부 설명보다 그 역할 요약을 먼저 포함하세요."
+            "넓은 소스 트리 요청에서 디렉터리/패키지 역할이 제공되면 대표 파일 세부 설명보다 그 역할 요약을 먼저 포함하세요. "
+            "최종 검증 상태를 보고하세요: 테스트/검증이 최종적으로 통과했다면 작업이 완료되었다고 분명히 보고하고, "
+            "이미 수정한 항목이나 진행 중의 일시적 실패를 미해결·미결·잔여 작업으로 적지 마세요."
         )
     web_guidance = _web_unavailable_guidance(messages, response_language=response_language)
     if web_guidance:

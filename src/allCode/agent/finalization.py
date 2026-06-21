@@ -22,7 +22,7 @@ def apply_final_answer_policy(
     language = _prompt_language(prompt)
     answer = apply_output_format_gate(final_answer, prompt=prompt, routing=routing, evidence=evidence)
     answer = _apply_workspace_boundary_wording(answer, routing, prompt, language=language)
-    answer = _apply_safety_refusal_wording(answer, routing, prompt, language=language)
+    answer = _apply_safety_refusal_wording(answer, routing, prompt, evidence, language=language)
     answer = _apply_policy_denied_wording(answer, evidence, language=language)
     answer = _apply_safe_alternative_wording(answer, prompt, language=language)
     answer = _apply_validation_wording(answer, evidence, language=language)
@@ -62,12 +62,24 @@ def _apply_workspace_boundary_wording(final_answer: str, routing, prompt: str, *
     ).lstrip()
 
 
-def _apply_safety_refusal_wording(final_answer: str, routing, prompt: str, *, language: str) -> str:
+def _apply_safety_refusal_wording(final_answer: str, routing, prompt: str, evidence: CompletionEvidence, *, language: str) -> str:
     if getattr(routing, "read_only_requested", False):
+        return final_answer
+    # A turn that actually created/modified files or ran validation performed the
+    # work — appending a "cannot proceed without approval" refusal would flatly
+    # contradict the completed action and make a finished task look rejected.
+    if evidence.has_file_change() or evidence.validation_commands:
         return final_answer
     reason = str(getattr(routing, "reason", "")).lower()
     lowered_prompt = prompt.lower()
-    destructive_prompt = any(marker in lowered_prompt for marker in ("rm -rf", "sudo", "delete repository", "삭제", "제거"))
+    # Destructive INTENT toward the environment — not domain vocabulary. Bare
+    # "삭제"/"제거" matched legitimate feature specs (e.g. a cache's delete/evict
+    # operations), wrongly tagging successful generation as a risky request, so
+    # require explicit destructive phrasing instead.
+    destructive_prompt = any(
+        marker in lowered_prompt
+        for marker in ("rm -rf", "sudo", "delete repository", "저장소 삭제", "디렉터리 삭제", "전체 삭제", "강제 삭제", "포맷")
+    )
     if "refused" not in reason and "disallowed" not in reason and not destructive_prompt:
         return final_answer
     if "승인" in final_answer and "위험" in final_answer:
@@ -500,4 +512,16 @@ _FEATURE_STOP_TERMS = {
     "usage",
     "validation",
     "write",
+    # Non-feature noise that leaked from prompt headings / status words into the
+    # "핵심 기능" summary (e.g. a prompt's "Artifact Obligations" section title).
+    "passed",
+    "failed",
+    "artifact",
+    "artifacts",
+    "obligations",
+    "obligation",
+    "scenario",
+    "scenarios",
+    "requirement",
+    "requirements",
 }
