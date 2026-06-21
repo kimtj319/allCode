@@ -21,6 +21,7 @@ class RuntimeStatusCommandService:
         session_analyzer: SessionAnalyzer | None = None,
         project_root: str | Path | None = None,
         session_id: str | None = None,
+        context_builder=None,
     ) -> None:
         self.config = config
         self.tools = tools
@@ -29,6 +30,8 @@ class RuntimeStatusCommandService:
         # Where /model and /approval persist changes (the project config file).
         self.project_root = Path(project_root).expanduser() if project_root is not None else Path(config.workspace.root).expanduser()
         self.session_id = session_id
+        # Used by /resume to load a prior session's history into this session.
+        self.context_builder = context_builder
 
     async def handle(self, command: str) -> str:
         normalized = " ".join(command.strip().split())
@@ -48,6 +51,8 @@ class RuntimeStatusCommandService:
             return self._mcp(normalized)
         if root == "/skills":
             return self._skills()
+        if root == "/resume":
+            return self._resume(args)
         if root == "/config":
             return self._config()
         if root == "/init":
@@ -210,6 +215,49 @@ class RuntimeStatusCommandService:
             lines.append(f"- {skill.name}: {skill.description}")
         lines.append("모델은 관련 작업 시 skill(<name>) 도구로 해당 지침을 로드합니다.")
         return "\n".join(lines)
+
+    def _resume(self, args: list[str]) -> str:
+        """List recent sessions, or load one's history into the current session.
+
+        With no argument it shows a picker-style list. With <id|name> it replays
+        that session's exchanges into the live context builder so the next turn
+        continues from it (the current session id keeps logging new turns)."""
+        from allCode.memory.conversation_store import ConversationStore
+
+        store = ConversationStore(self.config.workspace.root)
+        ref = args[0] if args and args[0].lower() not in {"list", "ls"} else ""
+        if not ref:
+            entries = store.list_sessions_with_meta()
+            if not entries:
+                return "이전 세션이 없습니다. 첫 대화를 시작하면 세션이 기록됩니다."
+            lines = ["최근 세션 (이어가려면 /resume <id|name>):"]
+            for entry in entries[:10]:
+                label = f"[{entry.name}] " if entry.name else ""
+                current = " ← 현재" if entry.session_id == self.session_id else ""
+                lines.append(
+                    f"  - {entry.session_id[:8]}  {label}{entry.title}  ({entry.turns}턴){current}"
+                )
+            return "\n".join(lines)
+
+        resolved = store.resolve(ref)
+        if not resolved:
+            return f"세션을 찾을 수 없습니다: {ref} (/resume 로 목록을 확인하세요)."
+        if resolved == self.session_id:
+            return "이미 현재 세션입니다."
+        if self.context_builder is None or not self.session_id:
+            return "이 환경에서는 세션을 이어올 수 없습니다 (컨텍스트 빌더 없음)."
+        exchanges = store.load(resolved)
+        restored = 0
+        for role, text in exchanges:
+            if role == "user":
+                self.context_builder.remember_user_prompt(self.session_id, text)
+                self.context_builder.remember_user_note(self.session_id, text)
+                restored += 1
+            elif role == "assistant":
+                self.context_builder.remember_assistant_summary(self.session_id, text)
+        if restored == 0:
+            return f"세션 {resolved[:8]}에 불러올 대화가 없습니다."
+        return f"세션 {resolved[:8]}의 {restored}개 대화를 현재 세션에 불러왔습니다. 이어서 진행하세요."
 
     def _mcp(self, command: str) -> str:
         """List/add/remove MCP servers in the project config (effective next run)."""

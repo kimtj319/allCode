@@ -379,6 +379,7 @@ def _slash_handler(
             session_log_path=session_log_path,
             project_root=project_root,
             session_id=session_id,
+            context_builder=context_builder,
         ),
         workspace_root=str(project_root),
         custom_commands={command.name: command for command in custom},
