@@ -50,10 +50,16 @@ class PromptBuilder:
         routing: RoutingDecision | None = None,
         context_bundle: ContextBundle | None = None,
     ) -> list[Message]:
+        # Cache-friendly ordering: the stable, turn-independent guidance leads so
+        # it forms a long shared prefix that prefix/prompt caching (e.g. vLLM's
+        # automatic prefix cache) can reuse across turns. Per-turn volatile
+        # directives (language, routing, objectives) follow, and the volatile
+        # workspace context bundle is a separate later message — so the cached
+        # prefix is not invalidated by them.
         content = SYSTEM_PROMPT
-        content = f"{content}\n\n{language_instruction(detect_response_language(turn_input.user_prompt))}"
         if self._unified:
-            content = f"{content}\n\n{unified_agent_instruction(routing)}"
+            content = f"{content}\n\n{unified_agent_instruction(None)}"
+        content = f"{content}\n\n{language_instruction(detect_response_language(turn_input.user_prompt))}"
         if routing is not None:
             content = f"{content}\n\n{routing_instruction(routing)}"
         objectives = (
