@@ -246,7 +246,7 @@ class AgentConfig(StrictConfigModel):
     max_rounds: int = 40  # model<->tool rounds per turn (was 12)
     inspect_action_budget: int = 24  # read/probe/search calls before inspection locks (was 7)
     inspect_round_budget: int = 24  # inspection rounds before mutation/answer (was 6)
-    context_token_budget: int = 16_000  # context-bundle budget kept into the answer (was 4_000)
+    context_token_budget: int = 24_000  # context-bundle budget kept into the answer (was 4_000)
     max_active_file_bytes: int = 128 * 1024  # bytes per active file section in context (was 64KB)
 
     @field_validator(

@@ -12,19 +12,19 @@ def representative_read_limit(*, groups: list[dict[str, object]]) -> int:
 
     package_count = len(groups)
     if package_count >= 10:
-        return 40
+        return 64
     if package_count >= 6:
-        return 28
-    return max(16, package_count)
+        return 48
+    return max(32, package_count)
 
 
 def suggested_read_limit(*, groups: list[dict[str, object]], representative_count: int) -> int:
     package_count = len(groups)
     if package_count >= 10:
-        return min(representative_count, 40)
+        return min(representative_count, 64)
     if package_count >= 6:
-        return min(representative_count, 28)
-    return min(representative_count, 16)
+        return min(representative_count, 48)
+    return min(representative_count, 32)
 
 
 def package_representative_reads(
