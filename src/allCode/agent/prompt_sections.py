@@ -66,6 +66,9 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "Large tasks: for a broad analysis or multi-area change, decompose it (update_plan) and "
         "delegate independent sub-investigations with delegate_task instead of doing everything in "
         "one long chain; synthesize their results.",
+        # Skills: load a project skill's instructions on demand when one fits.
+        "Skills: if a `skill` tool is available and one of its listed skills fits the task, call "
+        "skill(<name>) to load its instructions and follow them before proceeding.",
     ]
     if routing is not None:
         lines.append(

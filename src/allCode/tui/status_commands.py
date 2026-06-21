@@ -46,6 +46,8 @@ class RuntimeStatusCommandService:
             return self._permissions(normalized)
         if root == "/mcp":
             return self._mcp(normalized)
+        if root == "/skills":
+            return self._skills()
         if root == "/config":
             return self._config()
         if root == "/init":
@@ -191,6 +193,23 @@ class RuntimeStatusCommandService:
             return f"추론 표시를 '{choice}'로 바꿨지만 설정 파일 저장에 실패했습니다: {exc}"
         note = "이제 모델의 사고 과정을 흐리게 표시합니다." if value else "사고 과정을 숨깁니다."
         return f"추론 표시를 '{choice}'로 변경하고 저장했습니다 ({path}). {note} 다음 턴부터 적용됩니다."
+
+    def _skills(self) -> str:
+        """List skills the model can load on demand via the skill tool."""
+        from allCode.workspace.skills import load_skill_definitions
+
+        skills = load_skill_definitions(self.project_root)
+        if not skills:
+            return (
+                "정의된 스킬이 없습니다.\n"
+                ".allCode/skills/<name>/SKILL.md (또는 .allCode/skills/<name>.md)에 "
+                "frontmatter(description)와 지침을 작성하세요. 모델이 관련 작업에서 skill(<name>)로 로드합니다."
+            )
+        lines = ["정의된 스킬:"]
+        for skill in skills:
+            lines.append(f"- {skill.name}: {skill.description}")
+        lines.append("모델은 관련 작업 시 skill(<name>) 도구로 해당 지침을 로드합니다.")
+        return "\n".join(lines)
 
     def _mcp(self, command: str) -> str:
         """List/add/remove MCP servers in the project config (effective next run)."""

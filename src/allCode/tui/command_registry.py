@@ -66,6 +66,7 @@ def default_commands() -> list[CommandSpec]:
         CommandSpec(name="/theme", description="Switch the color theme (dark|light).", usage="/theme [dark|light]", options=["dark", "light"]),
         CommandSpec(name="/pr", description="Commit, push, and open a GitHub PR (gh).", usage="/pr [title]"),
         CommandSpec(name="/agents", description="List defined sub-agents (.allCode/agents).", usage="/agents"),
+        CommandSpec(name="/skills", description="List skills the model can load on demand (.allCode/skills).", usage="/skills"),
         CommandSpec(name="/status", description="Show usage gauges and session status (append 'last' for diagnostics).", usage="/status [last]", options=["last"]),
         CommandSpec(name="/stop", description="Cancel the active turn.", usage="/stop"),
         CommandSpec(name="/exit", description="Exit allCode.", usage="/exit"),

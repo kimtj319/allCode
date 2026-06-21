@@ -269,6 +269,16 @@ def runtime_tool_registry(config: AppConfig) -> ToolRegistry:
             registry.register(delegated)
         except ValueError:
             pass
+    # Expose the `skill` tool only when the project defines skills, so the model
+    # sees available skills (in its description) and can load them on demand.
+    from allCode.tools.builtin.skill import SkillTool
+
+    skill_tool = SkillTool(config)
+    if skill_tool.has_skills:
+        try:
+            registry.register(skill_tool)
+        except ValueError:
+            pass
     mcp_tools, _manager = load_mcp_tools(config)
     for tool in mcp_tools:
         try:
