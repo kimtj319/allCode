@@ -253,6 +253,10 @@ description: 코드 리뷰 체크리스트
 있습니다. 관련 작업 시 모델이 알맞은 스킬을 먼저 로드하도록 통합 프롬프트가
 안내합니다.
 
+바로 쓸 수 있는 예시 스킬을 [`examples/skills/`](examples/skills/)에 제공합니다
+(code-review, commit-message, pr-description, debug, test-author,
+security-review). `cp examples/skills/*.md .allCode/skills/`로 설치하세요.
+
 ## MCP 서버 관리
 
 [Model Context Protocol](https://modelcontextprotocol.io) 서버를 config 파일을
@@ -278,6 +282,9 @@ allcode mcp remove fs
 ```
 
 stdio 전송은 `command`가, http/sse 전송은 `url`이 필요하며 저장 전에 검증됩니다.
+
+자주 쓰는 서버(filesystem, git, fetch, context7, playwright, github 등)의 추가
+명령은 [`examples/mcp-servers.md`](examples/mcp-servers.md) 카탈로그를 참고하세요.
 
 ## 프로젝트 구조
 
