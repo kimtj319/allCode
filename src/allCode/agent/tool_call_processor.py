@@ -40,6 +40,10 @@ from allCode.tools.base import ToolContext
 from allCode.tools.executor import ToolExecutor
 from allCode.tools.registry import ToolRegistry
 
+# Upper bound on concurrently-executed read-only calls in one batch (including
+# parallel `task` sub-agents), so a wide fan-out never floods the model backend.
+_MAX_PREFETCH_CONCURRENCY = 8
+
 
 class ToolCallProcessor:
     """Executes model-selected tool calls through standard allCode contracts."""
@@ -387,7 +391,12 @@ class ToolCallProcessor:
         least two calls all resolve to read-only, no-approval tools, so there
         are no side effects, no approval prompts, and no ordering hazards. The
         sequential loop verifies (name, arguments) still match before using a
-        prefetched result, so it is a pure optimisation."""
+        prefetched result, so it is a pure optimisation.
+
+        This is also the path that parallelises read-only ``task`` sub-agents:
+        when the model emits several independent investigations in one response
+        they run concurrently here, bounded by ``_MAX_PREFETCH_CONCURRENCY`` so
+        a wide fan-out never floods the model backend."""
         if len(tool_calls) < 2:
             return {}
         prepared: list = []
@@ -401,14 +410,17 @@ class ToolCallProcessor:
         if len(prepared) < 2:
             return {}
 
+        sem = asyncio.Semaphore(_MAX_PREFETCH_CONCURRENCY)
+
         async def _run(call):
-            result = await self._tool_executor.execute(
-                call,
-                context,
-                routing=routing,
-                completion_evidence=completion_evidence,
-                event_bus=self._event_bus,
-            )
+            async with sem:
+                result = await self._tool_executor.execute(
+                    call,
+                    context,
+                    routing=routing,
+                    completion_evidence=completion_evidence,
+                    event_bus=self._event_bus,
+                )
             return call.id, call.name, dict(call.arguments or {}), result
 
         gathered = await asyncio.gather(*[_run(call) for call in prepared], return_exceptions=True)

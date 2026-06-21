@@ -75,6 +75,11 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "Large tasks: for a broad analysis or multi-area change, decompose it (update_plan) and "
         "delegate independent sub-investigations with delegate_task instead of doing everything in "
         "one long chain; synthesize their results.",
+        # Parallel fan-out: independent read-only investigations run concurrently
+        # when emitted together, so prefer breadth-in-one-step over a long chain.
+        "Parallel investigation: when several read-only sub-questions are independent, emit multiple "
+        "`task` calls in the SAME response — they run concurrently — then synthesize the returned "
+        "findings, rather than investigating them one after another.",
         # Skills: load a project skill's instructions on demand when one fits.
         "Skills: if a `skill` tool is available and one of its listed skills fits the task, call "
         "skill(<name>) to load its instructions and follow them before proceeding.",
