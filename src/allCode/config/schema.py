@@ -262,6 +262,13 @@ class AgentConfig(StrictConfigModel):
     context_token_budget: int = 24_000  # context-bundle budget kept into the answer (was 4_000)
     max_active_file_bytes: int = 128 * 1024  # bytes per active file section in context (was 64KB)
 
+    # Optional user-defined system-prompt preamble (output style / persona /
+    # standing instructions) appended to the core system prompt. It sits in the
+    # stable, cache-friendly prefix so it applies to every turn without breaking
+    # prefix caching. Empty = no customization. Project-level customization can
+    # also live in AGENTS.md; this is for tone/style and global directives.
+    system_prompt_append: str = ""
+
     @field_validator(
         "max_rounds",
         "inspect_action_budget",

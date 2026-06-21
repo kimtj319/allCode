@@ -68,6 +68,7 @@ class AgentLoop:
         inspect_action_budget: int = 7,
         inspect_round_budget: int = 6,
         prompt_builder: PromptBuilder | None = None,
+        system_prompt_append: str = "",
         heartbeat_interval_seconds: float = 5.0,
         stream_timeout_seconds: float = 60.0,
         show_reasoning: bool = False,
@@ -93,7 +94,9 @@ class AgentLoop:
         self._max_rounds = max_rounds
         self._inspect_action_budget = inspect_action_budget
         self._inspect_round_budget = inspect_round_budget
-        self._prompt_builder = prompt_builder or PromptBuilder(unified=unified_loop)
+        self._prompt_builder = prompt_builder or PromptBuilder(
+            unified=unified_loop, system_prompt_append=system_prompt_append
+        )
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stream_timeout_seconds = stream_timeout_seconds
         self._router = router or RuleBasedRouter()

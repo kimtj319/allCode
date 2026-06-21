@@ -39,10 +39,12 @@ SYSTEM_PROMPT = (
 )
 
 class PromptBuilder:
-    def __init__(self, *, unified: bool = False) -> None:
+    def __init__(self, *, unified: bool = False, system_prompt_append: str = "") -> None:
         # Unified loop: prepend authoritative full-toolset guidance and treat the
         # route as advisory (see plan/74_unified_agent_loop_refactor.md).
         self._unified = unified
+        # Optional user output-style / persona preamble (stable, cache-friendly).
+        self._system_prompt_append = (system_prompt_append or "").strip()
 
     def initial_messages(
         self,
@@ -57,6 +59,8 @@ class PromptBuilder:
         # workspace context bundle is a separate later message — so the cached
         # prefix is not invalidated by them.
         content = SYSTEM_PROMPT
+        if self._system_prompt_append:
+            content = f"{content}\n\n{self._system_prompt_append}"
         if self._unified:
             content = f"{content}\n\n{unified_agent_instruction(None)}"
         content = f"{content}\n\n{language_instruction(detect_response_language(turn_input.user_prompt))}"

@@ -102,6 +102,7 @@ async def run_agent_turn(
         max_rounds=config.agent.max_rounds,
         inspect_action_budget=config.agent.inspect_action_budget,
         inspect_round_budget=config.agent.inspect_round_budget,
+        system_prompt_append=config.agent.system_prompt_append,
         hook_runner=hook_runner,
         checkpoint=_checkpoint,
         plan_approval=plan_approval,
