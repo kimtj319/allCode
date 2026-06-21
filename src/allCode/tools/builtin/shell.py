@@ -59,6 +59,33 @@ class RunCommandTool:
         return await run_shell_call(call, context, validation=False, sandbox_mode=self._shell_sandbox)
 
 
+_SHELL_VERBS = {
+    "rm", "rmdir", "unlink", "del", "mv", "cp", "cat", "ls", "touch", "mkdir",
+    "python", "python3", "pytest", "pip", "git", "echo", "node", "npm", "make",
+}
+
+
+def _unknown_job_error(call: ToolCall, job_id: str) -> ToolResult:
+    """A job_id miss is often the model passing a COMMAND where a job id belongs
+    (e.g. get_command_output(job_id='rm foo.py')). Redirect to the right tool so
+    the model self-corrects instead of repeating until the loop guard fires."""
+    token = job_id.strip()
+    first = token.split()[0] if token else ""
+    looks_like_command = (" " in token) or (first in _SHELL_VERBS)
+    known = [j.job_id for j in JOBS.list_jobs()]
+    msg = f"unknown job: {job_id}. job_id must be an id returned by run_command(background=true) (e.g. 'job_1')"
+    if known:
+        msg += f"; active jobs: {', '.join(known)}"
+    if looks_like_command:
+        msg += (
+            ", not a command string. To DELETE a file or directory use delete_path(path=...); "
+            "to run a one-off shell command use run_command(command=...)."
+        )
+    else:
+        msg += "."
+    return ToolResult(call_id=call.id, name=call.name, ok=False, error=msg, error_type="unknown_job")
+
+
 class GetCommandOutputTool:
     definition = ToolDefinition(
         name="get_command_output",
@@ -77,7 +104,7 @@ class GetCommandOutputTool:
         job_id = str(call.arguments.get("job_id", ""))
         job = JOBS.get(job_id)
         if job is None:
-            return ToolResult(call_id=call.id, name=call.name, ok=False, error=f"unknown job: {job_id}", error_type="unknown_job")
+            return _unknown_job_error(call, job_id)
         out, err = job.read_new()
         running = job.running()
         status = "running" if running else f"exited (code {job.returncode()})"
@@ -111,7 +138,7 @@ class KillCommandTool:
         job_id = str(call.arguments.get("job_id", ""))
         job = JOBS.get(job_id)
         if job is None:
-            return ToolResult(call_id=call.id, name=call.name, ok=False, error=f"unknown job: {job_id}", error_type="unknown_job")
+            return _unknown_job_error(call, job_id)
         job.kill()
         return ToolResult(
             call_id=call.id,
