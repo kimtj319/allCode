@@ -5,6 +5,11 @@ from __future__ import annotations
 from allCode.agent.source_inspection_budget import broad_source_scope, required_representative_probe_count
 from allCode.core.result import CompletionEvidence
 
+# Hard ceiling on how far broad-analysis inspection may expand the action
+# budget. Set well above the default action budget so a raised default is never
+# capped back down; it only guards against pathological unbounded probing.
+_MAX_INSPECT_ACTION_CAP = 64
+
 
 def inspection_budget_available(
     inspection_actions: int,
@@ -30,7 +35,7 @@ def effective_inspect_action_budget(
     if not broad_source_inspect(prompt, routing, evidence):
         return default_budget
     required = required_source_probe_count(evidence)
-    return min(9, max(default_budget, required + 1))
+    return min(max(_MAX_INSPECT_ACTION_CAP, default_budget), max(default_budget, required + 1))
 
 
 def effective_inspect_round_budget(

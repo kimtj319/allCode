@@ -10,8 +10,8 @@ from typing import Any
 
 from allCode.workspace.path_resolver import safe_resolve_under_root
 
-DEFAULT_READ_MAX_BYTES = 12_000
-LARGE_FILE_BYTES = 20_000
+DEFAULT_READ_MAX_BYTES = 32_000
+LARGE_FILE_BYTES = 48_000
 
 
 def syntax_warning(path: Path, content: str) -> str | None:

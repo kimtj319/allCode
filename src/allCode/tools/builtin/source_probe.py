@@ -76,7 +76,7 @@ class SourceProbeTool:
 
             analysis = SourceIntelligenceService().analyze_text(path=path, text=content)
             symbols = [str(item) for item in call.arguments.get("symbols", []) if str(item).strip()]
-            max_ranges = min(max(1, int(call.arguments.get("max_ranges", 4))), 8)
+            max_ranges = min(max(1, int(call.arguments.get("max_ranges", 6))), 16)
             context_lines = min(max(0, int(call.arguments.get("context_lines", 2))), 6)
             include_imports = bool(call.arguments.get("include_imports", True))
             include_edges = bool(call.arguments.get("include_edges", True))

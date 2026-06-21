@@ -65,6 +65,8 @@ class AgentLoop:
         tools: ToolRegistry | None = None,
         event_bus: EventBus | None = None,
         max_rounds: int = 12,
+        inspect_action_budget: int = 7,
+        inspect_round_budget: int = 6,
         prompt_builder: PromptBuilder | None = None,
         heartbeat_interval_seconds: float = 5.0,
         stream_timeout_seconds: float = 60.0,
@@ -89,6 +91,8 @@ class AgentLoop:
         self._tools = tools or ToolRegistry(builtin_tools())
         self._event_bus = event_bus or AsyncEventBus()
         self._max_rounds = max_rounds
+        self._inspect_action_budget = inspect_action_budget
+        self._inspect_round_budget = inspect_round_budget
         self._prompt_builder = prompt_builder or PromptBuilder(unified=unified_loop)
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._stream_timeout_seconds = stream_timeout_seconds
@@ -145,6 +149,8 @@ class AgentLoop:
             tool_call_processor=self._tool_call_processor,
             stream_collector=self._stream_collector,
             max_rounds=self._max_rounds,
+            inspect_action_budget=self._inspect_action_budget,
+            inspect_round_budget=self._inspect_round_budget,
             steering=steering,
         )
 

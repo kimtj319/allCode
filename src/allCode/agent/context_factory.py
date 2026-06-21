@@ -29,7 +29,7 @@ def build_runtime_context_builder(config: AppConfig) -> ContextBuilder:
     index_cache = root_path / ".allCode" / "index_cache.json"
     workspace_index = WorkspaceIndexer(cache_path=index_cache).build(roots)
     recent_targets = RecentTargetMemory()
-    compactor = ContextCompactor()
+    compactor = ContextCompactor(token_budget=config.agent.context_token_budget)
     store = MemoryStore(root_path, DEFAULT_CONFIG_DIR)
     selector = ContextMemorySelector(
         store=store,
@@ -45,4 +45,5 @@ def build_runtime_context_builder(config: AppConfig) -> ContextBuilder:
         workspace_index=workspace_index,
         recent_targets=recent_targets,
         compactor=compactor,
+        max_active_file_bytes=config.agent.max_active_file_bytes,
     )

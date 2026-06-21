@@ -118,7 +118,18 @@ workspace:
 approval:
   mode: ask
   session_allow: []
+agent:
+  # 코드 분석 커버리지/깊이 예산. 값이 클수록 한 번의 분석에서 더 많은 파일을
+  # 살펴보지만 지연/토큰 사용이 늘어납니다. 아래는 기본값입니다.
+  max_rounds: 40              # 턴당 모델↔도구 라운드 수
+  inspect_action_budget: 24  # 검사(read/probe/search) 액션 수
+  inspect_round_budget: 24   # 검사 라운드 수
+  context_token_budget: 16000  # 답변까지 유지되는 컨텍스트 번들 예산
+  max_active_file_bytes: 131072  # 컨텍스트에 싣는 파일당 바이트(128KB)
 ```
+
+전체 코드베이스 분석의 커버리지가 부족하면 위 `agent` 예산을 더 키우고, 지연이
+부담되면 줄이세요. 모델 컨텍스트 윈도가 작다면 `context_token_budget`을 낮춥니다.
 
 OpenAI-compatible endpoint 예시:
 
@@ -406,6 +417,12 @@ python -m pytest tests/tty
 
 최근 업데이트(refactor/unified-agent-loop 브랜치 기준):
 
+- **코드 분석 커버리지 확대** — 한 번의 프로젝트 분석에서 살펴보는 파일 수를
+  크게 늘렸습니다. 라운드 한계(12→40), 검사 액션·라운드 예산(7/6→24/24, 유효
+  캡 9→64), 컨텍스트 번들 예산(4K→16K 토큰), source_overview 대표 읽기
+  (8/12/16→16/28/40), read_file 기본 바이트(12K→32K), source_probe 범위
+  (4→6, 캡 8→16)를 상향했고, 통합 프롬프트가 전체 분석 시 모든 주요 모듈을
+  폭넓게 커버하도록 안내합니다. 모두 `agent` 설정으로 조정 가능합니다.
 - **MCP 서버 관리** — `/mcp` 슬래시 명령과 `allcode mcp` CLI로 MCP 서버를
   추가/조회/삭제. stdio·http·sse 전송을 저장 전에 검증하고 `.allCode/config.yaml`에
   영속화. → [MCP 서버 관리](#mcp-서버-관리)

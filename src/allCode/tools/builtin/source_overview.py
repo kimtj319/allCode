@@ -65,8 +65,8 @@ class SourceOverviewTool:
             target = resolve_under_root(workspace_root, str(call.arguments.get("path", ".")))
             if not target.exists():
                 return ToolResult(call_id=call.id, name=call.name, ok=False, error=f"path does not exist: {target}", error_type="not_found")
-            max_files = min(max(1, int(call.arguments.get("max_files", 80))), 300)
-            max_symbols = min(max(1, int(call.arguments.get("max_symbols", 120))), 500)
+            max_files = min(max(1, int(call.arguments.get("max_files", 200))), 600)
+            max_symbols = min(max(1, int(call.arguments.get("max_symbols", 300))), 1000)
             max_depth = min(max(1, int(call.arguments.get("max_depth", 3))), 5)
             focus = str(call.arguments.get("focus", "package_roles"))
             query = _combined_query(context.user_prompt, str(call.arguments.get("query") or ""))
@@ -186,7 +186,7 @@ def _gitignore_dirs(workspace_root: Path) -> set[str]:
 
 def _target_index(*, target: Path, workspace_root: Path, max_files: int) -> WorkspaceIndex:
     scan_root = target if target.is_dir() else target.parent
-    scan_cap = min(2_000, max(max_files * 5, max_files + 200))
+    scan_cap = min(4_000, max(max_files * 5, max_files + 200))
     ignore_dirs = DEFAULT_IGNORE_DIRS | _gitignore_dirs(workspace_root)
     raw_index = WorkspaceIndexer(max_files=scan_cap, ignore_dirs=ignore_dirs).build(WorkspaceRoots.from_root(scan_root))
     prefix = _relative(scan_root, workspace_root)

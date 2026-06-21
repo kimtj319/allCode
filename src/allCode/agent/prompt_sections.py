@@ -48,6 +48,15 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "Do not repeat the same source_overview / source_probe / read_file call "
         "you have already run; if you already have the structure or file contents, "
         "stop gathering and answer from that evidence.",
+        # Coverage: for whole-project analysis, use the available rounds to go
+        # BROAD, not shallow — partial coverage is the common failure here.
+        "Project-wide analysis: when the request is to analyze/evaluate/review the "
+        "WHOLE codebase, aim for breadth. After source_overview, probe or read at "
+        "least one representative file from EACH major package/module — entry "
+        "points, core logic, and tests — across many files rather than deep-reading "
+        "only a few. Keep going until the major modules are covered, then synthesize; "
+        "do not stop after a couple of files and call the codebase 'analyzed'. If you "
+        "must stop early, say which areas were not yet examined.",
         # Grounding & freshness (#3): keep web answers honest.
         "Grounding: when you answer from web_search, cite the source (site or URL) and, for any "
         "time-sensitive value (prices, rates, versions, 'latest', 'today', 'now'), state that it is "

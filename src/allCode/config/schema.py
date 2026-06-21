@@ -239,6 +239,29 @@ class AgentConfig(StrictConfigModel):
     # false to fall back to the legacy route-gated pipelines.
     unified_loop: bool = True
 
+    # Coverage / depth budgets. These bound how much of a codebase a single
+    # analysis turn can examine. Raised from the original conservative values so
+    # broad "analyze this project" requests cover far more files before the loop
+    # forces a final answer. Lower them to trade coverage for latency/tokens.
+    max_rounds: int = 40  # model<->tool rounds per turn (was 12)
+    inspect_action_budget: int = 24  # read/probe/search calls before inspection locks (was 7)
+    inspect_round_budget: int = 24  # inspection rounds before mutation/answer (was 6)
+    context_token_budget: int = 16_000  # context-bundle budget kept into the answer (was 4_000)
+    max_active_file_bytes: int = 128 * 1024  # bytes per active file section in context (was 64KB)
+
+    @field_validator(
+        "max_rounds",
+        "inspect_action_budget",
+        "inspect_round_budget",
+        "context_token_budget",
+        "max_active_file_bytes",
+    )
+    @classmethod
+    def require_positive_budget(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("value must be greater than zero")
+        return value
+
 
 class AppConfig(StrictConfigModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
