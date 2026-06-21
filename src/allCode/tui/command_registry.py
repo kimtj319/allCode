@@ -58,6 +58,7 @@ def default_commands() -> list[CommandSpec]:
         CommandSpec(name="/approval", description="Show or set approval mode: auto (no prompts) or ask.", usage="/approval [auto|ask]", options=["auto", "ask"]),
         CommandSpec(name="/thinking", description="Toggle showing the model's reasoning/thought channel.", usage="/thinking [on|off]", options=["on", "off"]),
         CommandSpec(name="/permissions", description="Show or persist allow/deny permission rules (config.yaml).", usage="/permissions [allow|deny <rule>]", options=["allow", "deny"]),
+        CommandSpec(name="/mcp", description="List/add/remove MCP servers (config.yaml; effective next run).", usage="/mcp [list|add <name> <cmd...>|remove <name>]", options=["list", "add", "remove"]),
         CommandSpec(name="/config", description="Show active runtime configuration.", usage="/config"),
         CommandSpec(name="/init", description="Generate an AGENTS.md draft from the project.", usage="/init [force]", options=["force"]),
         CommandSpec(name="/doctor", description="Diagnose config, API key, and setup.", usage="/doctor"),

@@ -61,7 +61,7 @@ class SlashCommandHandler:
             if self.memory_backend is None:
                 return SlashCommandResult(message="메모리 명령 백엔드가 설정되지 않았습니다.")
             return SlashCommandResult(message=await self.memory_backend.handle(normalized))
-        if normalized.split(maxsplit=1)[0] in {"/tools", "/model", "/approval", "/permissions", "/thinking", "/config", "/init", "/doctor", "/export", "/pr", "/agents", "/status", "/debug"}:
+        if normalized.split(maxsplit=1)[0] in {"/tools", "/model", "/approval", "/permissions", "/thinking", "/mcp", "/config", "/init", "/doctor", "/export", "/pr", "/agents", "/status", "/debug"}:
             if self.status_backend is None:
                 return SlashCommandResult(message="상태 명령 백엔드가 설정되지 않았습니다.")
             return SlashCommandResult(message=await self.status_backend.handle(normalized))

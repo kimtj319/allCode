@@ -83,6 +83,53 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _mcp_cli(args: list[str], *, out: TextIO, err: TextIO) -> int:
+    """`allcode mcp [list|add|remove]` — manage MCP servers without editing YAML."""
+    from allCode.config import mcp_admin
+
+    root = Path.cwd()
+    sub = args[0].lower() if args else "list"
+    if sub in {"list", "ls"}:
+        servers = mcp_admin.list_servers(root)
+        if not servers:
+            out.write("No MCP servers configured (.allCode/config.yaml).\n")
+        for server in servers:
+            out.write(f"- {mcp_admin.describe_server(server)}\n")
+        return 0
+    if sub == "add":
+        rest = args[1:]
+        if len(rest) < 2:
+            err.write(
+                "usage: allcode mcp add <name> <command> [args...]\n"
+                "       allcode mcp add <name> --http <url>\n"
+            )
+            return 2
+        name, spec = rest[0], rest[1:]
+        try:
+            if spec[0] in {"--http", "--sse", "--url"}:
+                if len(spec) < 2:
+                    err.write("usage: allcode mcp add <name> --http <url>\n")
+                    return 2
+                transport = "sse" if spec[0] == "--sse" else "http"
+                path = mcp_admin.add_server(root, name, url=spec[1], transport=transport)
+            else:
+                path = mcp_admin.add_server(root, name, command=spec[0], args=spec[1:])
+        except Exception as exc:  # noqa: BLE001
+            err.write(f"failed to add MCP server: {exc}\n")
+            return 1
+        out.write(f"Added MCP server '{name}' -> {path}\n")
+        return 0
+    if sub in {"remove", "rm", "delete"}:
+        if len(args) < 2:
+            err.write("usage: allcode mcp remove <name>\n")
+            return 2
+        path, removed = mcp_admin.remove_server(root, args[1])
+        out.write(f"Removed '{args[1]}' -> {path}\n" if removed else f"No such MCP server: {args[1]}\n")
+        return 0 if removed else 1
+    err.write("usage: allcode mcp [list|add|remove]\n")
+    return 2
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -91,6 +138,11 @@ def main(
 ) -> int:
     stdout = out or sys.stdout
     stderr = err or sys.stderr
+
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    if raw_argv and raw_argv[0] == "mcp":
+        return _mcp_cli(raw_argv[1:], out=stdout, err=stderr)
+
     parser = build_parser()
 
     try:

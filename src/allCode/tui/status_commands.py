@@ -44,6 +44,8 @@ class RuntimeStatusCommandService:
             return self._thinking(args)
         if root == "/permissions":
             return self._permissions(normalized)
+        if root == "/mcp":
+            return self._mcp(normalized)
         if root == "/config":
             return self._config()
         if root == "/init":
@@ -189,6 +191,51 @@ class RuntimeStatusCommandService:
             return f"추론 표시를 '{choice}'로 바꿨지만 설정 파일 저장에 실패했습니다: {exc}"
         note = "이제 모델의 사고 과정을 흐리게 표시합니다." if value else "사고 과정을 숨깁니다."
         return f"추론 표시를 '{choice}'로 변경하고 저장했습니다 ({path}). {note} 다음 턴부터 적용됩니다."
+
+    def _mcp(self, command: str) -> str:
+        """List/add/remove MCP servers in the project config (effective next run)."""
+        from allCode.config import mcp_admin
+
+        parts = command.split()
+        sub = parts[1].lower() if len(parts) > 1 else "list"
+        if sub in {"list", "ls"}:
+            servers = mcp_admin.list_servers(self.project_root)
+            active = sorted(d.name for d in self.tools.definitions() if d.group == "mcp")
+            lines = ["MCP 서버 (config.yaml):"]
+            lines += [f"  - {mcp_admin.describe_server(s)}" for s in servers] or ["  (없음)"]
+            lines.append(
+                f"이번 세션 활성 MCP 도구: {len(active)}개" + (f" — {', '.join(active)}" if active else "")
+            )
+            lines.append(
+                "추가: /mcp add <name> <command> [args...] · HTTP: /mcp add <name> --http <url> · 제거: /mcp remove <name>"
+            )
+            return "\n".join(lines)
+        if sub == "add":
+            rest = parts[2:]
+            if not rest:
+                return "사용법: /mcp add <name> <command> [args...]  |  /mcp add <name> --http <url>"
+            name, spec = rest[0], rest[1:]
+            try:
+                if spec and spec[0] in {"--http", "--sse", "--url"}:
+                    if len(spec) < 2:
+                        return "사용법: /mcp add <name> --http <url>"
+                    transport = "sse" if spec[0] == "--sse" else "http"
+                    path = mcp_admin.add_server(self.project_root, name, url=spec[1], transport=transport)
+                elif spec:
+                    path = mcp_admin.add_server(self.project_root, name, command=spec[0], args=spec[1:])
+                else:
+                    return "stdio 서버는 command가 필요합니다: /mcp add <name> <command> [args...]"
+            except Exception as exc:  # noqa: BLE001
+                return f"MCP 서버 추가에 실패했습니다: {exc}"
+            return f"MCP 서버 '{name}'를 추가하고 저장했습니다 ({path}). 다음 실행부터 도구로 로드됩니다."
+        if sub in {"remove", "rm", "delete"}:
+            if len(parts) < 3:
+                return "사용법: /mcp remove <name>"
+            path, removed = mcp_admin.remove_server(self.project_root, parts[2])
+            if not removed:
+                return f"해당 이름의 MCP 서버가 없습니다: {parts[2]}"
+            return f"MCP 서버 '{parts[2]}'를 제거했습니다 ({path}). 다음 실행부터 적용됩니다."
+        return "지원: /mcp [list|add|remove]"
 
     def _permissions(self, command: str) -> str:
         """Show or persist permission rules (allow/deny) to .allCode/config.yaml.
