@@ -111,6 +111,7 @@ model:
   api_key_env: ALLCODE_API_KEY
   timeout_seconds: 120
   max_output_tokens: 8192
+  context_window_tokens: 0   # 모델 컨텍스트 윈도(토큰). >0이면 대화가 윈도에 맞게 자동 압축
 workspace:
   root: .
   extra_roots: []
@@ -126,7 +127,13 @@ agent:
   inspect_round_budget: 24   # 검사 라운드 수
   context_token_budget: 24000  # 답변까지 유지되는 컨텍스트 번들 예산
   max_active_file_bytes: 131072  # 컨텍스트에 싣는 파일당 바이트(128KB)
+  system_prompt_append: ""    # 출력 스타일/페르소나 등 시스템 프롬프트에 덧붙일 사용자 지침
 ```
+
+`model.context_window_tokens`를 실제 모델 윈도(예: 32768)로 설정하면, 긴
+세션에서 대화가 윈도에 맞게 자동 압축되어 오버플로를 막고(작은 윈도) 더 많은
+근거를 보존합니다(큰 윈도). `agent.system_prompt_append`에 어조·형식·상시 지침을
+적으면 매 턴에 적용됩니다(캐시 친화적 정적 영역에 배치).
 
 전체 코드베이스 분석의 커버리지가 부족하면 위 `agent` 예산을 더 키우고, 지연이
 부담되면 줄이세요. 모델 컨텍스트 윈도가 작다면 `context_token_budget`을 낮춥니다.
@@ -423,6 +430,17 @@ python -m pytest tests/tty
 
 최근 업데이트(refactor/unified-agent-loop 브랜치 기준):
 
+- **하네스 기능 보강 (다른 코딩 에이전트 대비 격차 해소)**:
+  - *모델 윈도 인지 자동 압축* — `model.context_window_tokens` 기반으로 대화를
+    윈도에 맞게 자동 압축(출력+보존 프리픽스 제외, 85% 안전·6K 하한). 0이면
+    레거시 고정 예산.
+  - *프롬프트 캐시 친화 정렬* — 정적 가이드를 시스템 메시지 선두로, 턴별 변동을
+    뒤로 → vLLM 자동 prefix 캐시 적중률↑.
+  - *헤드리스 JSON 출력* — `--output-format text|json|stream-json` (CI/스크립트용).
+  - *서브에이전트 병렬 fan-out* — 독립 read-only `task`를 한 응답에 emit하면
+    동시 실행(동시성 상한 8).
+  - *OS 데스크톱 알림* — 긴 턴 종료 시 OSC 9 알림(+벨); 더 풍부한 알림은 `stop` 훅.
+  - *출력 스타일 커스터마이즈* — `agent.system_prompt_append`로 어조/페르소나/상시 지침.
 - **코드 분석 커버리지 확대 (대형 코드베이스 최대 적용)** — 한 번의 프로젝트
   분석에서 살펴보는 파일 수를 크게 늘렸습니다. `source_overview`가 한 번에
   요약하는 파일 수를 기본 600(최대 2000)으로 올려, 수백~수천 파일 저장소도
