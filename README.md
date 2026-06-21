@@ -29,6 +29,12 @@ unit/integration test는 명시적으로 주입한 fake LLM 또는 mock transpor
 - route 기반 tool 노출. 일반 답변에는 tool schema를 숨기고, inspect,
   modify, operate, external answer route에 필요한 tool만 모델에 전달합니다.
 - 내장 file, search, shell/validation, evidence-only web tool.
+- **온디맨드 스킬**: `.allCode/skills`에 정의한 작업 지침을 모델이 필요할 때
+  `skill` tool로 로드 (Claude Code 방식 progressive disclosure). → [스킬](#스킬-allcodeskills)
+- **MCP 서버 관리**: `/mcp` 슬래시 명령과 `allcode mcp` CLI로 config 직접 수정
+  없이 MCP 서버를 추가/조회/삭제. → [MCP 서버 관리](#mcp-서버-관리)
+- **세션 이어가기**: `/resume`으로 이전 세션 목록 확인 및 현재 세션으로 대화
+  맥락 로드. → [슬래시 명령어](#슬래시-명령어)
 - workspace root, safe path resolution, indexing, symbol extraction.
 - hierarchical `ALLCODE.md` style memory, session summary, recent target,
   repo map, context compaction, auto-memory inbox, redaction.
@@ -177,6 +183,102 @@ allcode --plain-terminal
 terminal-native UI로 fallback합니다. `--plain-terminal`은 기본
 terminal-native UI를 명시하는 compatibility alias입니다.
 
+## 슬래시 명령어
+
+TUI에서 `/`로 시작하는 명령으로 세션을 제어합니다. 입력 중 `/`를 누르면 팔레트
+자동완성이 뜨고, 인자를 받는 명령은 선택 가능한 옵션을 함께 제안합니다.
+
+| 명령어 | 설명 |
+| --- | --- |
+| `/help`, `/commands` | 전체 슬래시 명령 목록 표시 |
+| `/model [<name>\|impl <name>\|base <url>]` | 모델·구현 모델·base URL 조회/변경 (config.yaml 저장) |
+| `/approval [auto\|ask]` | 승인 모드 조회/설정 |
+| `/permissions [allow\|deny <rule>]` | 허용/거부 권한 규칙 조회/저장 |
+| `/thinking [on\|off]` | 모델 reasoning 채널 표시 토글 |
+| `/tools` | 사용 가능한 tool 목록 |
+| `/mcp [list\|add <name> <cmd...>\|remove <name>]` | MCP 서버 추가/조회/삭제 (config.yaml, 다음 실행부터 적용) |
+| `/skills` | 모델이 로드할 수 있는 스킬 목록 (`.allCode/skills`) |
+| `/agents` | 정의된 서브에이전트 목록 (`.allCode/agents`) |
+| `/resume [<id\|name>]` | 최근 세션 목록, 또는 이전 세션 대화를 현재 세션으로 로드 |
+| `/memory show\|add <text>\|refresh` | 활성 메모리 조회/추가/리로드 |
+| `/compact` | 대화 컨텍스트 요약·압축 |
+| `/cost` | 이번 세션의 토큰·컨텍스트 사용량 |
+| `/status [last]` | 사용량 게이지·세션 상태 (`last`는 진단 정보) |
+| `/config` | 활성 런타임 설정 표시 |
+| `/init [force]` | 프로젝트에서 `AGENTS.md` 초안 생성 |
+| `/doctor` | 설정·API 키·환경 진단 |
+| `/review`, `/diff` | 커밋되지 않은 변경 (git diff) |
+| `/undo` | allCode의 마지막 git 자동 커밋 되돌리기 (히스토리 레벨) |
+| `/rewind` | 마지막 턴 체크포인트로 파일 복원 (워킹트리 레벨, 미커밋 변경도 되돌림) |
+| `/export [path]` | 대화 transcript를 파일로 저장 |
+| `/pr [title]` | 커밋·푸시 후 GitHub PR 생성 (`gh`) |
+| `/theme [dark\|light]` | 색상 테마 전환 |
+| `/clear` | 화면(transcript) 정리 |
+| `/stop` | 진행 중인 턴 취소 |
+| `/exit` | allCode 종료 |
+
+> `/undo`와 `/rewind`의 차이: `/undo`는 git 히스토리에서 마지막 자동 커밋을
+> 되돌리고, `/rewind`는 마지막 턴 시작 시점의 파일 스냅샷(체크포인트)으로 워킹
+> 트리를 복원합니다(커밋되지 않은 편집도 되돌림).
+
+`.allCode/commands/*.md`에 정의한 커스텀 명령도 같은 팔레트에 등록되어 슬래시로
+실행할 수 있습니다.
+
+## 스킬 (.allCode/skills)
+
+스킬은 자주 쓰는 작업 절차를 모델이 필요할 때만 불러오는 재사용 지침입니다.
+이름과 한 줄 설명은 항상 모델에 노출되고, 본문 지침은 모델이 `skill(<name>)`을
+호출할 때 로드됩니다(progressive disclosure). 토큰을 아끼면서도 관련 작업에서만
+상세 지침이 컨텍스트에 들어옵니다.
+
+두 가지 형식을 지원합니다.
+
+```
+.allCode/skills/<name>/SKILL.md   # 디렉터리 형식 (보조 파일 동봉 가능)
+.allCode/skills/<name>.md         # 단일 파일 형식
+```
+
+각 파일은 frontmatter의 `description`과 본문 지침으로 구성합니다.
+
+```markdown
+---
+description: 코드 리뷰 체크리스트
+---
+1. 경계 조건과 입력 검증을 확인한다.
+2. 에러 처리와 로깅을 확인한다.
+3. 변경에 대응하는 테스트가 있는지 확인한다.
+```
+
+스킬이 하나라도 있으면 `skill` tool이 자동 등록되고, `/skills`로 목록을 확인할 수
+있습니다. 관련 작업 시 모델이 알맞은 스킬을 먼저 로드하도록 통합 프롬프트가
+안내합니다.
+
+## MCP 서버 관리
+
+[Model Context Protocol](https://modelcontextprotocol.io) 서버를 config 파일을
+직접 편집하지 않고 추가/조회/삭제할 수 있습니다. 변경은 `.allCode/config.yaml`의
+`mcp.servers`에 저장되며 다음 실행부터 적용됩니다.
+
+TUI 슬래시 명령:
+
+```
+/mcp                                  # 등록된 서버와 이번 세션 활성 MCP tool 수
+/mcp add fs npx -y server-filesystem  # stdio 서버 추가
+/mcp add remote --http https://example.com/mcp   # http 서버 추가
+/mcp remove fs                        # 서버 삭제
+```
+
+CLI(헤드리스/스크립트):
+
+```bash
+allcode mcp list
+allcode mcp add fs npx -y server-filesystem
+allcode mcp add remote --http https://example.com/mcp
+allcode mcp remove fs
+```
+
+stdio 전송은 `command`가, http/sse 전송은 `url`이 필요하며 저장 전에 검증됩니다.
+
 ## 프로젝트 구조
 
 - `src/allCode/core`: strict Pydantic core model, event, event bus,
@@ -189,7 +291,7 @@ terminal-native UI를 명시하는 compatibility alias입니다.
 - `src/allCode/tools`: tool contract, registry, executor, approval logic,
   edit transaction, 내장 file/search/shell/web tool.
 - `src/allCode/workspace`: workspace root, safe path resolution, indexing,
-  symbol extraction.
+  symbol extraction, agent definition/skill 로더.
 - `src/allCode/memory`: hierarchical memory, store, session store/summary,
   recent target, repo map/ranker, selector, compactor, auto-memory inbox,
   `/memory` command backend.
@@ -197,7 +299,8 @@ terminal-native UI를 명시하는 compatibility alias입니다.
   terminal composer/keymap/history/completion/paste handling, Markdown
   normalization/rendering, transcript state/reducer/view, command registry,
   approval panel state, event renderer, UI message model.
-- `src/allCode/config`: config schema, defaults, precedence-aware loader.
+- `src/allCode/config`: config schema, defaults, precedence-aware loader,
+  MCP 서버 관리(`mcp_admin`).
 - `src/allCode/generation`: language strategy registry와 Python, Node, Go,
   Rust, Java, generic project strategy.
 - `tests`: unit, integration, quality, TTY smoke, helper scenario.
@@ -287,9 +390,31 @@ python -m pytest tests/tty
   unit test는 mock transport와 fake LLM scenario를 사용합니다.
 - non-headless 실제 PTY smoke는 실행 환경에 의존합니다. 자동 TTY smoke test는
   terminal-native/Textual state와 rendering contract를 검증합니다.
-- git auto-commit, plugin marketplace, MCP server manager, multi-agent swarm,
-  cloud sandbox, PageRank-style repo ranking, full interactive diff editor는
-  `docs/future_work.md`에 post-MVP 항목으로 기록되어 있습니다.
+- plugin marketplace, multi-agent swarm, cloud sandbox, PageRank-style repo
+  ranking, full interactive diff editor는 `docs/future_work.md`에 post-MVP
+  항목으로 기록되어 있습니다. (git auto-commit, MCP server manager, on-demand
+  skill 시스템은 구현되어 본 문서에 반영되었습니다.)
+
+## 변경 내역
+
+최근 업데이트(refactor/unified-agent-loop 브랜치 기준):
+
+- **MCP 서버 관리** — `/mcp` 슬래시 명령과 `allcode mcp` CLI로 MCP 서버를
+  추가/조회/삭제. stdio·http·sse 전송을 저장 전에 검증하고 `.allCode/config.yaml`에
+  영속화. → [MCP 서버 관리](#mcp-서버-관리)
+- **온디맨드 스킬 시스템** — `.allCode/skills/<name>/SKILL.md`(또는 단일 파일)에
+  정의한 지침을 모델이 `skill` tool로 필요할 때 로드. 이름·설명만 항상 노출하는
+  progressive disclosure 방식이며, `/skills`로 목록 확인. → [스킬](#스킬-allcodeskills)
+- **인-세션 `/resume`** — 실행 시 `--resume` 플래그뿐 아니라 세션 도중에도
+  `/resume`으로 최근 세션 목록을 보고 `/resume <id|name>`으로 이전 대화 맥락을
+  현재 세션에 로드해 이어갈 수 있음.
+- **`/undo`·`/rewind` 구분 명확화** — `/undo`는 git 자동 커밋(히스토리 레벨),
+  `/rewind`는 마지막 턴 체크포인트(워킹트리 레벨)로 역할을 분리해 도움말에 명시.
+- **통합 에이전트 루프(unified loop)** — 라우팅을 advisory로 두고 모델이 전체
+  toolset을 직접 선택. grounding/edit/verify/delegation/anti-loop 가이드를
+  통합 프롬프트로 제공.
+- **TUI 개선** — 턴 사이 구분선, 다중모달 이미지 입력(`@image.png` 멘션),
+  동적 모델 표시 footer, 슬래시 명령 결과 패널 타이틀.
 
 ## Troubleshooting
 
