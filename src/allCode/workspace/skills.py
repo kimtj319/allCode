@@ -11,6 +11,12 @@ Two layouts are supported:
 
 Each file may carry YAML-ish frontmatter with a ``description``; the body is the
 instructions returned when the skill is loaded.
+
+Only the user's own custom skills are listed. A skill that ships bundled with a
+project as a template/example can opt out of the listing with frontmatter
+``template: true`` (or ``hidden: true``); documentation files such as
+``README.md`` dropped into the skills directory are ignored as well. This keeps
+``/skills`` and the model's ``skill`` tool limited to genuine custom skills.
 """
 
 from __future__ import annotations
@@ -21,6 +27,14 @@ from pathlib import Path
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
+
+# Documentation / index files that may sit alongside skills but are not skills
+# (e.g. a README shipped with a bundled example set).
+_RESERVED_STEMS = {"readme", "index", "_index"}
+
+
+def _is_truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -53,7 +67,7 @@ def _first_line(body: str) -> str:
 
 def _make(name: str, path: Path) -> SkillDefinition | None:
     name = name.strip().lower()
-    if not _NAME_RE.match(name):
+    if not _NAME_RE.match(name) or name in _RESERVED_STEMS:
         return None
     try:
         text = path.read_text(encoding="utf-8")
@@ -62,6 +76,9 @@ def _make(name: str, path: Path) -> SkillDefinition | None:
     if not text.strip():
         return None
     meta, body = _parse_frontmatter(text)
+    # Bundled template/example skills opt out of the custom-skill listing.
+    if _is_truthy(meta.get("template")) or _is_truthy(meta.get("hidden")):
+        return None
     return SkillDefinition(
         name=name,
         description=meta.get("description", "") or _first_line(body),
