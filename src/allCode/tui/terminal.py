@@ -928,6 +928,12 @@ class TerminalSession:
         # Back to idle: the footer shows the base tier again until the next turn.
         self._reset_active_model()
         if self.screen.interactive:
+            # Close the finished turn with a dim rule so the answer is visually
+            # separated from the next prompt's composer (turn boundary).
+            if self._final_answer_rendered:
+                self._prepare_body_output()
+                width = max(20, self.screen.width - 1)
+                self.console.print(Text("─" * width, style="dim"))
             self.screen.clear_input_panel()
             self.input_editor.render_runtime_frame(activity=None)
         else:
