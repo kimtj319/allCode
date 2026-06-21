@@ -28,8 +28,9 @@ class MCPManager:
     be driven both from synchronous setup and from the async agent loop safely.
     """
 
-    def __init__(self, *, startup_timeout: float = 8.0) -> None:
+    def __init__(self, *, startup_timeout: float = 8.0, request_timeout: float = 60.0) -> None:
         self._startup_timeout = startup_timeout
+        self._request_timeout = request_timeout
         self._clients: list = []
         self._tools: list = []
         self._prompts: list[dict] = []
@@ -59,6 +60,7 @@ class MCPManager:
                 url=server.url or "",
                 headers=server.headers,
                 startup_timeout=self._startup_timeout,
+                request_timeout=self._request_timeout,
             )
         else:
             client = MCPStdioClient(
@@ -66,6 +68,7 @@ class MCPManager:
                 args=server.args,
                 env=server.env,
                 startup_timeout=self._startup_timeout,
+                request_timeout=self._request_timeout,
             )
 
         async def _bootstrap() -> tuple[list[dict], list[dict], list[dict]]:
@@ -118,7 +121,10 @@ def load_mcp_tools(config: "AppConfig") -> tuple[list[MCPTool], MCPManager | Non
     servers = [server for server in config.mcp.servers if server.enabled]
     if not servers:
         return [], None
-    manager = MCPManager(startup_timeout=config.mcp.startup_timeout_ms / 1000.0)
+    manager = MCPManager(
+        startup_timeout=config.mcp.startup_timeout_ms / 1000.0,
+        request_timeout=config.mcp.request_timeout_ms / 1000.0,
+    )
     for server in servers:
         try:
             manager.add_server(server)

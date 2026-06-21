@@ -40,6 +40,7 @@ class MCPHttpClient:
         url: str,
         headers: dict[str, str] | None = None,
         startup_timeout: float = 8.0,
+        request_timeout: float = 60.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._url = url
@@ -48,10 +49,13 @@ class MCPHttpClient:
             "Accept": "application/json, text/event-stream",
             **(headers or {}),
         }
-        self._timeout = startup_timeout
+        self._startup_timeout = startup_timeout
+        self._request_timeout = request_timeout
         self._next_id = 0
         self._session_id: str | None = None
-        self._client = client or httpx.AsyncClient(timeout=startup_timeout)
+        # Default to the (larger) per-call budget so tools/call has room; the
+        # initialize handshake passes the shorter startup_timeout explicitly.
+        self._client = client or httpx.AsyncClient(timeout=request_timeout)
         self._owns_client = client is None
         self._server_info: dict[str, Any] = {}
 
@@ -63,6 +67,7 @@ class MCPHttpClient:
                 "capabilities": {},
                 "clientInfo": {"name": "allCode", "version": "1.0"},
             },
+            timeout=self._startup_timeout,
         )
         self._server_info = result.get("serverInfo", {}) if isinstance(result, dict) else {}
         await self._notify("notifications/initialized", {})
@@ -123,16 +128,28 @@ class MCPHttpClient:
         return headers
 
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
+        # A notification has no JSON-RPC response, but a transport error or a 4xx
+        # (e.g. session not established) means the session is broken — surface it
+        # so start() fails loudly instead of returning a half-initialized client
+        # that rejects every later tools/call. Also pick up Mcp-Session-Id here.
         message = {"jsonrpc": "2.0", "method": method, "params": params}
         try:
-            await self._client.post(self._url, content=json.dumps(message), headers=self._request_headers())
-        except httpx.HTTPError:
-            return
+            response = await self._client.post(self._url, content=json.dumps(message), headers=self._request_headers())
+        except httpx.HTTPError as exc:
+            raise MCPError(f"{method} transport error: {exc}") from exc
+        session_id = response.headers.get("Mcp-Session-Id")
+        if session_id:
+            self._session_id = session_id
+        if response.status_code >= 400:
+            raise MCPError(f"{method} failed: HTTP {response.status_code}")
 
-    async def _request(self, method: str, params: dict[str, Any]) -> Any:
+    async def _request(self, method: str, params: dict[str, Any], *, timeout: float | None = None) -> Any:
         message = {"jsonrpc": "2.0", "id": self._allocate_id(), "method": method, "params": params}
         try:
-            response = await self._client.post(self._url, content=json.dumps(message), headers=self._request_headers())
+            kwargs = {"content": json.dumps(message), "headers": self._request_headers()}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            response = await self._client.post(self._url, **kwargs)
         except httpx.HTTPError as exc:
             raise MCPError(f"{method} transport error: {exc}") from exc
         session_id = response.headers.get("Mcp-Session-Id")

@@ -68,9 +68,9 @@ class SearchFilesTool:
             else:
                 rg_result = self._run_rg(query, root, call.arguments, max_results)
             if rg_result:
-                return self._result(call, rg_result)
+                return self._result(call, rg_result, max_results)
             if rg_result == [] and not root.is_file():
-                return self._result(call, rg_result)
+                return self._result(call, rg_result, max_results)
             rows: list[dict[str, object]] = []
             for path in self._iter_files(root):
                 try:
@@ -80,9 +80,10 @@ class SearchFilesTool:
                 for line_number, line in enumerate(text.splitlines(), start=1):
                     if query in line:
                         rows.append({"path": str(path), "line": line_number, "preview": line})
-                        if len(rows) >= max_results:
-                            return self._result(call, rows)
-            return self._result(call, rows)
+                        # Collect one past the cap so _result can flag truncation.
+                        if len(rows) > max_results:
+                            return self._result(call, rows, max_results)
+            return self._result(call, rows, max_results)
         except Exception as exc:
             return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
 
@@ -100,7 +101,10 @@ class SearchFilesTool:
         rg = shutil.which("rg")
         if rg is None:
             return None
-        command = [rg, "--line-number", "--color", "never", "--no-ignore", "--max-count", str(max_results)]
+        # max_results+1 so a single high-match file can overflow the cap and the
+        # global trim in _result can detect/flag truncation rather than silently
+        # dropping other files' matches.
+        command = [rg, "--line-number", "--color", "never", "--no-ignore", "--max-count", str(max_results + 1)]
         context_lines = int(arguments.get("context_lines", 0))
         if context_lines > 0:
             command.extend(["--context", str(min(context_lines, 5))])
@@ -126,18 +130,28 @@ class SearchFilesTool:
             except ValueError:
                 continue
             rows.append({"path": path, "line": parsed_line, "preview": preview})
-            if len(rows) >= max_results:
+            # Collect one past the cap so _result can detect/flag truncation.
+            if len(rows) > max_results:
                 break
         return rows
 
-    def _result(self, call: ToolCall, rows: list[dict[str, object]]) -> ToolResult:
+    def _result(self, call: ToolCall, rows: list[dict[str, object]], max_results: int = 50) -> ToolResult:
         query = str(call.arguments.get("query", ""))
         search_path = str(call.arguments.get("path", "."))
+        # Callers collect up to max_results+1 so we can tell a real overflow from
+        # an exact fill; trim for display and signal truncation either way.
+        truncated = len(rows) > max_results
+        rows = rows[:max_results]
         symbol_like = _symbol_like_tokens(query)
         ranked_rows = self._annotate_rows(rows, symbol_like)
         content = "\n".join(f"{row['path']}:{row['line']}: {row['preview']}" for row in rows)
         if not content:
             content = f"No matches found for query {query!r} under {search_path!r}. 검색 결과 없음."
+        elif truncated:
+            content += (
+                f"\n\n[truncated at {max_results} matches — more exist. "
+                "Narrow the query or raise max_results to see the rest.]"
+            )
         return ToolResult(
             call_id=call.id,
             name=call.name,
@@ -146,13 +160,14 @@ class SearchFilesTool:
             metadata={
                 "query": query,
                 "evidence_count": len(rows),
+                "truncated": truncated,
                 "matches": ranked_rows,
                 "symbol_like_tokens": symbol_like,
                 "repo_map_rank_hint": bool(symbol_like),
                 "observation": {
                     "kind": "search",
                     "target": search_path,
-                    "summary": f"Found {len(rows)} match(es) for {query!r}",
+                    "summary": f"Found {len(rows)} match(es) for {query!r}" + (" (truncated)" if truncated else ""),
                     "risk": "low",
                 },
             },

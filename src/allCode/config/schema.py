@@ -186,8 +186,12 @@ class MCPServerConfig(StrictConfigModel):
 class MCPConfig(StrictConfigModel):
     servers: list[MCPServerConfig] = Field(default_factory=list)
     startup_timeout_ms: int = 8000
+    # Per-call timeout for tools/call etc. MCP tools do real work (fetches,
+    # builds, queries) that routinely exceeds the short startup handshake budget,
+    # so it has its own, larger ceiling instead of reusing startup_timeout_ms.
+    request_timeout_ms: int = 60000
 
-    @field_validator("startup_timeout_ms")
+    @field_validator("startup_timeout_ms", "request_timeout_ms")
     @classmethod
     def require_positive_timeout(cls, value: int) -> int:
         if value <= 0:

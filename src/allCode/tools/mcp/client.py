@@ -28,11 +28,13 @@ class MCPStdioClient:
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
         startup_timeout: float = 8.0,
+        request_timeout: float = 60.0,
     ) -> None:
         self._command = command
         self._args = list(args or [])
         self._env = dict(env or {})
         self._startup_timeout = startup_timeout
+        self._request_timeout = request_timeout
         self._process: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._lock = asyncio.Lock()
@@ -57,6 +59,7 @@ class MCPStdioClient:
                 "capabilities": {},
                 "clientInfo": {"name": "allCode", "version": "1.0"},
             },
+            timeout=self._startup_timeout,
         )
         self._server_info = result.get("serverInfo", {}) if isinstance(result, dict) else {}
         await self._notify("notifications/initialized", {})
@@ -138,7 +141,7 @@ class MCPStdioClient:
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
         await self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
-    async def _request(self, method: str, params: dict[str, Any]) -> Any:
+    async def _request(self, method: str, params: dict[str, Any], *, timeout: float | None = None) -> Any:
         process = self._process
         if process is None or process.stdout is None:
             raise MCPError("MCP server is not running")
@@ -146,7 +149,7 @@ class MCPStdioClient:
         async with self._lock:
             await self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
             deadline_message = await asyncio.wait_for(
-                self._read_response(process, request_id), timeout=self._startup_timeout
+                self._read_response(process, request_id), timeout=timeout or self._request_timeout
             )
         if "error" in deadline_message:
             error = deadline_message["error"]

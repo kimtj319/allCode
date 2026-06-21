@@ -105,6 +105,9 @@ class GetCommandOutputTool:
         job = JOBS.get(job_id)
         if job is None:
             return _unknown_job_error(call, job_id)
+        # If the job has exited, drain the reader threads first so this poll
+        # returns the full final output instead of racing the pump threads.
+        job.ensure_drained()
         out, err = job.read_new()
         running = job.running()
         status = "running" if running else f"exited (code {job.returncode()})"

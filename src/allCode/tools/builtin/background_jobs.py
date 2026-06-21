@@ -28,12 +28,28 @@ class BackgroundJob:
     _stdout_cursor: int = 0
     _stderr_cursor: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _readers: list[threading.Thread] = field(default_factory=list)
 
     def start_readers(self) -> None:
         if self.popen.stdout is not None:
-            threading.Thread(target=self._pump, args=(self.popen.stdout, self._stdout), daemon=True).start()
+            self._spawn_reader(self.popen.stdout, self._stdout)
         if self.popen.stderr is not None:
-            threading.Thread(target=self._pump, args=(self.popen.stderr, self._stderr), daemon=True).start()
+            self._spawn_reader(self.popen.stderr, self._stderr)
+
+    def _spawn_reader(self, stream, buffer: list[str]) -> None:
+        thread = threading.Thread(target=self._pump, args=(stream, buffer), daemon=True)
+        self._readers.append(thread)
+        thread.start()
+
+    def ensure_drained(self, timeout: float = 2.0) -> None:
+        """Once the process has exited, join the reader threads so the final
+        output flushed at exit is in the buffers before it is read. Without this,
+        poll() can report 'exited' while the pump threads still hold the last
+        lines, and a single get_command_output would miss the tail."""
+        if self.returncode() is None:
+            return
+        for thread in self._readers:
+            thread.join(timeout=timeout)
 
     def _pump(self, stream, buffer: list[str]) -> None:
         try:
