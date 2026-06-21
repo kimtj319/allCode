@@ -510,6 +510,7 @@ class TerminalSession:
             "compact": "대화 압축",
             "init": "초기화",
             "mcp": "MCP",
+            "skills": "스킬",
             "model": "모델",
             "config": "설정",
             "clear": "화면 정리",

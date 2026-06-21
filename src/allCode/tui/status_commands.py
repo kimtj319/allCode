@@ -225,7 +225,9 @@ class RuntimeStatusCommandService:
         from allCode.memory.conversation_store import ConversationStore
 
         store = ConversationStore(self.config.workspace.root)
-        ref = args[0] if args and args[0].lower() not in {"list", "ls"} else ""
+        # A session name may contain spaces, so keep the whole argument string
+        # (minus an explicit list/ls keyword) as the reference.
+        ref = "" if (args and args[0].lower() in {"list", "ls"}) else " ".join(args)
         if not ref:
             entries = store.list_sessions_with_meta()
             if not entries:
