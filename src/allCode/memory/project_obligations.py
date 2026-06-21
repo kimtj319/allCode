@@ -231,20 +231,44 @@ def _is_common_word(value: str) -> bool:
     return value.lower() in _ENGLISH_STOP_TERMS
 
 
+# Verb-conjugation / imperative fragments that are instruction wording, not
+# feature nouns. Multi-char suffixes are preferred so genuine nouns ending in an
+# ambiguous syllable (메시지, 라우팅, 이미지 …) are not wrongly dropped.
+_KO_VERB_SUFFIXES = (
+    "해서", "아서", "어서", "여서", "해주고", "주고", "하고", "하라", "해라", "해줘",
+    "해줄", "했던", "하던", "하는", "하며", "하면", "합니다", "됩니다", "하기", "하지",
+    "해야", "해주", "한다", "된다",
+)
+_KO_VERB_SINGLE = ("하", "해", "서", "며", "면", "던", "워")
+
+
+def _is_korean_instruction_fragment(token: str) -> bool:
+    if any(token.endswith(suffix) for suffix in _KO_VERB_SUFFIXES):
+        return True
+    return len(token) >= 2 and token.endswith(_KO_VERB_SINGLE)
+
+
 def _split_korean_objective_phrase(value: str) -> list[str]:
     normalized = value.replace(",", " ").replace("및", " ").replace("와", " ").replace("과", " ")
     tokens = []
     for token in normalized.split():
         cleaned = _strip_korean_particle(token)
-        if cleaned and cleaned not in _KOREAN_STOP_TERMS:
-            tokens.append(cleaned)
+        if not cleaned or cleaned in _KOREAN_STOP_TERMS:
+            continue
+        # Also drop truncations/inflections of a stop word (e.g. "최종결" from
+        # "최종결과", "검증기" from "검증") — generic meta words, not features.
+        if any(len(stop) >= 2 and cleaned.startswith(stop) for stop in _KOREAN_STOP_TERMS):
+            continue
+        if _is_korean_instruction_fragment(cleaned):
+            continue
+        tokens.append(cleaned)
     return tokens
 
 
 def _strip_korean_particle(value: str) -> str:
     if value.endswith("하고") and len(value) > 4:
         return value[:-2]
-    for particle in ("으로", "에서", "에게", "와", "과", "을", "를", "에", "의", "도", "은", "는"):
+    for particle in ("으로", "에서", "에게", "와", "과", "을", "를", "에", "의", "도", "은", "는", "이", "가", "들"):
         if value.endswith(particle) and len(value) > len(particle) + 1:
             return value[: -len(particle)]
     return value
@@ -293,4 +317,21 @@ _KOREAN_STOP_TERMS = {
     "프로젝트",
     "기능",
     "로직",
+    # Instruction/meta words that leaked into the "핵심 기능" summary on
+    # fix-it style prompts ("검증 실패 원인을 찾아서 정리해서 작성하라").
+    "실패",
+    "원인",
+    "수정",
+    "작성",
+    "정리",
+    "생성",
+    "구현",
+    "완료",
+    "진행",
+    "분석",
+    "최종",
+    "결과",
+    "내용",
+    "최종결과",
+    "유효성",
 }

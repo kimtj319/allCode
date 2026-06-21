@@ -8,6 +8,7 @@ from allCode.agent.final_answer_format import apply_output_format_gate
 from allCode.agent.language import detect_response_language
 from allCode.core.models import Message
 from allCode.core.result import CompletionEvidence
+from allCode.llm.response_parser import sanitize_channel_markup
 
 
 def apply_final_answer_policy(
@@ -20,6 +21,10 @@ def apply_final_answer_policy(
     unified: bool = False,
 ) -> str:
     language = _prompt_language(prompt)
+    # Strip leaked harmony/channel control tokens (e.g. "<|channel>thought<channel|>")
+    # from the canonical answer so the stored/headless/resumed result is clean —
+    # not only the live TUI render. Providers like wise-lloa leak these into text.
+    final_answer = sanitize_channel_markup(final_answer)
     answer = apply_output_format_gate(final_answer, prompt=prompt, routing=routing, evidence=evidence)
     answer = _apply_workspace_boundary_wording(answer, routing, prompt, language=language)
     answer = _apply_safety_refusal_wording(answer, routing, prompt, evidence, language=language)
