@@ -239,18 +239,34 @@ def _compact_recent_message(message: Message) -> Message:
 
 def _bound_message_contents(messages: Sequence[Message], *, max_chars: int) -> list[Message]:
     bounded = list(messages)
-    while _message_chars(bounded) > max_chars and len(bounded) > 3:
+    # The first system message is the authoritative system prompt (tool-use
+    # constraints, routing/answer guidance). Preserve it from truncation while
+    # any other non-user message can still be shrunk; only gut it as a last
+    # resort when nothing else is left to cut.
+    first_system = next((i for i, m in enumerate(bounded) if m.role == "system"), None)
+
+    def _shrink_one(*, protect_system: bool) -> bool:
         for index, message in enumerate(bounded):
-            if message.role != "user" and len(message.content) > 800:
+            if message.role == "user":
+                continue
+            if protect_system and index == first_system:
+                continue
+            if len(message.content) > 800:
                 bounded[index] = message.model_copy(
                     update={
                         "content": _bounded(_clean_content(message.content), 800),
                         "metadata": {**message.metadata, "context_hard_truncated": True},
                     }
                 )
-                break
-        else:
-            break
+                return True
+        return False
+
+    while _message_chars(bounded) > max_chars and len(bounded) > 3:
+        if _shrink_one(protect_system=True):
+            continue
+        if _shrink_one(protect_system=False):
+            continue
+        break
     return bounded
 
 

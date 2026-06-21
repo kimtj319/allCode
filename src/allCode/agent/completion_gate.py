@@ -146,15 +146,18 @@ def requires_change_evidence(prompt: str, *, routing: RoutingDecision | None = N
 def tool_loop_signatures(loop_guard) -> list[ToolLoopSignature]:
     counts = getattr(loop_guard, "_counts", {})
     signatures_by_key = getattr(loop_guard, "signatures_by_key", {})
+    # Report a signature once a key reaches the SAME repeat limit the guard
+    # actually blocks at — which is 2 for read_file (vs the default). A hardcoded
+    # >=3 silently under-counted exactly the read_file loops the guard caught.
+    default_limit = getattr(loop_guard, "_repeat_limit", 3)
     signatures = []
     for key, count in counts.items():
-        if count >= 3:
-            signatures.append(
-                signatures_by_key.get(
-                    key,
-                    ToolLoopSignature(tool_name="unknown", arguments_hash=key, count=count),
-                )
-            )
+        signature = signatures_by_key.get(key) or ToolLoopSignature(
+            tool_name="unknown", arguments_hash=key, count=count
+        )
+        limit = 2 if signature.tool_name == "read_file" else default_limit
+        if count >= limit:
+            signatures.append(signature)
     return signatures
 
 
