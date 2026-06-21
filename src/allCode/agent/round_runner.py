@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from allCode.agent.finalization_helpers import blocked_summary
-from allCode.agent.context_condensation import condense_messages_for_model
+from allCode.agent.context_condensation import condense_messages_for_model, window_aware_max_chars
 from allCode.agent.final_answer_context import final_answer_call_messages
 from allCode.agent.grounding import grounding_required
 from allCode.agent.phase_block import PhaseBlockHelper
@@ -68,6 +68,7 @@ class RoundRunner:
         # Optional SteeringQueue: drained at each round boundary so user
         # guidance typed mid-turn is fed into the next model round.
         self._steering = steering
+        self._settings = settings
         self._event_bus = event_bus
         self._prompt_builder = prompt_builder
         self._tool_call_processor = tool_call_processor
@@ -301,7 +302,14 @@ class RoundRunner:
                     evidence_brief=evidence_brief,
                 )
             else:
-                model_messages = condense_messages_for_model(model_messages)
+                model_messages = condense_messages_for_model(
+                    model_messages,
+                    max_chars=window_aware_max_chars(
+                        model_messages,
+                        context_window_tokens=getattr(self._settings, "context_window_tokens", 0) or 0,
+                        max_output_tokens=getattr(self._settings, "max_output_tokens", 8192) or 8192,
+                    ),
+                )
             events, stream_timed_out = await self._stream_collector.collect(
                 state=state,
                 messages=model_messages,

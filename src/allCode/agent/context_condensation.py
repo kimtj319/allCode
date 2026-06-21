@@ -15,6 +15,39 @@ MAX_SUMMARY_CHARS = 6000
 MAX_RECENT_MESSAGE_CHARS = 1800
 DEFAULT_RECENT_MESSAGES = 10
 
+# Rough chars-per-token for budget estimation (English/code ~3.5-4).
+_CHARS_PER_TOKEN = 4
+# Fraction of the input window we actually fill, leaving slack for tokenizer
+# variance and the model's own framing.
+_WINDOW_SAFETY = 0.85
+# Floor so the condensed body always keeps a few recent turns usable even when
+# the system/context prefix is large.
+_BODY_CHARS_FLOOR = 6000
+
+
+def window_aware_max_chars(
+    messages: Sequence[Message],
+    *,
+    context_window_tokens: int,
+    max_output_tokens: int,
+    default_chars: int = MAX_MODEL_CONTEXT_CHARS,
+) -> int:
+    """Body char budget for condensation, derived from the model context window.
+
+    The leading system messages (system prompt + workspace context bundle) are
+    preserved uncompressed, so the condensable conversation body must fit in
+    ``window - output_reserve - system_prefix``. When the window is unknown
+    (``context_window_tokens <= 0``) the fixed legacy budget is used."""
+
+    if context_window_tokens and context_window_tokens > 0:
+        input_tokens = max(2000, int((context_window_tokens - max_output_tokens) * _WINDOW_SAFETY))
+        total_input_chars = input_tokens * _CHARS_PER_TOKEN
+        clean = [m for m in messages if not m.metadata.get("context_condensed")]
+        system_prefix, _ = _split_system_prefix(clean)
+        body_budget = total_input_chars - _message_chars(system_prefix)
+        return max(_BODY_CHARS_FLOOR, body_budget)
+    return default_chars
+
 # Strips <think>…</think> reasoning blocks; compiled once since _clean_content
 # runs several times per message during every round's context condensation.
 _THINK_BLOCK = re.compile(r"(?is)<think\b[^>]*>.*?</think>")

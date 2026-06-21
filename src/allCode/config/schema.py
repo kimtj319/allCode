@@ -20,6 +20,12 @@ class ModelConfig(StrictConfigModel):
     api_key_env: str = "OPENAI_API_KEY"
     timeout_seconds: int = 120
     max_output_tokens: int = 8192
+    # The model's total context window in tokens. When set (>0), the outgoing
+    # conversation is auto-condensed to fit this window (after reserving room for
+    # output and the preserved system/context prefix), so long sessions never
+    # overflow and large windows retain far more history. 0 = unknown -> a fixed
+    # legacy budget is used.
+    context_window_tokens: int = 0
     extra_body: dict[str, object] = Field(default_factory=dict)
     # Optional higher-performance model used only for code implementation,
     # editing, and repair (the generation workflow editor). Routing, summary,
@@ -50,6 +56,13 @@ class ModelConfig(StrictConfigModel):
     def require_positive_int(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("value must be greater than zero")
+        return value
+
+    @field_validator("context_window_tokens")
+    @classmethod
+    def require_non_negative_window(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("context_window_tokens must be zero or greater")
         return value
 
 

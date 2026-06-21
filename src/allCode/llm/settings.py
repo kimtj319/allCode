@@ -14,6 +14,7 @@ class ModelSettings(CoreModel):
     api_key_env: str
     timeout_seconds: int = 120
     max_output_tokens: int = 8192
+    context_window_tokens: int = 0
     temperature: float = 0.0
     extra_body: dict[str, object] = Field(default_factory=dict)
 
@@ -25,6 +26,7 @@ class ModelSettings(CoreModel):
             api_key_env=config.model.api_key_env,
             timeout_seconds=config.model.timeout_seconds,
             max_output_tokens=config.model.max_output_tokens,
+            context_window_tokens=config.model.context_window_tokens,
             extra_body=dict(config.model.extra_body),
         )
 
