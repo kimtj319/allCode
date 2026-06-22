@@ -139,6 +139,9 @@ class TerminalSession:
         # Used to print a resume hint on exit once the session has real history.
         self._session_id = session_id
         self._had_turn = False
+        # Set once the resume hint has been shown (e.g. inside the /exit box) so
+        # the post-teardown fallback hint does not print it a second time.
+        self._resume_hint_shown = False
         # Per-day token tally for the /status usage gauge (survives across launches).
         self._usage = UsageStore(self._cwd)
         self.stdin = stdin
@@ -384,21 +387,29 @@ class TerminalSession:
             self._render_running_composer()
         self.screen.redraw()
 
-    def _print_resume_hint(self) -> None:
-        """On exit, tell the user how to resume this conversation later.
-
-        Only shown once the session has real history to resume; resuming an
-        empty session would be pointless."""
+    def _resume_hint_lines(self) -> list[str]:
+        """How to resume this conversation later — or [] when there is nothing
+        worth resuming yet (no real turn ran)."""
         if not self._had_turn:
-            return
+            return []
         lines = [
-            "",
             "이 세션을 이어서 진행하려면:",
             "  allcode --continue            (이 작업 폴더의 가장 최근 세션)",
         ]
         if self._session_id:
             lines.append(f"  allcode --resume {self._session_id}   (이 세션을 직접 지정)")
-        self.stdout.write("\n".join(lines) + "\n")
+        return lines
+
+    def _print_resume_hint(self) -> None:
+        """Fallback resume hint printed as loose text after the screen tears down
+        — used for exits that don't go through the /exit box (e.g. EOF). Skipped
+        when the hint was already shown inside the /exit panel."""
+        if self._resume_hint_shown:
+            return
+        lines = self._resume_hint_lines()
+        if not lines:
+            return
+        self.stdout.write("\n" + "\n".join(lines) + "\n")
         self.stdout.flush()
 
     async def handle_agent_event(self, event: AgentEvent) -> None:
@@ -621,6 +632,11 @@ class TerminalSession:
             # to render as a normal turn below.
             if result.submit_prompt:
                 self._print_assistant_block(result.message)
+            elif result.exit_requested:
+                # Keep the "how to resume" guidance inside the exit box instead of
+                # printing it as loose text after the screen tears down.
+                self._render_exit_panel(result.message)
+                self._resume_hint_shown = True
             else:
                 self._render_command_panel(self._command_title(stripped), result.message)
         if result.exit_requested:
@@ -824,6 +840,26 @@ class TerminalSession:
         )
         panel_console.print(panel)
         self.console.print()
+
+    def _render_exit_panel(self, message: str) -> None:
+        """Render the /exit message together with the resume hint in one box, so
+        the 'how to resume' guidance sits inside the exit panel rather than as
+        loose text after teardown. Built from plain Text (not Markdown) so the
+        command lines never reflow and stay copy-pasteable."""
+        theme = self.screen.theme
+        body = Text(message)
+        hint = self._resume_hint_lines()
+        if hint:
+            body.append("\n\n")
+            body.append("\n".join(hint), style="dim")
+        panel = Panel(
+            body,
+            title="종료",
+            title_align="left",
+            border_style=theme.accent,
+            padding=(1, 2),
+        )
+        self._print_panel(panel)
 
     def _render_command_panel(self, title: str, message: str) -> None:
         """Render a slash command's output in the same polished framed style as
