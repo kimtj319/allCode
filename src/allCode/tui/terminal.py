@@ -359,8 +359,14 @@ class TerminalSession:
         if not self.screen.interactive:
             return
         self.screen.clear_all(scrollback=True)
-        self._print_header()
-        self._replay_transcript()
+        # The header banner and transcript are written through Rich (newline per
+        # line). This repaint fires from the SIGWINCH timer while the main thread
+        # sits in read_prompt's raw mode, where a bare "\n" does not return to
+        # column 0 — so force CR+LF for the body output to avoid a staircased
+        # banner. The composer (drawn with absolute cursor moves) is unaffected.
+        with self.screen.crlf_output():
+            self._print_header()
+            self._replay_transcript()
         if self._running_started_at is not None:
             self._render_running_composer()
         self.screen.redraw()

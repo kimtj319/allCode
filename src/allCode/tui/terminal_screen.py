@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TextIO
@@ -86,6 +89,14 @@ class _BodyRowCounter:
             # newline). The floating composer must not be drawn on a partial line
             # or it would clobber streamed text that hasn't been committed yet.
             self._screen._body_partial = not text.endswith("\n")
+            # A resize repaint runs from the SIGWINCH timer while the main thread
+            # sits in read_prompt's raw mode (setraw → OPOST/ONLCR off), so a bare
+            # "\n" moves down WITHOUT returning to column 0 and the banner walks
+            # right one step per line (a staircase). When crlf translation is on,
+            # emit explicit CR+LF so body output is correct regardless of tty mode;
+            # the redundant CR in cooked mode (ONLCR adds its own) is harmless.
+            if self._screen._crlf_translation:
+                text = re.sub(r"(?<!\r)\n", "\r\n", text)
         return self._target.write(text)
 
     def flush(self) -> None:
@@ -142,6 +153,10 @@ class TerminalScreen:
         # nearly every render helper). Resizes are still picked up because the
         # cache is refreshed at the start of each render.
         self._size_cache: os.terminal_size | None = None
+        # When True, body writes translate "\n" → "\r\n" so output is correct even
+        # in raw mode (set transiently around the SIGWINCH resize repaint, which
+        # runs concurrently with read_prompt's raw mode). See _BodyRowCounter.write.
+        self._crlf_translation = False
         self._raw_stdout = stdout
         self.stdout: TextIO = _BodyRowCounter(stdout, self)
 
@@ -200,6 +215,18 @@ class TerminalScreen:
         self._raw_stdout.write(f"\x1b[{landing};1H")
         self._raw_stdout.flush()
         self._entered = False
+
+    @contextmanager
+    def crlf_output(self) -> "Iterator[None]":
+        """Within this block, body writes emit CR+LF so the banner/transcript
+        render correctly even when the tty is in raw mode (the resize repaint runs
+        from a signal timer while the main thread holds read_prompt's raw mode)."""
+        previous = self._crlf_translation
+        self._crlf_translation = True
+        try:
+            yield
+        finally:
+            self._crlf_translation = previous
 
     def clear_all(self, *, scrollback: bool = False) -> None:
         if not self.interactive:
