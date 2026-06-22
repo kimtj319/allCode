@@ -109,3 +109,37 @@ def test_recent_short_reasoning_block_is_removed_before_model_view() -> None:
     assert "internal reasoning" not in rendered
     assert "<think>" not in rendered
     assert "Visible answer" in rendered
+
+
+def test_window_aware_max_chars_returns_total_budget_not_body() -> None:
+    # Regression: window_aware_max_chars must return the WHOLE-message budget
+    # (condense_messages_for_model compares the full list incl. system prefix).
+    # A prior version subtracted the system prefix here, double-charging it.
+    from allCode.agent.context_condensation import window_aware_max_chars, MAX_MODEL_CONTEXT_CHARS
+
+    # unknown window -> legacy fixed budget
+    assert window_aware_max_chars(context_window_tokens=0, max_output_tokens=8192) == MAX_MODEL_CONTEXT_CHARS
+    # 32k window, 8k output -> (32768-8192)*0.85*4 chars, well above legacy
+    big = window_aware_max_chars(context_window_tokens=32768, max_output_tokens=8192)
+    assert big > MAX_MODEL_CONTEXT_CHARS
+    # does not depend on / subtract any message content (no messages arg)
+    small_win = window_aware_max_chars(context_window_tokens=8192, max_output_tokens=4096)
+    assert small_win >= 8000  # floored at 2000 tokens
+
+
+def test_bound_message_contents_preserves_first_system_prompt() -> None:
+    from allCode.agent.context_condensation import _bound_message_contents
+
+    sys_prompt = Message(role="system", content="AUTHORITATIVE SYSTEM PROMPT: tool rules. " + "S" * 2000)
+    bundle = Message(role="system", content="workspace context " + "C" * 5000)
+    asst = Message(role="assistant", content="A" * 5000)
+    usr = Message(role="user", content="U" * 300)
+    # Budget large enough to keep the system prompt once the other oversized
+    # messages are trimmed (each trims to ~812), but below the untrimmed total —
+    # so the system prompt stays intact while the rest shrink.
+    out = _bound_message_contents([sys_prompt, bundle, asst, usr], max_chars=4200)
+    # The authoritative system prompt (first system message) must stay intact;
+    # later non-user messages are truncated first.
+    assert "AUTHORITATIVE SYSTEM PROMPT" in out[0].content
+    assert len(out[0].content) > 2000
+    assert any(m.metadata.get("context_hard_truncated") for m in out[1:])
