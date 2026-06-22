@@ -9,3 +9,7 @@ review/
 docs/
 tests/
 tmp_test_run/
+# PyInstaller binary build artifacts
+/dist/
+/build/
+.venv-build/

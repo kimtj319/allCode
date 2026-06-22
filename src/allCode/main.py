@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
+from allCode import __version__
 from allCode.config.manager import ConfigError, ConfigManager, ConfigOverrides
 from allCode.config.schema import ConfigSourceReport
 from allCode.config.defaults import DEFAULT_CONFIG_DIR
@@ -28,6 +29,11 @@ from allCode.tui.status_commands import RuntimeStatusCommandService
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="allcode")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     parser.add_argument("--headless", nargs="?", const="", metavar="PROMPT")
     parser.add_argument(
         "--output-format",
