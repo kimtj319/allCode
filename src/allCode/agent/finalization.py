@@ -32,6 +32,7 @@ def apply_final_answer_policy(
     answer = _apply_safe_alternative_wording(answer, prompt, language=language)
     answer = _apply_validation_wording(answer, evidence, language=language)
     answer = _apply_missing_artifact_wording(answer, evidence, language=language)
+    answer = _apply_regression_safety_wording(answer, routing, evidence, language=language)
     answer = _apply_not_found_wording(answer, messages, evidence, routing=routing, prompt=prompt, language=language)
     answer = _apply_no_search_results_wording(answer, messages, evidence, routing=routing, prompt=prompt, language=language)
     answer = _apply_config_wording(answer, prompt, messages, language=language)
@@ -136,6 +137,54 @@ def _apply_validation_wording(final_answer: str, evidence: CompletionEvidence, *
             return final_answer.rstrip() + f"\n\nValidation command: `{command}`\nValidation result: failed{symbol_text}"
         return final_answer.rstrip() + f"\n\n검증 명령: `{command}`\n검증 결과: 실패{symbol_text}"
     return final_answer
+
+
+_CODE_FILE_SUFFIXES = (
+    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".rb",
+    ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".kt", ".kts", ".swift", ".scala",
+    ".php", ".sh", ".bash", ".lua", ".dart", ".ex", ".exs", ".m", ".mm",
+)
+
+
+def _changed_code_files(evidence: CompletionEvidence) -> bool:
+    """Whether the turn changed at least one source-code file — regression risk
+    only applies to code, not docs/text/config (notes.txt, README.md, *.json)."""
+    for path in (*evidence.changed_files, *evidence.created_files):
+        if str(path).strip().lower().endswith(_CODE_FILE_SUFFIXES):
+            return True
+    return False
+
+
+def _apply_regression_safety_wording(final_answer: str, routing, evidence: CompletionEvidence, *, language: str) -> str:
+    """allCode's regression-safety promise: a code change that was never validated
+    against the project's existing tests is reported as UNVERIFIED, so the user is
+    never told a change is complete when it might have broken existing behavior.
+
+    Narrow by design — only a mutation turn that changed a source-code file, ran no
+    validation command, and was not already required to validate (that case is
+    surfaced by the missing-artifact gate). Append-only and idempotent."""
+    if not getattr(routing, "requires_mutation", False):
+        return final_answer
+    if not _changed_code_files(evidence):
+        return final_answer
+    if evidence.validation_commands:
+        return final_answer
+    if getattr(routing, "requires_validation", False):
+        return final_answer
+    if language == "en":
+        if "not verified against the existing tests" in final_answer:
+            return final_answer
+        return final_answer.rstrip() + (
+            "\n\nNote: this change was not verified against the existing tests. Run the "
+            "project's tests for the affected area to confirm existing behavior still works "
+            "(use /rewind to revert if needed)."
+        )
+    if "기존 테스트로 검증하지" in final_answer:
+        return final_answer
+    return final_answer.rstrip() + (
+        "\n\n주의: 이 변경을 기존 테스트로 검증하지 않았습니다. 영향 범위의 테스트를 실행해 "
+        "기존 기능이 유지되는지 확인하세요(필요하면 /rewind로 되돌릴 수 있습니다)."
+    )
 
 
 def _apply_missing_artifact_wording(final_answer: str, evidence: CompletionEvidence, *, language: str) -> str:

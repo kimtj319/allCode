@@ -71,6 +71,14 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "Verification: after changing code, run the project's own tests/lints when present "
         "(run_tests; e.g. pytest / npm test) and iterate until they pass, rather than only "
         "byte-compiling. Ground completion claims in actual command output.",
+        # Regression safety: allCode's core promise is that a change must not break
+        # what already worked. This guards the #1 failure mode of coding agents.
+        "No regressions: a code change must not break functionality that already worked. "
+        "Before reporting completion, run the EXISTING tests that cover the area you changed "
+        "(not only any new tests you wrote); if a test that was passing now fails because of "
+        "your change, fix it or revert that change. Never report success when you have broken "
+        "existing functionality. When you edit a shared function/symbol, find its "
+        "callers/dependents (search_files / source_probe) and confirm they still work.",
         # Decomposition & delegation (#4): use sub-agents for large work.
         "Large tasks: for a broad analysis or multi-area change, decompose it (update_plan) and "
         "delegate independent sub-investigations with delegate_task instead of doing everything in "
@@ -146,6 +154,7 @@ def routing_instruction(routing: RoutingDecision) -> str:
                 "If the prompt requests conditional deletion, call delete_path for the exact target once after resolving the path; if it is missing, report the tool's not_found observation without inventing a deletion.",
                 "Do not ask the user for the repository tree when file/search tools are available.",
                 "Make concrete file changes through write_file or patch_file, then run an available validation command.",
+                "Before finalizing, confirm the change did not break previously-passing tests or the callers of any symbol you edited; if it did, fix or revert rather than reporting success.",
                 "When the user asks to add or update tests, modify test files before validation; pre-existing passing tests alone are not enough.",
                 "When only mutation tools are available, do not call list_directory, search_files, or read_file; use the observations already present.",
                 "Ground the final answer in CompletionEvidence; never claim completion without changed files and validation evidence when validation is required.",
