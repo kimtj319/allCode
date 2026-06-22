@@ -117,6 +117,23 @@ def direct_mutation_command(prompt: str) -> bool:
     return bool(KOREAN_CHANGE_CONNECTIVE.search(prompt))
 
 
+# Explanation / question intent: "explain how X works", "왜 ...?", "...설명해줘".
+# Used to keep an interrogative request from being read as a mutation just because
+# it mentions a code term (e.g. "implementation 모델을 설명해줘" — the noun
+# "implementation" substring-matches the "implement" mutation term).
+_EXPLANATION_REQUEST = re.compile(
+    r"설명|어떻게|왜\s|무엇|뭐(?:야|예요|냐|지)|알려\s*주|"
+    r"\bexplain\b|\bdescribe\b|\bhow\b|\bwhy\b|\bwhat\b|walk me through|tell me about",
+    re.IGNORECASE,
+)
+
+
+def explanation_request(prompt: str) -> bool:
+    """Whether the prompt asks to explain/describe or is a question, rather than
+    commanding a change. A trailing '?' alone also counts."""
+    return bool(_EXPLANATION_REQUEST.search(prompt)) or prompt.rstrip().endswith("?")
+
+
 def path_mutation_hint(paths: list[str]) -> bool:
     for path in paths:
         normalized = path.strip().strip("`").replace("\\", "/")

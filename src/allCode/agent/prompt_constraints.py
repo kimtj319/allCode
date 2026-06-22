@@ -13,6 +13,7 @@ from allCode.agent.prompt_constraint_detection import (
     dependency_constraint_hint,
     direct_mutation_command,
     directory_output_hint,
+    explanation_request,
     external_knowledge_suppressed,
     path_hints,
     path_mutation_hint,
@@ -132,7 +133,16 @@ class PromptConstraintExtractor:
 
         mutation_term_seen = has_any(self.MUTATION_TERMS, compact_match=True)
         direct_change = direct_mutation_command(prompt)
-        mutation_requested = mutation_term_seen and (direct_change or path_mutation_hint(paths))
+        # An explanation/question ("...설명해줘", "how does X select…?") is not a
+        # mutation even when it name-drops a code term — e.g. "implementation 모델"
+        # substring-matches the "implement" mutation term. Only treat it as a
+        # mutation when there is an actual change command.
+        explanation_only = explanation_request(prompt) and not direct_change
+        mutation_requested = (
+            mutation_term_seen
+            and (direct_change or path_mutation_hint(paths))
+            and not explanation_only
+        )
         directory_output = directory_output_hint(paths, prompt=prompt, mutation_requested=mutation_requested)
         multi_artifact = has_any(self.MULTI_ARTIFACT_TERMS, compact_match=True)
         project_output = directory_output and has_any(self.PROJECT_OUTPUT_TERMS, compact_match=True)
