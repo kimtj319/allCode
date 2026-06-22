@@ -266,9 +266,9 @@ def runtime_tool_registry(config: AppConfig) -> ToolRegistry:
             shell_sandbox=config.workspace.shell_sandbox,
         )
     )
-    from allCode.tools.builtin.task import DelegateTaskTool, TaskTool
+    from allCode.tools.builtin.task import DelegateTaskTool, ParallelTasksTool, TaskTool
 
-    for delegated in (TaskTool(config), DelegateTaskTool(config)):
+    for delegated in (TaskTool(config), DelegateTaskTool(config), ParallelTasksTool(config)):
         try:
             registry.register(delegated)
         except ValueError:

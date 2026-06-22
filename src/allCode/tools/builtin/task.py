@@ -146,7 +146,7 @@ class DelegateTaskTool:
         self._settings = ModelSettings.from_config(self._config)
         self._implementation_settings = ModelSettings.implementation_from_config(self._config)
         # Full toolset (excluding nested delegation, to keep depth-1).
-        tools = [tool for tool in builtin_tools() if tool.definition.name not in {"task", "delegate_task"}]
+        tools = [tool for tool in builtin_tools() if tool.definition.name not in {"task", "delegate_task", "parallel_tasks"}]
         self._tools = ToolRegistry(tools)
 
     async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
@@ -192,5 +192,150 @@ class DelegateTaskTool:
                 "created_files": created,
                 "changed_files": changed,
                 "deleted_files": deleted,
+            },
+        )
+
+
+class ParallelTasksTool:
+    """Run several INDEPENDENT implementation sub-tasks in parallel, each isolated
+    in its own git worktree, then auto-merge the branches back.
+
+    Each parallel sub-agent uses ONLY the models named in config (model_name for
+    reasoning, implementation_model_name for code) — never an arbitrary model.
+    Non-overlapping edits merge automatically; genuine conflicts are handed to a
+    config-model resolver sub-agent, and any still unresolved are isolated and
+    reported (their branches preserved) rather than silently mangled. The user's
+    current branch/working tree is untouched; results land on an integration
+    branch the user adopts explicitly.
+    """
+
+    definition = ToolDefinition(
+        name="parallel_tasks",
+        description=(
+            "Run multiple INDEPENDENT implementation sub-tasks concurrently, each in its own "
+            "isolated git worktree, then merge the results back automatically (conflicts are "
+            "reported). Use ONLY for sub-tasks that do not depend on each other's output. Returns "
+            "a per-task board plus the integration branch to adopt. Requires a git repository."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Independent sub-task descriptions to run in parallel (2-6).",
+                }
+            },
+            "required": ["tasks"],
+            "additionalProperties": False,
+        },
+        read_only=False,
+        requires_approval=True,
+        group="agent",
+        risk="high",
+    )
+
+    def __init__(self, config) -> None:
+        self._config = config
+        self._llm_client = None
+        self._settings = None
+        self._implementation_settings = None
+
+    def _ensure_ready(self) -> None:
+        if self._llm_client is not None:
+            return
+        from allCode.llm.factory import create_llm_client
+        from allCode.llm.settings import ModelSettings
+
+        self._llm_client = create_llm_client(self._config)
+        # Model constraint: parallel sub-agents use ONLY the config-named models.
+        self._settings = ModelSettings.from_config(self._config)
+        self._implementation_settings = ModelSettings.implementation_from_config(self._config)
+
+    def _build_tools(self):
+        from allCode.tools.builtin import builtin_tools
+        from allCode.tools.registry import ToolRegistry
+
+        excluded = {"task", "delegate_task", "parallel_tasks"}
+        sandbox = getattr(self._config.workspace, "shell_sandbox", "off")
+        tools = [t for t in builtin_tools(shell_sandbox=sandbox) if t.definition.name not in excluded]
+        return ToolRegistry(tools)
+
+    async def _run_subagent(self, prompt: str, worktree):
+        from allCode.agent.loop import AgentLoop
+        from allCode.agent.model_router import ModelRouter
+        from allCode.core.event_bus import AsyncEventBus
+        from allCode.core.models import TurnInput, WorkspaceRef
+        from allCode.tools.approval import ApprovalManager
+
+        bus = AsyncEventBus()
+        loop = AgentLoop(
+            llm_client=self._llm_client,
+            settings=self._settings,
+            implementation_settings=self._implementation_settings,
+            tools=self._build_tools(),
+            event_bus=bus,
+            approval=ApprovalManager(mode="auto"),
+            model_router=ModelRouter(llm_client=self._llm_client, settings=self._settings),
+        )
+        try:
+            return await loop.run_turn(
+                TurnInput(user_prompt=prompt, workspace=WorkspaceRef(root=str(worktree), writable=True))
+            )
+        finally:
+            await bus.close()
+
+    async def run(self, call: ToolCall, context: ToolContext, event_bus: EventBus | None = None) -> ToolResult:
+        raw = (call.arguments or {}).get("tasks")
+        descriptions = [str(t).strip() for t in raw if str(t).strip()] if isinstance(raw, list) else []
+        if len(descriptions) < 2:
+            return ToolResult(
+                call_id=call.id, name=call.name, ok=False,
+                error="tasks must list at least two independent sub-tasks", error_type="invalid_tasks",
+            )
+        if not context.workspace.writable:
+            return ToolResult(
+                call_id=call.id, name=call.name, ok=False,
+                error="workspace is not writable", error_type="read_only_workspace",
+            )
+        try:
+            self._ensure_ready()
+            from allCode.agent.parallel_orchestrator import ParallelTaskSpec, RunnerResult, run_parallel_tasks
+
+            async def runner(spec: ParallelTaskSpec, worktree) -> RunnerResult:
+                result = await self._run_subagent(spec.description, worktree)
+                return RunnerResult(ok=result.status in {"success", "partial"}, summary=result.final_answer or "")
+
+            async def resolver(integ_worktree, conflicted: list[str]) -> bool:
+                prompt = (
+                    "다음 파일에 git 병합 충돌 마커(<<<<<<<, =======, >>>>>>>)가 있습니다: "
+                    f"{', '.join(conflicted)}. 양쪽 변경 의도를 모두 보존하도록 신중히 충돌을 해소하고 "
+                    "모든 충돌 마커를 제거하세요. 충돌 해소 외의 변경은 하지 마세요."
+                )
+                result = await self._run_subagent(prompt, integ_worktree)
+                return result.status in {"success", "partial"}
+
+            specs = [ParallelTaskSpec(id=str(i), description=d) for i, d in enumerate(descriptions)]
+            report = await run_parallel_tasks(
+                specs,
+                workspace_root=context.workspace.root,
+                runner=runner,
+                conflict_resolver=resolver,
+                max_concurrency=min(4, len(specs)),
+            )
+        except ValueError as exc:
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type="parallel_unavailable")
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult(call_id=call.id, name=call.name, ok=False, error=str(exc), error_type=exc.__class__.__name__)
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            ok=bool(report.applied) and not report.conflicts,
+            content=report.board(),
+            metadata={
+                "integration_branch": report.integration_branch,
+                "merged_files": report.merged_files,
+                "applied": [o.id for o in report.applied],
+                "conflicts": [o.id for o in report.conflicts],
             },
         )
