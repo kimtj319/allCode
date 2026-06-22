@@ -172,6 +172,12 @@ class TerminalSession:
         self._stream_markdown_buffer = MarkdownStreamBuffer()
         self._reasoning_buffer = ""
         self._final_answer_rendered = False
+        # Per-turn section separators: one blank line splits the user prompt from
+        # the agent's tool/diff work, and a dim rule splits that work from the
+        # final answer — so prompt, activity, and summary read as distinct blocks
+        # without spacing everything out. Reset at the start of each turn.
+        self._activity_emitted = False
+        self._answer_separator_emitted = False
         # Replayable transcript of committed body blocks (user prompts, finalized
         # answers, tool lines, errors, diffs). The terminal writes straight to
         # scrollback and keeps no model of it otherwise, so this log is what lets
@@ -322,14 +328,21 @@ class TerminalSession:
         try:
             for kind, payload in self._transcript_log:
                 if kind == "user":
+                    # New turn: reset the section-separator state so the blank
+                    # line and answer rule are reproduced per turn on replay too.
+                    self._activity_emitted = False
+                    self._answer_separator_emitted = False
                     self._print_user_prompt(payload)
                 elif kind == "assistant":
+                    self._begin_answer()
                     self.answer_renderer.reset()
                     self._print_assistant_block(payload)
                 elif kind == "tool":
+                    self._begin_activity()
                     self._prepare_body_output()
                     self.console.print(f"[dim]{payload}[/]")
                 elif kind == "error":
+                    self._begin_activity()
                     self._prepare_body_output()
                     self.error_console.print(f"[bold red]오류:[/] {payload}")
                 elif kind == "diff":
@@ -468,6 +481,8 @@ class TerminalSession:
         self._reasoning_buffer = ""
         self.answer_renderer.reset()
         self._final_answer_rendered = False
+        self._activity_emitted = False
+        self._answer_separator_emitted = False
         self._last_status = ""
         self._turn_plan = None
         self._running_started_at = time.monotonic()
@@ -659,12 +674,36 @@ class TerminalSession:
         self.console.print(line)
         self._record("user", prompt)
 
+    def _begin_activity(self) -> None:
+        """One blank line before the first tool/diff/reasoning output of a turn,
+        setting the agent's work apart from the user prompt above it. Idempotent
+        within a turn (only the first call emits)."""
+        if self._activity_emitted:
+            return
+        self._activity_emitted = True
+        self._prepare_body_output()
+        self.console.print()
+
+    def _begin_answer(self) -> None:
+        """A dim rule before the final answer, separating the mechanical tool/diff
+        output from the human-readable summary. Only drawn when the turn actually
+        had visible activity, so a tool-free answer or a slash-command panel gets
+        no stray rule. Idempotent within a turn."""
+        if self._answer_separator_emitted or not self._activity_emitted:
+            return
+        self._answer_separator_emitted = True
+        self._prepare_body_output()
+        width = max(20, self.screen.width - 1)
+        self.console.print(Text("─" * width, style="dim"))
+
     def _print_assistant_block(self, text: str) -> None:
+        self._begin_answer()
         self._prepare_body_output()
         self.answer_renderer.render(sanitize_channel_markup(text))
         self.console.print()
 
     def _print_assistant_stream_chunk(self, text: str) -> None:
+        self._begin_answer()
         self._prepare_body_output()
         self.answer_renderer.render(sanitize_channel_markup(text))
 
@@ -674,6 +713,7 @@ class TerminalSession:
         thinking aside distinct from the answer."""
         if not text:
             return
+        self._begin_activity()
         self._reasoning_buffer += text
         while "\n" in self._reasoning_buffer:
             line, self._reasoning_buffer = self._reasoning_buffer.split("\n", 1)
@@ -683,11 +723,13 @@ class TerminalSession:
 
     def _print_rendered_block(self, role: str, text: str) -> None:
         if role == "error":
+            self._begin_activity()
             self._prepare_body_output()
             self.error_console.print(f"[bold red]오류:[/] {text}")
             self._record("error", text)
             return
         if role == "tool":
+            self._begin_activity()
             self._prepare_body_output()
             self.console.print(f"[dim]{text}[/]")
             self._record("tool", text)
@@ -704,6 +746,7 @@ class TerminalSession:
         # "• tool" summary row.
         if not diff.strip():
             return
+        self._begin_activity()
         self._record("diff", diff)
         self._prepare_body_output()
         theme = self.screen.theme
