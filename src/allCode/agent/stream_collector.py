@@ -52,8 +52,13 @@ class ModelStreamCollector:
         recovery: RecoveryTracker,
         tool_schemas: Sequence[ToolSchema],
         stream_text: bool = True,
+        settings: ModelSettings | None = None,
     ) -> tuple[list, bool]:
-        iterator = self._llm_client.stream(messages, tool_schemas, self._settings).__aiter__()
+        # `settings` lets a caller stream from a different model than the
+        # collector's default (e.g. the higher-tier implementation model for
+        # code-mutation rounds) without rebuilding the collector.
+        effective_settings = settings or self._settings
+        iterator = self._llm_client.stream(messages, tool_schemas, effective_settings).__aiter__()
         events = []
         heartbeat_count = 0
         started_at = asyncio.get_running_loop().time()

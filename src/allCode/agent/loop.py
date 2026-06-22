@@ -147,6 +147,7 @@ class AgentLoop:
         self._round_runner = RoundRunner(
             llm_client=self._llm_client,
             settings=self._settings,
+            implementation_settings=self._implementation_settings,
             event_bus=self._event_bus,
             prompt_builder=self._prompt_builder,
             tool_call_processor=self._tool_call_processor,

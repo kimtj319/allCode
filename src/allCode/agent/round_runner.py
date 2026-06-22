@@ -53,6 +53,7 @@ class RoundRunner:
         *,
         llm_client=None,
         settings=None,
+        implementation_settings=None,
         event_bus: EventBus,
         prompt_builder: PromptBuilder,
         tool_call_processor: ToolCallProcessor,
@@ -69,6 +70,10 @@ class RoundRunner:
         # guidance typed mid-turn is fed into the next model round.
         self._steering = steering
         self._settings = settings
+        # Higher-tier model used for code-implementation (mutation) turns. Falls
+        # back to the base model when unset or identically named, so an unset or
+        # equal implementation_model_name means a single model is used throughout.
+        self._implementation_settings = implementation_settings or settings
         self._event_bus = event_bus
         self._prompt_builder = prompt_builder
         self._tool_call_processor = tool_call_processor
@@ -82,6 +87,27 @@ class RoundRunner:
         self._revalidation = RevalidationOrchestrator(tool_call_processor=tool_call_processor, max_rounds=max_rounds)
         self._response_handler = RoundResponseHandler(self)
         self._tool_handler = RoundToolHandler(self)
+
+    def _turn_settings(self, routing) -> "object":
+        """Model settings for this turn: the implementation (higher) tier when the
+        turn actually implements code (a mutation/modify route), else the base
+        tier used for planning, inspection, answers, and other reasoning.
+
+        When implementation_model_name is unset or equal to model_name, the
+        implementation settings resolve to the base settings, so the same model is
+        used either way."""
+        caps = set(getattr(routing, "tool_capabilities", set()) or set())
+        implements_code = bool(
+            getattr(routing, "requires_mutation", False)
+            or getattr(routing, "kind", "") == "modify"
+            or caps.intersection({"mutate_file", "delete_file"})
+        )
+        # getattr fallbacks keep partially-constructed runners (e.g. tests using
+        # object.__new__) working: when settings are absent this returns None and
+        # the stream collector falls back to its own configured model.
+        base = getattr(self, "_settings", None)
+        impl = getattr(self, "_implementation_settings", None) or base
+        return impl if implements_code else base
 
     async def _apply_steering(self, state: TurnState, runtime) -> None:
         """Drain mid-turn steering messages and inject them as user turns."""
@@ -112,6 +138,9 @@ class RoundRunner:
     ) -> LoopOutcome:
         runtime = RoundRuntime(messages=list(state.messages), mutation_action_pending=force_mutation_action)
         completion_evidence.grounding_required = grounding_required(turn_input.user_prompt, routing)
+        # Code-implementation turns stream from the implementation-tier model; all
+        # other turns (planning, inspection, answers) use the base model.
+        turn_settings = self._turn_settings(routing)
 
         for round_index in range(self._max_rounds):
             state.phase = "model"
@@ -305,8 +334,8 @@ class RoundRunner:
                 model_messages = condense_messages_for_model(
                     model_messages,
                     max_chars=window_aware_max_chars(
-                        context_window_tokens=getattr(self._settings, "context_window_tokens", 0) or 0,
-                        max_output_tokens=getattr(self._settings, "max_output_tokens", 8192) or 8192,
+                        context_window_tokens=getattr(turn_settings, "context_window_tokens", 0) or 0,
+                        max_output_tokens=getattr(turn_settings, "max_output_tokens", 8192) or 8192,
                     ),
                 )
             events, stream_timed_out = await self._stream_collector.collect(
@@ -315,6 +344,7 @@ class RoundRunner:
                 recovery=recovery,
                 tool_schemas=tool_schemas,
                 stream_text=not (routing.requires_external_knowledge and not has_tool_results),
+                settings=turn_settings,
             )
             if stream_timed_out and not events and recovery.can_retry_stream_timeout():
                 state.phase = "recovery"
@@ -330,7 +360,7 @@ class RoundRunner:
                 parsed=parsed,
                 runtime=runtime,
                 round_index=round_index,
-                model=self._stream_collector.model_name,
+                model=getattr(turn_settings, "model_name", None) or self._stream_collector.model_name,
             )
             if parsed.usage is not None:
                 state.token_usage = parsed.usage
