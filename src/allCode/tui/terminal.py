@@ -109,6 +109,9 @@ class _SteeringCapture:
             self._steering.push(line.strip())
 
 
+_RESIZE_DEBOUNCE_SECONDS = 0.12
+
+
 class TerminalSession:
     """Codex-style terminal session using normal terminal scrollback."""
 
@@ -229,12 +232,19 @@ class TerminalSession:
             self._print_resume_hint()
 
     def _install_resize_handler(self) -> None:
-        """Redraw the composer immediately when the terminal is resized.
+        """Redraw the composer when the terminal is resized — debounced.
 
-        Without this, the prompt box keeps the old width until the next keystroke.
+        The blocking key read does not return on SIGWINCH (Python retries the
+        interrupted syscall), so a synchronous redraw in the handler fired once
+        per signal. A drag emits dozens of signals, and each redraw left the
+        previous, now-reflowed composer border as an orphan frame in scrollback —
+        a visible cascade of boxes. Instead, coalesce the burst with a trailing
+        timer so exactly ONE clean redraw happens after the drag settles.
+
         SIGWINCH exists only on POSIX and signal handlers can only be set from the
         main thread, so both are guarded."""
         self._prev_winch_handler = None
+        self._resize_timer = None
         if not self.screen.interactive:
             return
         import signal
@@ -243,11 +253,23 @@ class TerminalSession:
         if not hasattr(signal, "SIGWINCH") or threading.current_thread() is not threading.main_thread():
             return
 
-        def _on_resize(_signum, _frame) -> None:
+        def _do_redraw() -> None:
             try:
-                self.screen.redraw()
+                self._repaint_after_resize()
             except Exception:  # noqa: BLE001 - a redraw must never crash the session
                 pass
+
+        def _on_resize(_signum, _frame) -> None:
+            # Re-arm a short one-shot timer on every signal; only the final one in
+            # a burst survives to fire, so a whole drag collapses to one redraw.
+            # No lock (running in signal context) — a rare double-fire is harmless.
+            timer = self._resize_timer
+            if timer is not None:
+                timer.cancel()
+            timer = threading.Timer(_RESIZE_DEBOUNCE_SECONDS, _do_redraw)
+            timer.daemon = True
+            self._resize_timer = timer
+            timer.start()
 
         try:
             self._prev_winch_handler = signal.signal(signal.SIGWINCH, _on_resize)
@@ -255,6 +277,10 @@ class TerminalSession:
             self._prev_winch_handler = None
 
     def _remove_resize_handler(self) -> None:
+        timer = getattr(self, "_resize_timer", None)
+        if timer is not None:
+            timer.cancel()
+            self._resize_timer = None
         if getattr(self, "_prev_winch_handler", None) is None:
             return
         import signal
@@ -265,6 +291,22 @@ class TerminalSession:
             signal.signal(signal.SIGWINCH, self._prev_winch_handler)
         except (ValueError, OSError, TypeError):
             pass
+
+    def _repaint_after_resize(self) -> None:
+        """Cleanly repaint after a terminal resize.
+
+        A resize makes the terminal reflow existing lines, which desyncs the
+        absolute cursor positions the composer is drawn with — a plain composer
+        redraw then strands the old, now-reflowed border as an orphan frame, and
+        a drag leaves a whole cascade of them. The only reflow-proof remedy in a
+        normal-scrollback UI is to wipe the screen and repaint what we own (the
+        header banner + the composer) from scratch at the new width. Debouncing
+        in the SIGWINCH handler means this runs once per drag, not per step."""
+        if not self.screen.interactive:
+            return
+        self.screen.clear_all()
+        self._print_header()
+        self.screen.redraw()
 
     def _print_resume_hint(self) -> None:
         """On exit, tell the user how to resume this conversation later.
