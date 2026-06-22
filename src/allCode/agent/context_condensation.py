@@ -251,6 +251,11 @@ def _bound_message_contents(messages: Sequence[Message], *, max_chars: int) -> l
                 continue
             if protect_system and index == first_system:
                 continue
+            # Truncate each message at most once. _bounded appends a short marker,
+            # so its output can still exceed the 800 threshold — without this guard
+            # the same message would be re-truncated forever (infinite loop).
+            if message.metadata.get("context_hard_truncated"):
+                continue
             if len(message.content) > 800:
                 bounded[index] = message.model_copy(
                     update={
