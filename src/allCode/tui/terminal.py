@@ -172,6 +172,17 @@ class TerminalSession:
         self._stream_markdown_buffer = MarkdownStreamBuffer()
         self._reasoning_buffer = ""
         self._final_answer_rendered = False
+        # Replayable transcript of committed body blocks (user prompts, finalized
+        # answers, tool lines, errors, diffs). The terminal writes straight to
+        # scrollback and keeps no model of it otherwise, so this log is what lets
+        # a resize wipe the screen and re-render the whole conversation reflowed to
+        # the new width. Records are (kind, payload); ephemeral output (status
+        # lines, reasoning asides, command panels) is intentionally not logged.
+        self._transcript_log: list[tuple[str, str]] = []
+        # True only while _replay_transcript is re-emitting the log, so the render
+        # helpers below skip re-recording what they draw (which would grow the log
+        # without bound on every resize).
+        self._replaying = False
         self._running_started_at: float | None = None
         self._spinner_index = 0
         self._composer_render_at = 0.0
@@ -292,20 +303,66 @@ class TerminalSession:
         except (ValueError, OSError, TypeError):
             pass
 
+    def _record(self, kind: str, payload: str) -> None:
+        """Append a committed body block to the replayable transcript.
+
+        No-op while replaying (so re-emitting the log never re-records) and for
+        empty payloads (nothing to redraw)."""
+        if self._replaying or not payload:
+            return
+        self._transcript_log.append((kind, payload))
+
+    def _replay_transcript(self) -> None:
+        """Re-emit the committed transcript into the (just-cleared) body.
+
+        Runs each block back through the same render path used live, so Rich
+        reflows every line to the CURRENT terminal width. Assistant answers reset
+        the answer renderer first so each turn keeps its own '•' marker."""
+        self._replaying = True
+        try:
+            for kind, payload in self._transcript_log:
+                if kind == "user":
+                    self._print_user_prompt(payload)
+                elif kind == "assistant":
+                    self.answer_renderer.reset()
+                    self._print_assistant_block(payload)
+                elif kind == "tool":
+                    self._prepare_body_output()
+                    self.console.print(f"[dim]{payload}[/]")
+                elif kind == "error":
+                    self._prepare_body_output()
+                    self.error_console.print(f"[bold red]오류:[/] {payload}")
+                elif kind == "diff":
+                    self._print_diff(payload)
+            # A resize mid-stream (turn still running): the current answer is not
+            # yet committed to the log, so re-render whatever has streamed so far
+            # as the live answer. Reset first for its own marker; continuation
+            # deltas then append below it without a second marker.
+            if self._running_started_at is not None and self._stream_buffer.strip():
+                self.answer_renderer.reset()
+                self._print_assistant_block(self._stream_buffer)
+        finally:
+            self._replaying = False
+
     def _repaint_after_resize(self) -> None:
         """Cleanly repaint after a terminal resize.
 
         A resize makes the terminal reflow existing lines, which desyncs the
         absolute cursor positions the composer is drawn with — a plain composer
         redraw then strands the old, now-reflowed border as an orphan frame, and
-        a drag leaves a whole cascade of them. The only reflow-proof remedy in a
-        normal-scrollback UI is to wipe the screen and repaint what we own (the
-        header banner + the composer) from scratch at the new width. Debouncing
-        in the SIGWINCH handler means this runs once per drag, not per step."""
+        a drag leaves a whole cascade of them. The reflow-proof remedy in a
+        normal-scrollback UI is to wipe the screen AND scrollback, then re-emit
+        everything we own — header banner, the full conversation transcript, and
+        the composer — from scratch so every line reflows to the new width.
+        Debouncing in the SIGWINCH handler means this runs once per drag, not per
+        step."""
         if not self.screen.interactive:
             return
-        self.screen.clear_all()
+        self.screen.clear_all(scrollback=True)
         self._print_header()
+        self._replay_transcript()
+        if self._running_started_at is not None:
+            self._render_running_composer()
         self.screen.redraw()
 
     def _print_resume_hint(self) -> None:
@@ -368,6 +425,10 @@ class TerminalSession:
             if answer.strip() and not self._final_answer_rendered:
                 self._print_assistant_block(answer)
                 self._final_answer_rendered = True
+            # Commit the finalized answer to the replay log regardless of whether
+            # it was just block-printed or already streamed chunk-by-chunk, so a
+            # later resize re-renders the whole answer (not just a trailing piece).
+            self._record("assistant", answer.strip())
             self._last_status = ""
             self._finish_running_composer()
             return
@@ -590,6 +651,7 @@ class TerminalSession:
         line.append("› ", style="bold #61afef")
         line.append(prompt, style="#61afef")
         self.console.print(line)
+        self._record("user", prompt)
 
     def _print_assistant_block(self, text: str) -> None:
         self._prepare_body_output()
@@ -617,13 +679,16 @@ class TerminalSession:
         if role == "error":
             self._prepare_body_output()
             self.error_console.print(f"[bold red]오류:[/] {text}")
+            self._record("error", text)
             return
         if role == "tool":
             self._prepare_body_output()
             self.console.print(f"[dim]{text}[/]")
+            self._record("tool", text)
             self._render_running_composer()
             return
         self._print_assistant_block(text)
+        self._record("assistant", text.strip())
 
     def _print_diff(self, diff: str, *, max_lines: int = 80) -> None:
         # Render a file edit as a colored unified diff (Codex-style): added lines
@@ -633,6 +698,7 @@ class TerminalSession:
         # "• tool" summary row.
         if not diff.strip():
             return
+        self._record("diff", diff)
         self._prepare_body_output()
         theme = self.screen.theme
         lines = diff.splitlines()
@@ -940,7 +1006,10 @@ class TerminalSession:
         self._last_status = status
 
     def _clear_screen(self) -> None:
-        self.screen.clear_all()
+        # /clear wipes the visible conversation; drop the replay log too so a
+        # later resize does not bring the cleared transcript back.
+        self._transcript_log.clear()
+        self.screen.clear_all(scrollback=True)
 
     def _prepare_body_output(self) -> None:
         self.screen.prepare_body_output()

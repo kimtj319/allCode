@@ -201,11 +201,15 @@ class TerminalScreen:
         self._raw_stdout.flush()
         self._entered = False
 
-    def clear_all(self) -> None:
+    def clear_all(self, *, scrollback: bool = False) -> None:
         if not self.interactive:
             return
         self._body_row = 1
-        self._raw_stdout.write("\x1b[2J\x1b[H")
+        # \x1b[3J also clears the scrollback buffer. On a resize repaint the old
+        # body lines have already been reflowed by the terminal at the previous
+        # width; wiping scrollback too means the freshly replayed transcript is
+        # the ONLY content, with no stale half-width remnants scrollable above it.
+        self._raw_stdout.write("\x1b[3J\x1b[2J\x1b[H" if scrollback else "\x1b[2J\x1b[H")
         self._apply_scroll_region()
         self._raw_stdout.flush()
 
