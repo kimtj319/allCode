@@ -38,7 +38,7 @@ class PreflightPlanner:
         explicit_target = extract_prompt_path(prompt)
         target = routing.target_hint or explicit_target
         signals = self._extractor.extract(prompt)
-        if self._needs_target_clarification(prompt=prompt, routing=routing, target=target, modify_requested=signals.modify_action):
+        if self._needs_target_clarification(prompt=prompt, routing=routing, target=target):
             return PreflightPlan(
                 clarification_answer=(
                     "어떤 파일을 수정해야 하는지 확인이 필요합니다. "
@@ -119,7 +119,6 @@ class PreflightPlanner:
         prompt: str,
         routing: RoutingDecision,
         target: str | None,
-        modify_requested: bool,
     ) -> bool:
         if target:
             return False

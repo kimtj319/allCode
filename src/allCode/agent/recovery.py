@@ -33,9 +33,6 @@ class ToolLoopGuard:
         self.signatures_by_key[key] = signature
         return signature, detected
 
-    def record_and_check(self, tool_call: ToolCall) -> bool:
-        return self.record(tool_call)[1]
-
     def record_observation(self, tool_call: ToolCall, result: ToolResult) -> tuple[int, bool, str]:
         """Detect repeated action-observation patterns after execution."""
 

@@ -14,11 +14,9 @@ from allCode.agent.revalidation import RevalidationOrchestrator
 from allCode.agent.round_events import publish_model_request, publish_parsed_response
 from allCode.agent.round_inspect_flow import apply_inspect_stage
 from allCode.agent.round_inspection_budget import (
-    broad_source_inspect,
     effective_inspect_action_budget,
     effective_inspect_round_budget,
     inspection_budget_available,
-    required_source_probe_count,
 )
 from allCode.agent.inspect_summary import grounded_inspect_summary, has_inspect_summary_evidence
 from allCode.agent.modify_fallback import has_modify_plan_evidence, modify_change_plan_fallback
@@ -524,12 +522,6 @@ class RoundRunner:
             default_budget=self._inspect_round_budget,
             max_rounds=self._max_rounds,
         )
-    @staticmethod
-    def _broad_source_inspect(prompt: str, routing, evidence: CompletionEvidence) -> bool:
-        return broad_source_inspect(prompt, routing, evidence)
-    @staticmethod
-    def _required_source_probe_count(evidence: CompletionEvidence) -> int:
-        return required_source_probe_count(evidence)
     def _can_retry_phase_block(self, counts: dict[tuple[str, str], int], *, phase_gate, reason: str, max_attempts: int = 2) -> bool:
         return PhaseBlockHelper.can_retry(counts, phase_gate=phase_gate, reason=reason, max_attempts=max_attempts)
     def _should_inject_validation_action(self, round_index: int, routing, evidence: CompletionEvidence, recovery: RecoveryTracker, *, validation_action_pending: bool, awaiting_revalidation_after_mutation: bool) -> bool:

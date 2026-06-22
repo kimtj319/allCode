@@ -153,7 +153,3 @@ def _contract_symbol_names(symbols: set[str]) -> set[str]:
         if len(symbol) > 2:
             names.add(symbol)
     return names
-
-
-def _symbol_matches(actual: str, expected: str) -> bool:
-    return actual == expected or actual.endswith(f".{expected}") or expected.endswith(f".{actual}")

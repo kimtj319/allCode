@@ -105,12 +105,6 @@ class MCPHttpClient:
         prompts = result.get("prompts", []) if isinstance(result, dict) else []
         return [item for item in prompts if isinstance(item, dict) and item.get("name")]
 
-    async def get_prompt(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-        result = await self._request("prompts/get", {"name": name, "arguments": arguments or {}})
-        if not isinstance(result, dict):
-            raise MCPError("prompts/get returned a non-object result")
-        return result
-
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()

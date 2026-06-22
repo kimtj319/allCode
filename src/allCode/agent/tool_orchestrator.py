@@ -160,9 +160,6 @@ class ToolBudgetTracker:
         if result.name in MUTATION_TOOLS:
             self._counts.clear()
 
-    def reset_for_mutation(self, result: ToolResult) -> None:
-        self.reset_for_mutation_attempt(result)
-
     def _budget_key(self, tool_call: ToolCall, *, workspace_root: str) -> str:
         args = tool_call.arguments
         if tool_call.name == "read_file":

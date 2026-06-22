@@ -9,11 +9,8 @@ from pydantic import Field
 from allCode.agent.context_file_sections import (
     recent_file_sections as build_recent_file_sections,
 )
-from allCode.agent.context_file_sections import resolve_recent_file as resolve_context_recent_file
 from allCode.agent.context_file_sections import workspace_sections as build_workspace_sections
 from allCode.agent.context_session_sections import compact_answer_summary
-from allCode.agent.context_session_sections import document_context_lines as build_document_context_lines
-from allCode.agent.context_session_sections import document_followup_prompt as matches_document_followup_prompt
 from allCode.agent.context_session_sections import extract_session_note
 from allCode.agent.context_session_sections import followup_manifest_target as resolve_followup_manifest_target
 from allCode.agent.context_session_sections import session_note_sections as build_session_note_sections
@@ -268,17 +265,6 @@ class ContextBuilder:
     @staticmethod
     def _target_exists(workspace_root: str, target: str) -> bool:
         return context_target_exists(workspace_root, target)
-
-    @staticmethod
-    def _resolve_recent_file(raw_path: str, *, workspace_root: Path) -> Path | None:
-        return resolve_context_recent_file(raw_path, workspace_root=workspace_root)
-
-    @staticmethod
-    def _document_followup_prompt(lowered_prompt: str) -> bool:
-        return matches_document_followup_prompt(lowered_prompt)
-
-    def _document_context_lines(self) -> list[str]:
-        return build_document_context_lines(self._document_manifests)
 
     def _workspace_sections(self, turn_input: TurnInput) -> list[ContextSection]:
         return build_workspace_sections(
