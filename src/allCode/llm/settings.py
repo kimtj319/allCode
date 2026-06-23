@@ -13,7 +13,7 @@ class ModelSettings(CoreModel):
     base_url: str | None = None
     api_key_env: str
     timeout_seconds: int = 120
-    max_output_tokens: int = 8192
+    max_output_tokens: int = 16384
     context_window_tokens: int = 0
     temperature: float = 0.0
     extra_body: dict[str, object] = Field(default_factory=dict)

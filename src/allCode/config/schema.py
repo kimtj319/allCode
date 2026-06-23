@@ -19,7 +19,10 @@ class ModelConfig(StrictConfigModel):
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
     timeout_seconds: int = 120
-    max_output_tokens: int = 8192
+    # Generous default so a reasoning pass plus a full-file write does not exhaust
+    # the completion budget mid-content (a truncated write_file would otherwise
+    # commit a half-written, syntactically broken file). Override per model.
+    max_output_tokens: int = 16384
     # The model's total context window in tokens. When set (>0), the outgoing
     # conversation is auto-condensed to fit this window (after reserving room for
     # output and the preserved system/context prefix), so long sessions never

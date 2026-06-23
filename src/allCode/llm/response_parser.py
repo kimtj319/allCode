@@ -109,6 +109,17 @@ class ToolArgumentBuffer(CoreModel):
     def repair_to_tool_call(self, repairer: ToolArgumentRepairer) -> ToolCall | None:
         if self.malformed or self.name is None or not self.text.strip():
             return None
+        # A buffer that ends while still inside an open string was truncated
+        # mid-content (typically the model hit the output-token limit while
+        # emitting file text). Salvaging it would write a half-finished, corrupt
+        # file (unterminated strings, dangling escapes) — strictly worse than not
+        # writing. Refuse so the parser surfaces a malformed_tool_call and the
+        # model regenerates the complete file. A buffer that closed its strings
+        # but merely dropped a trailing "}" is still recoverable and salvaged.
+        if self.name in {"write_file", "patch_file"} and self._ends_inside_string(self.text):
+            self.malformed = True
+            self.error = "tool arguments were truncated before the file content completed"
+            return None
         repaired = repairer.repair(tool_name=self.name, text=self.text)
         if repaired is None:
             return None
@@ -149,6 +160,28 @@ class ToolArgumentBuffer(CoreModel):
                 if depth < 0:
                     return True
         return depth == 0 and not in_string
+
+    @staticmethod
+    def _ends_inside_string(text: str) -> bool:
+        """True if the buffer stops while still inside an unterminated JSON string.
+
+        This is the signature of a mid-content stream cutoff: every quote up to
+        the end is balanced except the one that opened the value being emitted
+        when the stream stopped. Escaped quotes (``\\"``) do not close the string.
+        """
+        stripped = text.strip()
+        in_string = False
+        escaped = False
+        for char in stripped:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\" and in_string:
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+        return in_string
 
 
 class ResponseParser:

@@ -195,7 +195,23 @@ class ToolArgumentRepairer:
             return None
 
     @staticmethod
-    def _decode_lenient_string(value: str) -> str:
+    def _strip_incomplete_trailing_escape(value: str) -> str:
+        """Drop a dangling backslash left by a truncated escape sequence.
+
+        A stream cut off mid-escape (e.g. a "\\n" sliced to "\\") leaves an odd
+        run of trailing backslashes. The final one starts an escape that never
+        completed; if it survives into the decoded content the written file ends
+        with a stray "\\" that breaks Python/JSON syntax. An even run is a set of
+        fully-escaped literal backslashes and is preserved as-is.
+        """
+        trailing = len(value) - len(value.rstrip("\\"))
+        if trailing % 2 == 1:
+            return value[:-1]
+        return value
+
+    @classmethod
+    def _decode_lenient_string(cls, value: str) -> str:
+        value = cls._strip_incomplete_trailing_escape(value)
         try:
             return json.loads(f'"{value}"')
         except json.JSONDecodeError:
