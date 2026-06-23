@@ -47,12 +47,15 @@ def _plan_mode_prompt(prompt: str) -> str:
     underlying request asks for."""
     return (
         "[계획 모드 / PLAN MODE — read-only, do not edit]\n"
-        "지금은 계획 모드입니다. 파일 수정 금지, 명령 실행 금지(읽기 전용). 코드를 변경하지 말고 "
-        "워크스페이스를 읽고 조사한 뒤, 실행 계획만 제시하세요:\n"
-        "- 무엇을·왜·어떻게 바꿀지 단계별 계획\n"
-        "- 영향 받는 파일/심볼\n"
-        "- 검증(테스트) 방법\n"
-        "- 위험과 대안\n"
+        "지금은 계획 모드입니다. 파일 수정 금지, 명령 실행 금지(읽기 전용).\n"
+        "관련 파일을 필요한 만큼만 간단히 확인한 뒤, 더 이상 탐색하지 말고 **실행 계획을 최종 "
+        "답변으로 즉시 작성**하세요. 저장소 구조 요약이 아니라 아래 형식의 '실행 계획'을 작성합니다. "
+        "더 조사할 것이 없으면 바로 계획을 쓰세요(라운드를 소진하지 마세요).\n\n"
+        "## 실행 계획\n"
+        "1. 단계별 작업(무엇을·왜·어떻게)\n"
+        "2. 영향 받는 파일/심볼\n"
+        "3. 검증(테스트) 방법\n"
+        "4. 위험과 대안\n\n"
         "실제 구현은 사용자가 `/plan off`로 계획 모드를 끈 뒤 진행합니다.\n\n"
         f"사용자 요청:\n{prompt}"
     )
@@ -102,6 +105,11 @@ async def run_agent_turn(
 
     plan_approval = _build_plan_approval(config, approval_handler)
     hook_runner = HookRunner(config.hooks)
+    # Plan mode (Claude Code-style): force the whole turn read-only and produce a
+    # plan. Cap inspection so the loop investigates briefly and then finalizes the
+    # plan instead of probing read-only until max_rounds (which would fall back to
+    # a structure summary rather than a plan).
+    plan_mode = bool(getattr(config.agent, "plan_mode", False))
     loop = AgentLoop(
         llm_client=effective_llm,
         settings=settings,
@@ -120,19 +128,17 @@ async def run_agent_turn(
         show_reasoning=config.ui.show_thinking,
         unified_loop=config.agent.unified_loop,
         max_rounds=config.agent.max_rounds,
-        inspect_action_budget=config.agent.inspect_action_budget,
-        inspect_round_budget=config.agent.inspect_round_budget,
+        inspect_action_budget=min(config.agent.inspect_action_budget, 6) if plan_mode else config.agent.inspect_action_budget,
+        inspect_round_budget=min(config.agent.inspect_round_budget, 3) if plan_mode else config.agent.inspect_round_budget,
         system_prompt_append=config.agent.system_prompt_append,
         hook_runner=hook_runner,
         checkpoint=_checkpoint,
         plan_approval=plan_approval,
         steering=steering,
     )
-    # Plan mode (Claude Code-style): force the whole turn read-only and ask for a
-    # plan. The directive carries read-only/no-shell terms the constraint extractor
-    # recognizes, so routing hard-strips mutation/shell tools; writable=False is a
-    # second line of defense at the tool layer.
-    plan_mode = bool(getattr(config.agent, "plan_mode", False))
+    # Plan mode: read-only directive (the extractor recognizes its read-only/
+    # no-shell terms, so routing hard-strips mutation/shell tools) and a
+    # non-writable workspace as a second line of defense.
     effective_prompt = _plan_mode_prompt(prompt) if plan_mode else prompt
     turn_input = TurnInput(
         user_prompt=effective_prompt,
@@ -142,6 +148,7 @@ async def run_agent_turn(
         ),
         session_id=logger.session_id,
         images=list(images or []),
+        plan_mode=plan_mode,
     )
     event_bus_closed = False
     try:

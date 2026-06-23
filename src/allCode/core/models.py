@@ -125,6 +125,10 @@ class TurnInput(CoreModel):
     mode: AgentMode = "all_rounder"
     session_id: str = Field(default_factory=lambda: uuid4().hex)
     images: list[str] = Field(default_factory=list)
+    # Plan mode (Claude Code-style): read-only investigation that ends in an
+    # implementation plan instead of edits. Lets the loop produce a plan answer
+    # rather than the read-only structure summary when rounds are exhausted.
+    plan_mode: bool = False
 
     @field_validator("user_prompt")
     @classmethod

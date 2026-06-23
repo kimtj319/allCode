@@ -107,6 +107,37 @@ class RoundRunner:
         impl = getattr(self, "_implementation_settings", None) or base
         return impl if implements_code else base
 
+    async def _plan_final_answer(self, state: TurnState, runtime, recovery, turn_settings) -> str:
+        """Plan mode: make one tool-suppressed model call so the model writes the
+        implementation plan from what it gathered, instead of the read-only loop
+        synthesizing a structure summary when rounds run out."""
+        instruction = Message(
+            role="user",
+            content=(
+                "이제 도구를 사용하지 말고, 지금까지 조사한 내용을 바탕으로 사용자의 요청에 대한 "
+                "구체적인 실행 계획만 작성하세요(코드 변경 없음). 형식:\n"
+                "## 실행 계획\n1. 단계별 작업(무엇을·왜·어떻게)\n2. 영향 받는 파일/심볼\n"
+                "3. 검증(테스트) 방법\n4. 위험과 대안\n"
+                "마지막에 '실행하려면 /plan off 후 진행하세요.'를 덧붙이세요."
+            ),
+        )
+        messages = condense_messages_for_model(
+            [*runtime.messages, instruction],
+            max_chars=window_aware_max_chars(
+                context_window_tokens=getattr(turn_settings, "context_window_tokens", 0) or 0,
+                max_output_tokens=getattr(turn_settings, "max_output_tokens", 8192) or 8192,
+            ),
+        )
+        events, _timed = await self._stream_collector.collect(
+            state=state,
+            messages=messages,
+            recovery=recovery,
+            tool_schemas=[],
+            stream_text=True,
+            settings=turn_settings,
+        )
+        return (self._parser.parse_events(events).text or "").strip()
+
     async def _apply_steering(self, state: TurnState, runtime) -> None:
         """Drain mid-turn steering messages and inject them as user turns."""
         if self._steering is None:
@@ -420,6 +451,12 @@ class RoundRunner:
         # message (e.g. a follow-up that tries to "run" a non-runnable artifact
         # like a markdown doc and exhausts rounds). Mutation turns keep their own
         # change-plan fallback below.
+        # Plan mode: produce a model-written implementation plan instead of the
+        # read-only structure-summary fallback.
+        if getattr(turn_input, "plan_mode", False):
+            plan = await self._plan_final_answer(state, runtime, recovery, turn_settings)
+            if plan:
+                return LoopOutcome(status="success", answer=plan)
         if not getattr(routing, "requires_mutation", False) and has_inspect_summary_evidence(completion_evidence):
             return LoopOutcome(
                 status="partial",
