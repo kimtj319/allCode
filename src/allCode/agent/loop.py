@@ -156,6 +156,7 @@ class AgentLoop:
             inspect_action_budget=self._inspect_action_budget,
             inspect_round_budget=self._inspect_round_budget,
             steering=steering,
+            unified_loop=unified_loop,
         )
 
     async def run_turn(self, turn_input: TurnInput) -> TurnResult:

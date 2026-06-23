@@ -63,10 +63,12 @@ class RoundRunner:
         inspect_action_budget: int = 7,
         inspect_round_budget: int = 6,
         steering=None,
+        unified_loop: bool = False,
     ) -> None:
         # Optional SteeringQueue: drained at each round boundary so user
         # guidance typed mid-turn is fed into the next model round.
         self._steering = steering
+        self._unified = unified_loop
         self._settings = settings
         # Higher-tier model used for code-implementation (mutation) turns. Falls
         # back to the base model when unset or identically named, so an unset or
@@ -282,7 +284,14 @@ class RoundRunner:
                 allowed_only = set()
             elif phase_gate.active:
                 allowed_only = phase_gate.allowed_tool_names
-            elif inspect_stage.active:
+            elif inspect_stage.active and not self._unified:
+                # In the unified loop, inspection staging is ADVISORY: it still
+                # tracks budget and nudges breadth, but it does not hard-restrict
+                # the exposed tool schema. So the model can pick any tool it judges
+                # necessary (e.g. write_file when a request was loosely worded and
+                # routing only guessed "inspect"); read-only is still hard-enforced
+                # by the policy when explicitly requested (read_only_requested / plan
+                # mode), and mutations remain governed by the approval system.
                 allowed_only = inspect_stage.allowed_tool_names
             tool_schemas = self._tool_call_processor.tool_schemas_for_routing(
                 routing,
