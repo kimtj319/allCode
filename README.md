@@ -373,6 +373,7 @@ TUI에서 `/`로 시작하는 명령으로 세션을 제어합니다. 입력 중
 | `/help`, `/commands` | 전체 슬래시 명령 목록 표시 |
 | `/model [<name>\|impl <name>\|base <url>]` | 모델·구현 모델·base URL 조회/변경 (config.yaml 저장) |
 | `/approval [auto\|ask]` | 승인 모드 조회/설정 |
+| `/plan [on\|off]` | 계획 모드 토글 — 읽기 전용으로 분석해 실행 계획만 제시(파일 변경 없음). 실행은 `/plan off` 후 진행 |
 | `/permissions [allow\|deny <rule>]` | 허용/거부 권한 규칙 조회/저장 |
 | `/thinking [on\|off]` | 모델 reasoning 채널 표시 토글 |
 | `/tools` | 사용 가능한 tool 목록 |

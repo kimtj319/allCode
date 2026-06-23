@@ -38,6 +38,26 @@ EventHandler = Callable[[AgentEvent], Awaitable[None]]
 TurnRunner = Callable[[str, EventHandler, ApprovalHandler | None], Awaitable[None]]
 
 
+def _plan_mode_prompt(prompt: str) -> str:
+    """Wrap a request for plan mode: read-only investigation that yields a plan.
+
+    The wording includes read-only and no-shell terms the constraint extractor
+    recognizes, so routing deterministically strips mutation/shell tools — the
+    same hard read-only Claude Code's plan mode enforces — regardless of what the
+    underlying request asks for."""
+    return (
+        "[계획 모드 / PLAN MODE — read-only, do not edit]\n"
+        "지금은 계획 모드입니다. 파일 수정 금지, 명령 실행 금지(읽기 전용). 코드를 변경하지 말고 "
+        "워크스페이스를 읽고 조사한 뒤, 실행 계획만 제시하세요:\n"
+        "- 무엇을·왜·어떻게 바꿀지 단계별 계획\n"
+        "- 영향 받는 파일/심볼\n"
+        "- 검증(테스트) 방법\n"
+        "- 위험과 대안\n"
+        "실제 구현은 사용자가 `/plan off`로 계획 모드를 끈 뒤 진행합니다.\n\n"
+        f"사용자 요청:\n{prompt}"
+    )
+
+
 async def run_agent_turn(
     prompt: str,
     *,
@@ -108,9 +128,18 @@ async def run_agent_turn(
         plan_approval=plan_approval,
         steering=steering,
     )
+    # Plan mode (Claude Code-style): force the whole turn read-only and ask for a
+    # plan. The directive carries read-only/no-shell terms the constraint extractor
+    # recognizes, so routing hard-strips mutation/shell tools; writable=False is a
+    # second line of defense at the tool layer.
+    plan_mode = bool(getattr(config.agent, "plan_mode", False))
+    effective_prompt = _plan_mode_prompt(prompt) if plan_mode else prompt
     turn_input = TurnInput(
-        user_prompt=prompt,
-        workspace=WorkspaceRef(root=config.workspace.root, writable=config.workspace.sandbox_enabled),
+        user_prompt=effective_prompt,
+        workspace=WorkspaceRef(
+            root=config.workspace.root,
+            writable=config.workspace.sandbox_enabled and not plan_mode,
+        ),
         session_id=logger.session_id,
         images=list(images or []),
     )

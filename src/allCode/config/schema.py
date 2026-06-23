@@ -273,6 +273,12 @@ class AgentConfig(StrictConfigModel):
     # also live in AGENTS.md; this is for tone/style and global directives.
     system_prompt_append: str = ""
 
+    # Plan mode (Claude Code-style): when on, every turn is forced read-only —
+    # the agent investigates and proposes an implementation plan but makes no file
+    # changes or commands. Session-scoped: toggled at runtime via `/plan` and not
+    # persisted to the config file. Default off preserves normal behavior.
+    plan_mode: bool = False
+
     @field_validator(
         "max_rounds",
         "inspect_action_budget",

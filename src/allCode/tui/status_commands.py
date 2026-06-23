@@ -43,6 +43,8 @@ class RuntimeStatusCommandService:
             return self._model(args)
         if root == "/approval":
             return self._approval(args)
+        if root == "/plan":
+            return self._plan(args)
         if root == "/thinking":
             return self._thinking(args)
         if root == "/permissions":
@@ -177,6 +179,30 @@ class RuntimeStatusCommandService:
             return f"승인 모드를 '{mode}'로 바꿨지만 설정 파일 저장에 실패했습니다: {exc}"
         note = "권한 요청 없이 모두 진행합니다." if mode == "auto" else "변경/셸 실행 전 승인을 요청합니다."
         return f"승인 모드를 '{mode}'로 변경하고 저장했습니다 ({path}). {note}"
+
+    def _plan(self, args: list[str]) -> str:
+        """Toggle Claude Code-style plan mode (session-scoped, not persisted).
+
+        On: every turn is read-only — the agent investigates and proposes an
+        implementation plan, making no file changes. Off: normal execution."""
+        current = bool(getattr(self.config.agent, "plan_mode", False))
+        if not args:
+            target = not current  # bare /plan toggles
+        else:
+            verb = args[0].strip().lower()
+            if verb in {"on", "start", "enable"}:
+                target = True
+            elif verb in {"off", "exit", "disable", "stop"}:
+                target = False
+            else:
+                return "사용법: /plan [on|off] (인자 없이 입력하면 토글)"
+        self.config.agent.plan_mode = target  # in-place: next turn picks it up (not persisted)
+        if target:
+            return (
+                "계획 모드 ON — 읽기 전용입니다. 코드를 변경하지 않고 워크스페이스를 분석해 "
+                "실행 계획을 제시합니다. 계획을 실행하려면 `/plan off` 후 진행하세요."
+            )
+        return "계획 모드 OFF — 일반 실행 모드로 돌아갑니다."
 
     def _thinking(self, args: list[str]) -> str:
         current = self.config.ui.show_thinking

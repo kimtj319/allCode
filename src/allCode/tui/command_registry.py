@@ -56,6 +56,7 @@ def default_commands() -> list[CommandSpec]:
         CommandSpec(name="/tools", description="Show available tools.", usage="/tools"),
         CommandSpec(name="/model", description="Show or change the model (writes .allCode/config.yaml).", usage="/model [<name>|impl <name>|base <url>]", options=["impl", "base"]),
         CommandSpec(name="/approval", description="Show or set approval mode: auto (no prompts) or ask.", usage="/approval [auto|ask]", options=["auto", "ask"]),
+        CommandSpec(name="/plan", description="Toggle plan mode: read-only investigation that proposes a plan without making changes.", usage="/plan [on|off]", options=["on", "off"]),
         CommandSpec(name="/thinking", description="Toggle showing the model's reasoning/thought channel.", usage="/thinking [on|off]", options=["on", "off"]),
         CommandSpec(name="/permissions", description="Show or persist allow/deny permission rules (config.yaml).", usage="/permissions [allow|deny <rule>]", options=["allow", "deny"]),
         CommandSpec(name="/mcp", description="List/add/remove MCP servers (config.yaml; effective next run).", usage="/mcp [list|add <name> <cmd...>|remove <name>]", options=["list", "add", "remove"]),
