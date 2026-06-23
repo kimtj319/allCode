@@ -195,9 +195,12 @@ def _verify_project(ws: Path) -> str:
     if not py_files:
         return "no_files"
     try:
+        # Run from inside the workspace so the project's own flat imports
+        # (e.g. `from env_loader import ...`) resolve — matching how the user and
+        # allCode's in-session run_tests execute them.
         proc = subprocess.run(
-            [PYBIN, "-m", "pytest", "-q", str(ws)],
-            cwd=str(ROOT), capture_output=True, text=True, timeout=120,
+            [PYBIN, "-m", "pytest", "-q"],
+            cwd=str(ws), capture_output=True, text=True, timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired):
         return "fail:timeout"
