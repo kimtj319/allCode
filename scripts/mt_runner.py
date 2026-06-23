@@ -39,7 +39,10 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[=>]|\r")
 STARTUP_IDLE = 4.0      # wait for banner/composer before first prompt
 IDLE_DONE = 6.0         # quiet seconds that mark a turn complete
 MIN_TURN = 2.0          # never declare done before this
-MAX_TURN = 210.0        # per-turn ceiling → possible hang
+# Per-turn ceiling → possible hang. Deep full-repo analysis and large project
+# builds legitimately stream past the default, so allow an env override when
+# re-running those genres to distinguish a true hang from "working but slow".
+MAX_TURN = float(os.environ.get("MT_MAX_TURN", "210.0"))
 
 
 def _strip(t: str) -> str:
