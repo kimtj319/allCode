@@ -141,7 +141,13 @@ class ModelRouter:
         kind = decision.kind
         target_hint = decision.target_hint or constraints.primary_target_hint
         workflow_hint = decision.workflow_hint
-        if confidence < 0.45:
+        # Low model confidence falls back to safe inspection — UNLESS the
+        # deterministic constraint extractor already detected a concrete mutation
+        # request (e.g. "함수와 테스트를 작성해 통과시켜줘"). Otherwise this reset would
+        # strip the mutate_file capability and the later kind="modify" would have
+        # no mutation caps, so route validation downgrades it back to inspect and
+        # the model's write_file calls are denied — producing zero files.
+        if confidence < 0.45 and not constraints.mutation_requested_hint:
             kind = "inspect"
             capabilities = {"read_file", "search_workspace"}
         local_workspace_request = detect_local_workspace_request(constraints)
@@ -155,6 +161,9 @@ class ModelRouter:
             kind = "inspect"
         if constraints.mutation_requested_hint and not read_only_requested and not answer_followup:
             kind = "modify"
+            # Ensure the mutation route actually carries mutation capability so it
+            # is structurally supported by route validation (and not downgraded).
+            capabilities.update({"read_file", "mutate_file"})
         if answer_followup:
             kind = "answer"
             capabilities.clear()

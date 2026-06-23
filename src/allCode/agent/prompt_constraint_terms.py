@@ -372,5 +372,10 @@ KOREAN_CHANGE_COMMAND = re.compile(
     r"(?:구현|생성|수정|변경|추가|작성|삭제|보강|고쳐|만들)(?:해\s*줘|해줘|해주세요|하라|해라|하시오|하자|어\s*줘|어줘|줘)"
 )
 KOREAN_CHANGE_CONNECTIVE = re.compile(
-    r"(?:구현|생성|수정|변경|추가|작성|삭제|보강|고쳐|만들)(?:하고|해서|하여)"
+    # Sequential change commands that chain into a following action, e.g.
+    # "함수와 테스트를 작성해 통과시켜줘", "구현한 뒤 검증해줘". The "해" form requires
+    # a following space so the modal "구현해야 (하는지)" in an explanation is NOT
+    # matched (no space after 해), keeping explanation/question prompts read-only.
+    r"(?:구현|생성|수정|변경|추가|작성|삭제|보강|고쳐|만들)"
+    r"(?:하고|해서|하여|해(?=\s)|한(?=\s*(?:뒤|후|다음)))"
 )
