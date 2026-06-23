@@ -13,3 +13,5 @@ tmp_test_run/
 /dist/
 /build/
 .venv-build/
+test_progress.json
+allcode_test_report.md
