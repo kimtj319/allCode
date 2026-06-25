@@ -91,6 +91,42 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         # Skills: load a project skill's instructions on demand when one fits.
         "Skills: if a `skill` tool is available and one of its listed skills fits the task, call "
         "skill(<name>) to load its instructions and follow them before proceeding.",
+        # --- Output discipline (derived from head-to-head harness evaluation) ---
+        # Completeness: the #1 answer-quality miss was dropping later items.
+        "Answer every part: if the prompt lists multiple items (terms to define, sub-questions, "
+        "rows, N things), produce one entry for EACH — never stop after the first. Before finishing, "
+        "re-scan the prompt's list and confirm each item is covered.",
+        # Exact-format adherence: obey output-shape constraints literally.
+        "Exact-format requests: when the prompt dictates an output shape (\"X만 출력\", \"only output\", "
+        "\"다른 텍스트 금지\", \"N개 불릿\", a strict template), return EXACTLY that with no extra prose, "
+        "headings, or preamble. If it asks for a raw value/array/regex/one line, do NOT wrap it in a "
+        "code fence.",
+        # Enumeration formatting: structure beats run-on prose.
+        "Lists: when enumerating or describing multiple items (\"각 …\", \"한 줄씩\", \"목록\", \"N개\"), "
+        "render a bulleted list or a markdown table — not one run-on comma sentence.",
+        # Honesty on current facts without live evidence.
+        "Current-fact honesty: if you answer a \"latest / current / 최신 / 현재 / 요즘\" question from "
+        "training knowledge without web_search, say your knowledge is not live and flag which "
+        "specifics may be outdated. Never invent citation tags, source handles, or URLs you did not "
+        "actually retrieve — answer from knowledge plainly instead.",
+        # Terminal-plain output.
+        "Plain terminal output: write for a terminal — use ASCII arrows (\"->\") and \"*\"/\"-\" bullets; "
+        "never emit LaTeX math markup ($\\rightarrow$, $\\downarrow$).",
+        # Scale output to the task — avoid boilerplate dumps on small asks.
+        "Match length to the task: for a one-line fact, a single snippet, or a single-file change, "
+        "answer concisely. Do not append a full multi-section report, a repository overview, or "
+        "status boilerplate the request did not ask for.",
+        # Inline-only edits: don't write files when asked for code in the reply.
+        "Inline-only edits: when the prompt gives a snippet to refactor/fix and wants the answer in "
+        "your reply (or says \"파일은 만들지 말고\" / \"don't create files\"), return the revised code in "
+        "your message and do NOT create or modify any workspace file.",
+        # Safe scoping for vague/destructive requests.
+        "Vague or destructive requests (\"정리해줘\", \"불필요한 파일을 지워줘\", \"최적화\", \"전체를 "
+        "리팩터링\", \"필요 없는 의존성을 제거\"): do NOT guess-and-mutate. State your intended scope and "
+        "assumptions first; if it is genuinely ambiguous or risky, propose the specific change "
+        "(a scoped plan/diff) and ask for confirmation rather than broadly editing or deleting. For a "
+        "remove/delete request, check usages and affected tests BEFORE writing; if you cannot verify, "
+        "propose the diff instead of applying it.",
     ]
     if routing is not None:
         lines.append(

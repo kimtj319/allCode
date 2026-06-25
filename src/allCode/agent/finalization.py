@@ -205,6 +205,18 @@ def _apply_missing_artifact_wording(final_answer: str, evidence: CompletionEvide
     return final_answer.rstrip() + "\n\n아직 충족되지 않은 요청된 산출물: " + ", ".join(labels)
 
 
+def _answer_is_substantive(final_answer: str) -> bool:
+    """A real, fleshed-out answer body — used to suppress contradictory
+    "found nothing / not found" trailers that would otherwise be appended after
+    an answer the model actually produced from other evidence (e.g. a full
+    architecture walkthrough where one incidental search returned no matches)."""
+    text = final_answer.strip()
+    if len(text) >= 400:
+        return True
+    non_empty = [line for line in text.splitlines() if line.strip()]
+    return len(non_empty) >= 6
+
+
 def _apply_not_found_wording(
     final_answer: str,
     messages: Sequence[Message],
@@ -214,6 +226,8 @@ def _apply_not_found_wording(
     prompt: str,
     language: str,
 ) -> str:
+    if _answer_is_substantive(final_answer):
+        return final_answer
     changed_targets = set(evidence.changed_files + evidence.created_files + evidence.deleted_files)
     unresolved_not_found = [target for target in evidence.not_found_targets if target not in changed_targets]
     has_not_found_message = any(
@@ -245,6 +259,8 @@ def _apply_no_search_results_wording(
     prompt: str,
     language: str,
 ) -> str:
+    if _answer_is_substantive(final_answer):
+        return final_answer
     no_results = any(
         message.role == "tool"
         and str(message.metadata.get("tool_name") or "") == "search_files"
@@ -521,6 +537,12 @@ def _append_feature_candidate(values: list[str], value: str) -> None:
         return
     if any(separator in cleaned for separator in ("/", "\\", ".")):
         return
+    # Reject code-identifier-shaped tokens (snake_case symbol names like
+    # "update_counts" or "match_literal_a_dot_b") — these are internal function
+    # names that leaked in as "features", not user-facing capabilities, and made
+    # the "핵심 기능" summary read as noise on small single-function tasks.
+    if "_" in cleaned and cleaned.isascii():
+        return
     if lowered not in {item.lower() for item in values}:
         values.append(cleaned)
 
@@ -578,4 +600,9 @@ _FEATURE_STOP_TERMS = {
     "scenarios",
     "requirement",
     "requirements",
+    # Prompt-fragment words that leaked in as bogus "features" on small tasks.
+    "can",
+    "디렉터리",
+    "디렉터리에만",
+    "현재",
 }
