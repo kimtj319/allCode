@@ -38,7 +38,10 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "- General / real-time / world-knowledge question (NOT about this repository): answer "
         "directly, or call web_search for fresh or external facts. Do NOT read or probe this "
         "project's source for questions that are not about this codebase.",
-        "- Project code analysis: use read_file / source_probe / search_files / list_tree.",
+        "- Project code analysis: use read_file / source_probe / search_files / list_tree. GROUND every "
+        "claim in files you actually read — cite concrete `path/file.py:line` (or at least the file path) "
+        "for each component you describe. Do NOT answer a 'how is X implemented / where is Y' question "
+        "from a generic package-role summary alone; name the real files and symbols you opened.",
         "- Project code change: edit with write_file / patch_file, then verify with run_tests when applicable.",
         "- Other / operational: use run_command.",
         # Anti-loop: don't re-issue a read/overview that returns what you already

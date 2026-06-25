@@ -23,6 +23,19 @@ READ_ONLY_TERMS = (
     "절대 수정",
     "읽기만",
     "분석만",
+    # Inline-only / "answer with code, don't touch files" — a snippet refactor or
+    # fix whose deliverable is code in the reply, not a workspace mutation.
+    "파일은 만들지",
+    "파일을 만들지",
+    "파일 만들지 말",
+    "파일 생성 금지",
+    "파일을 생성하지",
+    "답변에 코드만",
+    "코드만 제시",
+    "don't create files",
+    "do not create files",
+    "no new files",
+    "without creating files",
 )
 
 NO_SHELL_TERMS = (

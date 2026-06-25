@@ -160,7 +160,12 @@ class RecoveryTracker:
         self.validation_action_requested = True
         return True
 
-    def can_request_validation_repair(self, *, max_attempts: int = 2) -> bool:
+    def can_request_validation_repair(self, *, max_attempts: int = 3) -> bool:
+        # Allow one more repair round than before: the repair phase gate only
+        # escalates a repeatedly-failing patch target to a full write_file
+        # rewrite after >=2 failures (see phase_gate_repair unstable_targets),
+        # so a 2-attempt cap exhausted the budget right as the rewrite became
+        # available — turning doable builds into a partial/blocked result.
         if self.validation_repair_requests >= max_attempts:
             return False
         self.validation_repair_requests += 1
