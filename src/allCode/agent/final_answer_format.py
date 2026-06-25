@@ -74,17 +74,35 @@ def _format_gate_blocked(final_answer: str, *, routing, evidence: CompletionEvid
 
 def _requested_count(prompt: str, *, unit_patterns: tuple[str, ...]) -> int | None:
     text = str(prompt or "")
+    # A "1-per-item" phrasing ("각 줄", "한 줄씩", "줄마다", "each/per line",
+    # "one line each") is DISTRIBUTIVE — one unit PER listed item, not a global
+    # cap. Collapsing a multi-item answer to a single line/sentence here was the
+    # top completeness failure (e.g. defining only the first of three terms), so
+    # a resolved count of 1 is suppressed when the prompt is distributive.
+    distributive = (
+        any(marker in text for marker in ("씩", "각 ", "각각", "마다"))
+        or re.search(r"(?:each|per)\s+(?:line|sentence)", text, flags=re.IGNORECASE) is not None
+        or re.search(r"one\s+(?:line|sentence)\s+(?:each|per)", text, flags=re.IGNORECASE) is not None
+    )
     for unit in unit_patterns:
         match = re.search(rf"(?P<count>\d+)\s*{unit}", text, flags=re.IGNORECASE)
         if match:
             try:
-                return max(1, min(20, int(match.group("count"))))
+                value = max(1, min(20, int(match.group("count"))))
             except ValueError:
                 return None
+            if value == 1 and distributive:
+                return None
+            return value
         word_match = re.search(rf"(?P<count>{KOREAN_COUNT_WORD_PATTERN})\s*{unit}", text, flags=re.IGNORECASE)
         if word_match:
-            return KOREAN_COUNT_WORDS.get(word_match.group("count"))
+            value = KOREAN_COUNT_WORDS.get(word_match.group("count"))
+            if value == 1 and distributive:
+                return None
+            return value
     if any(re.search(rf"한\s*{unit}", text, flags=re.IGNORECASE) for unit in unit_patterns):
+        if distributive:
+            return None
         return 1
     return None
 
