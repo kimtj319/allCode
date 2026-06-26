@@ -287,6 +287,13 @@ class OpenAICompatibleClient:
             payload: dict[str, Any] = {"role": message.role, "content": content_blocks}
         else:
             payload = {"role": message.role, "content": message.content}
+        # Replay the assistant's prior reasoning/analysis channel so gpt-oss-class
+        # models keep their chain-of-thought across tool-call turns (multi-turn
+        # tool use degrades badly without it). Capped to bound context growth;
+        # OpenAI-compatible servers ignore the field when unsupported.
+        reasoning = getattr(message, "reasoning", "")
+        if reasoning and message.role == "assistant":
+            payload["reasoning_content"] = reasoning[-6000:]
         if message.tool_calls:
             payload["tool_calls"] = [
                 {

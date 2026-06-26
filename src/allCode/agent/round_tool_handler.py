@@ -59,7 +59,7 @@ class RoundToolHandler:
             phase_gate=phase_gate,
             inspect_stage=inspect_stage,
         )
-        runtime.messages.append(Message(role="assistant", content=parsed.text, tool_calls=parsed.tool_calls))
+        runtime.messages.append(Message(role="assistant", content=parsed.text, reasoning=parsed.reasoning, tool_calls=parsed.tool_calls))
         runtime.messages = self._runner._prompt_builder.append_tool_results(runtime.messages, results)
         record_context_reads(
             results,

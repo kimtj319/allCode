@@ -106,6 +106,10 @@ class Message(CoreModel):
     # Optional image attachments as data URLs ("data:image/png;base64,...").
     # Sent as multimodal content blocks to vision-capable models.
     images: list[str] = Field(default_factory=list)
+    # Assistant reasoning/analysis channel (gpt-oss harmony `reasoning_content`).
+    # Carried so it can be replayed to the model on the next request — required
+    # for reliable multi-turn tool use with gpt-oss-class models.
+    reasoning: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

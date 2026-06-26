@@ -52,6 +52,11 @@ ParseStatus = Literal[
 class ParsedResponse(CoreModel):
     status: ParseStatus
     text: str = ""
+    # The model's reasoning/analysis channel (gpt-oss harmony `reasoning_content`).
+    # Preserved so it can be replayed on the next request — gpt-oss-class models
+    # need their prior chain-of-thought returned across tool-call turns or their
+    # multi-turn tool use degrades sharply.
+    reasoning: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     finish_reason: str | None = None
     usage: TokenUsage | None = None
@@ -191,6 +196,26 @@ class ResponseParser:
         self._repairer = repairer or ToolArgumentRepairer()
 
     def parse_events(self, events: Iterable[ModelEvent]) -> ParsedResponse:
+        # Capture the reasoning/analysis channel (emitted as text_delta events
+        # carrying a reasoning_* metadata field with empty visible text) and graft
+        # it onto the parsed result so the caller can replay it on the next turn.
+        event_list = list(events)
+        reasoning_text = "".join(
+            str(
+                event.metadata.get("reasoning_delta")
+                or event.metadata.get("reasoning_content")
+                or event.metadata.get("reasoning")
+                or ""
+            )
+            for event in event_list
+            if event.kind == "text_delta"
+        )
+        parsed = self._parse_events_core(event_list)
+        if reasoning_text and not parsed.reasoning:
+            return parsed.model_copy(update={"reasoning": reasoning_text})
+        return parsed
+
+    def _parse_events_core(self, events: Iterable[ModelEvent]) -> ParsedResponse:
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         buffers: dict[str, ToolArgumentBuffer] = {}
