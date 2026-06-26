@@ -107,19 +107,15 @@ class RoundRunner:
         # the stream collector falls back to its own configured model.
         base = getattr(self, "_settings", None)
         impl = getattr(self, "_implementation_settings", None) or base
-        settings = impl if implements_code else base
-        # Route reasoning effort: deeper for code-implementation and source
-        # inspection/analysis turns (where it pays off), unless the config already
-        # pins an effort. Weak open models benefit from more deliberate reasoning
-        # on these, while answers/operations stay at the default to limit latency.
-        if settings is not None and not getattr(settings, "reasoning_effort", None):
-            kind = str(getattr(routing, "kind", "") or "")
-            if implements_code or kind == "inspect":
-                try:
-                    settings = settings.model_copy(update={"reasoning_effort": "high"})
-                except Exception:
-                    pass
-        return settings
+        # NOTE: auto-routing reasoning_effort="high" on modify/inspect turns was
+        # tried and MEASURED to REGRESS gpt-oss agentic reliability (a 100-prompt
+        # codex comparison dropped 75%->62% harness parity, with new
+        # pseudo-tool-call / raw-tool-blob / abort failure modes concentrated in
+        # exactly the high-effort turns). High reasoning effort makes gpt-oss more
+        # likely to emit tool intent as floating text instead of a structured
+        # call. Effort is therefore left to the configured value (opt-in via
+        # config.model.reasoning_effort), not forced per route.
+        return impl if implements_code else base
 
     async def _plan_final_answer(self, state: TurnState, runtime, recovery, turn_settings) -> str:
         """Plan mode: make one tool-suppressed model call so the model writes the
