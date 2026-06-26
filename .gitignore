@@ -17,3 +17,4 @@ test_progress.json
 allcode_test_report.md
 cmp_results.json
 allcode_vs_codex_report.md
+cmp_results_opus.json
