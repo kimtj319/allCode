@@ -384,13 +384,28 @@ class RoundRunner:
                         max_output_tokens=getattr(turn_settings, "max_output_tokens", 8192) or 8192,
                     ),
                 )
+            # A (tool-call format at source): on a retry that follows a malformed
+            # or pseudo (text-form) tool call, force a structured tool call so
+            # gpt-oss emits a real tool_call instead of repeating floating text.
+            # Strictly scoped to that recovery retry (the model already intended a
+            # tool call), so good turns are never constrained. One-shot.
+            call_settings = turn_settings
+            if getattr(runtime, "force_structured_tool_call", False):
+                runtime.force_structured_tool_call = False
+                if tool_schemas and turn_settings is not None:
+                    try:
+                        forced_extra = dict(getattr(turn_settings, "extra_body", {}) or {})
+                        forced_extra["tool_choice"] = "required"
+                        call_settings = turn_settings.model_copy(update={"extra_body": forced_extra})
+                    except Exception:
+                        call_settings = turn_settings
             events, stream_timed_out = await self._stream_collector.collect(
                 state=state,
                 messages=model_messages,
                 recovery=recovery,
                 tool_schemas=tool_schemas,
                 stream_text=not (routing.requires_external_knowledge and not has_tool_results),
-                settings=turn_settings,
+                settings=call_settings,
             )
             if stream_timed_out and not events and recovery.can_retry_stream_timeout():
                 state.phase = "recovery"

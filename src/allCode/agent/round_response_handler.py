@@ -233,6 +233,7 @@ class RoundResponseHandler:
                 runtime.messages = self._runner._prompt_builder.natural_language_retry(runtime.messages)
             elif routing.allows_tool_use:
                 runtime.messages = self._runner._prompt_builder.native_tool_call_retry(runtime.messages, parser_error=parsed.error)
+                runtime.force_structured_tool_call = True
             else:
                 runtime.messages = self._runner._prompt_builder.natural_language_retry(runtime.messages)
             return None
@@ -284,6 +285,7 @@ class RoundResponseHandler:
             if parsed.text.strip():
                 runtime.messages.append(Message(role="assistant", content=parsed.text.rstrip()))
             runtime.messages = self._runner._prompt_builder.native_tool_call_retry(runtime.messages, parser_error=parsed.error)
+            runtime.force_structured_tool_call = True
             return None
         if routing.requires_validation and evidence.has_file_change():
             should_fallback = recovery.can_request_validation_action() or round_index >= self._runner._max_rounds - 2

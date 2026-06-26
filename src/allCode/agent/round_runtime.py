@@ -32,6 +32,11 @@ class RoundRuntime:
     mutation_attempted_after_failed_validation: bool = False
     mutation_succeeded_after_failed_validation: bool = False
     malformed_tool_retries: int = 0
+    # Set on a retry that follows a malformed / pseudo (text-form) tool call so
+    # the next model call forces a structured tool call (tool_choice=required) —
+    # gpt-oss otherwise repeats the floating-text "call". Consumed (reset) by the
+    # round loop after one use.
+    force_structured_tool_call: bool = False
     inspection_actions: int = 0
     inspection_rounds: int = 0
     final_answer_after_change_requested: bool = False
