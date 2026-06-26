@@ -37,7 +37,11 @@ def unified_agent_instruction(routing: RoutingDecision | None = None) -> str:
         "Classify the request yourself and act accordingly:",
         "- General / real-time / world-knowledge question (NOT about this repository): answer "
         "directly, or call web_search for fresh or external facts. Do NOT read or probe this "
-        "project's source for questions that are not about this codebase.",
+        "project's source for questions that are not about this codebase. "
+        "If the question is about the LATEST / CURRENT / RECENT state of anything (versions, "
+        "releases, prices, '최신'/'현재'/'요즘'/'latest'/'recent'), you SHOULD call web_search FIRST "
+        "and ground the answer in those results with source citations — do not answer time-sensitive "
+        "questions from memory alone.",
         "- Project code analysis: use read_file / source_probe / search_files / list_tree. GROUND every "
         "claim in files you actually read — cite concrete `path/file.py:line` (or at least the file path) "
         "for each component you describe. Do NOT answer a 'how is X implemented / where is Y' question "

@@ -1,10 +1,12 @@
 """Slice cmp_results.json into focused per-chunk markdown files for judging."""
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "output" / "cmp_slices"
+RESULTS_NAME = os.environ.get("MT_RESULTS", "cmp_results.json")
+OUT = ROOT / "output" / (os.environ.get("MT_SLICE_DIR") or "cmp_slices")
 
 
 def fmt(x: dict) -> str:
@@ -23,7 +25,7 @@ def fmt(x: dict) -> str:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
-    r = json.load(open(ROOT / "cmp_results.json"))["results"]
+    r = json.load(open(ROOT / RESULTS_NAME))["results"]
     ids = sorted(r.keys())
     chunks = [ids[i:i + 20] for i in range(0, len(ids), 20)]
     for n, chunk in enumerate(chunks, start=1):

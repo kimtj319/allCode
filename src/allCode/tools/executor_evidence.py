@@ -140,6 +140,13 @@ def _record_read_result(result: ToolResult, evidence: CompletionEvidence, *, wor
 def _record_validation_result(result: ToolResult, evidence: CompletionEvidence) -> None:
     command = result.metadata.get("command")
     if not result.metadata.get("validation_command") or not isinstance(command, str):
+        # A run_tests invocation that errored out (could not execute, so it carries
+        # no validation metadata) must NOT leave a stale validation_passed=True from
+        # an earlier passing run — that produces a "검증 결과: 통과" footer on a turn
+        # whose latest test run actually failed/errored. Demote the stale pass to
+        # unknown so completion reporting does not claim success it cannot back.
+        if result.name == "run_tests" and not result.ok and evidence.validation_passed is True:
+            evidence.validation_passed = None
         return
     if command not in evidence.validation_commands:
         evidence.validation_commands.append(command)

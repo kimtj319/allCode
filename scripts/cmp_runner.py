@@ -38,8 +38,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PYBIN = str(ROOT / ".venv/bin/python")
 MATRIX = ROOT / "cmp_matrix.json"
-RESULTS = ROOT / "cmp_results.json"
+RESULTS = ROOT / (os.environ.get("MT_RESULTS") or "cmp_results.json")
 ENV_FILE = ROOT / ".env"
+# Optional allCode model override (e.g. Opus via OpenRouter) — lets the same
+# harness be compared on a different backing model without touching config.yaml.
+AC_MODEL = os.environ.get("MT_AC_MODEL")
+AC_BASE_URL = os.environ.get("MT_AC_BASE_URL")
+AC_API_KEY = os.environ.get("MT_AC_API_KEY")
+# A full config override (sets BOTH model_name and implementation_model_name —
+# allCode's two-tier setup uses the implementation tier for write/patch turns, so
+# a bare --model only redirects the reasoning tier and write turns still hit the
+# original backend).
+AC_CONFIG = os.environ.get("MT_AC_CONFIG")
 ENDPOINT = "http://211.39.140.164:30100/v1"
 CODEX_MODEL = "gpt-5.5"
 CODEX_EFFORT = "medium"
@@ -88,12 +98,23 @@ def _list_py(ws: Path) -> list[str]:
 def run_allcode(prompt: str, policy: str, env: dict) -> dict:
     ws = _make_ws(policy)
     before = set(_list_py(ws))
+    cmd = [PYBIN, "-m", "allCode", "--headless", prompt,
+           "--output-format", "json", "--workspace", str(ws), "--approval", "auto"]
+    if AC_CONFIG:
+        cmd += ["--config", AC_CONFIG]
+    if AC_MODEL:
+        cmd += ["--model", AC_MODEL]
+    if AC_BASE_URL:
+        cmd += ["--base-url", AC_BASE_URL]
+    run_env = dict(env)
+    if AC_API_KEY:
+        # api_key_env in config defaults to ALLCODE_API_KEY; override it so the
+        # model-override run authenticates against the alternate provider.
+        run_env["ALLCODE_API_KEY"] = AC_API_KEY
     t0 = time.time()
     try:
         proc = subprocess.run(
-            [PYBIN, "-m", "allCode", "--headless", prompt,
-             "--output-format", "json", "--workspace", str(ws), "--approval", "auto"],
-            cwd=str(ROOT), capture_output=True, text=True, timeout=AGENT_TIMEOUT, env=env,
+            cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=AGENT_TIMEOUT, env=run_env,
         )
         elapsed = round(time.time() - t0, 1)
         out = proc.stdout.strip()
