@@ -19,6 +19,10 @@ class ModelSettings(CoreModel):
     # gpt-oss-style reasoning effort (low|medium|high). None = leave to the server
     # default. Routed per turn: deeper reasoning for code/analysis turns.
     reasoning_effort: str | None = None
+    # Edit-format model-awareness (OFF by default). When True, ordinary mutation
+    # turns expose only write_file (whole-file rewrite), not patch_file — weaker
+    # models apply diffs less reliably (Aider). Pending A/B measurement.
+    prefer_whole_file_edits: bool = False
     extra_body: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
@@ -31,6 +35,7 @@ class ModelSettings(CoreModel):
             max_output_tokens=config.model.max_output_tokens,
             context_window_tokens=config.model.context_window_tokens,
             reasoning_effort=getattr(config.model, "reasoning_effort", None),
+            prefer_whole_file_edits=getattr(config.model, "prefer_whole_file_edits", False),
             extra_body=dict(config.model.extra_body),
         )
 

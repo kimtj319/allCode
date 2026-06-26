@@ -24,7 +24,12 @@ from allCode.agent.round_repair_state import round_state_snapshot, update_repair
 from allCode.agent.round_response_handler import RoundResponseHandler
 from allCode.agent.round_runtime import RoundRuntime
 from allCode.agent.round_tool_handler import RoundToolHandler
-from allCode.agent.round_runner_helpers import evidence_answer, mutation_complete, response_language
+from allCode.agent.round_runner_helpers import (
+    evidence_answer,
+    filter_edit_tools_for_whole_file,
+    mutation_complete,
+    response_language,
+)
 from allCode.agent.round_validation import apply_validation_control, maybe_inject_validation
 from allCode.agent.stream_collector import ModelStreamCollector
 from allCode.agent.source_final_brief import source_final_evidence_brief
@@ -335,6 +340,15 @@ class RoundRunner:
                     suppress_validation=runtime.validation_repair_pending,
                     allowed_only=phase_gate.allowed_tool_names,
                 )
+            # Edit-format model-awareness (OFF by default via config). When enabled,
+            # ordinary mutation turns expose only write_file (whole-file rewrite),
+            # not patch_file, since weaker models apply diffs less reliably; kept
+            # available during validation repair. No-op unless the flag is set.
+            tool_schemas = filter_edit_tools_for_whole_file(
+                tool_schemas,
+                enabled=bool(getattr(self._settings, "prefer_whole_file_edits", False)),
+                in_validation_repair=runtime.validation_repair_pending,
+            )
             allowed_tool_names = {schema.name for schema in tool_schemas}
             await publish_model_request(
                 self._event_bus,

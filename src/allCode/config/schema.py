@@ -26,6 +26,15 @@ class ModelConfig(StrictConfigModel):
     # gpt-oss-style reasoning effort (low|medium|high). None leaves the server
     # default; the agent routes deeper effort to code/analysis turns at runtime.
     reasoning_effort: str | None = None
+    # Edit-format model-awareness (OFF by default = current behavior). When True,
+    # ordinary mutation turns expose only write_file (whole-file rewrite) and hide
+    # patch_file, because weaker open models apply search/replace diffs less
+    # reliably than full rewrites (Aider's finding) — this targets the patch-fail
+    # build-block failure mode. patch_file is still available during validation
+    # repair (targeted edits). PREPARED but unproven: enable only behind an A/B
+    # measurement (see allcode_vs_codex_report.md); a blanket whole-file rewrite
+    # costs more tokens on large files, so it must be measured before adoption.
+    prefer_whole_file_edits: bool = False
     # The model's total context window in tokens. When set (>0), the outgoing
     # conversation is auto-condensed to fit this window (after reserving room for
     # output and the preserved system/context prefix), so long sessions never
