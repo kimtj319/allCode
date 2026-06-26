@@ -16,6 +16,9 @@ class ModelSettings(CoreModel):
     max_output_tokens: int = 16384
     context_window_tokens: int = 0
     temperature: float = 0.0
+    # gpt-oss-style reasoning effort (low|medium|high). None = leave to the server
+    # default. Routed per turn: deeper reasoning for code/analysis turns.
+    reasoning_effort: str | None = None
     extra_body: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
@@ -27,6 +30,7 @@ class ModelSettings(CoreModel):
             timeout_seconds=config.model.timeout_seconds,
             max_output_tokens=config.model.max_output_tokens,
             context_window_tokens=config.model.context_window_tokens,
+            reasoning_effort=getattr(config.model, "reasoning_effort", None),
             extra_body=dict(config.model.extra_body),
         )
 

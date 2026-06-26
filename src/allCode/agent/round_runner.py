@@ -107,7 +107,19 @@ class RoundRunner:
         # the stream collector falls back to its own configured model.
         base = getattr(self, "_settings", None)
         impl = getattr(self, "_implementation_settings", None) or base
-        return impl if implements_code else base
+        settings = impl if implements_code else base
+        # Route reasoning effort: deeper for code-implementation and source
+        # inspection/analysis turns (where it pays off), unless the config already
+        # pins an effort. Weak open models benefit from more deliberate reasoning
+        # on these, while answers/operations stay at the default to limit latency.
+        if settings is not None and not getattr(settings, "reasoning_effort", None):
+            kind = str(getattr(routing, "kind", "") or "")
+            if implements_code or kind == "inspect":
+                try:
+                    settings = settings.model_copy(update={"reasoning_effort": "high"})
+                except Exception:
+                    pass
+        return settings
 
     async def _plan_final_answer(self, state: TurnState, runtime, recovery, turn_settings) -> str:
         """Plan mode: make one tool-suppressed model call so the model writes the

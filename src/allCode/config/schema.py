@@ -23,6 +23,9 @@ class ModelConfig(StrictConfigModel):
     # the completion budget mid-content (a truncated write_file would otherwise
     # commit a half-written, syntactically broken file). Override per model.
     max_output_tokens: int = 16384
+    # gpt-oss-style reasoning effort (low|medium|high). None leaves the server
+    # default; the agent routes deeper effort to code/analysis turns at runtime.
+    reasoning_effort: str | None = None
     # The model's total context window in tokens. When set (>0), the outgoing
     # conversation is auto-condensed to fit this window (after reserving room for
     # output and the preserved system/context prefix), so long sessions never

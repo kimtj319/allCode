@@ -107,6 +107,9 @@ class OpenAICompatibleClient:
             "max_tokens": settings.max_output_tokens,
             "temperature": settings.temperature,
         }
+        effort = getattr(settings, "reasoning_effort", None)
+        if effort:
+            payload["reasoning_effort"] = effort
         if stream:
             # Ask the provider to emit a final usage chunk; OpenAI-compatible
             # servers (e.g. vLLM) otherwise omit token counts in streaming mode,
