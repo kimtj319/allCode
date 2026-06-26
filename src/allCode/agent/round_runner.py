@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from allCode.agent.finalization_helpers import blocked_summary
-from allCode.agent.symbol_grounding import build_grounding_context
 from allCode.agent.context_condensation import condense_messages_for_model, window_aware_max_chars
 from allCode.agent.final_answer_context import final_answer_call_messages
 from allCode.agent.grounding import grounding_required
@@ -177,23 +176,11 @@ class RoundRunner:
         force_mutation_action: bool = False,
     ) -> LoopOutcome:
         runtime = RoundRuntime(messages=list(state.messages), mutation_action_pending=force_mutation_action)
-        # C (analysis grounding): for read-only codebase-inspection turns, search
-        # the workspace for the identifiers/keywords the prompt names and inject
-        # the real file:line matches as context, so the (weak) model answers with
-        # concrete anchors instead of a generic package summary. Additive only —
-        # no gate/block, a no-op when nothing is found, so it cannot regress.
-        if str(getattr(routing, "kind", "") or "") == "inspect":
-            try:
-                grounding = build_grounding_context(turn_input.user_prompt, turn_input.workspace.root)
-            except Exception:
-                grounding = None
-            if grounding:
-                insert_at = len(runtime.messages)
-                for i in range(len(runtime.messages) - 1, -1, -1):
-                    if runtime.messages[i].role == "user":
-                        insert_at = i
-                        break
-                runtime.messages.insert(insert_at, Message(role="system", content=grounding))
+        # NOTE: auto-injecting file:line grounding for inspect turns (C) was tried
+        # and MEASURED NEUTRAL — even handed the exact anchors, gpt-oss-120b reverted
+        # to prose/package-role summaries instead of citing them, so it added rg +
+        # context cost with no quality gain. The analysis-grounding gap vs codex is
+        # model-bound (synthesis/instruction-following), not anchor-availability.
         completion_evidence.grounding_required = grounding_required(turn_input.user_prompt, routing)
         # Code-implementation turns stream from the implementation-tier model; all
         # other turns (planning, inspection, answers) use the base model.
